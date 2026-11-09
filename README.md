@@ -49,6 +49,8 @@ gotty --permit-write --hub-enabled --hub-allow-http bash
 
 ## 构建与验证
 
+推送 `main` 后，GitHub Actions 会自动构建 Linux amd64/arm64 单文件程序并发布 Release。
+
 ```sh
 make build
 make check
