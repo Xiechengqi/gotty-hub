@@ -4,7 +4,7 @@
 
 管理员用户名固定为 `admin`，不可通过Web注册或CLI改名。首次完全不带参数启动 `gotty-hub` 会在终端隐藏输入管理员密码；空白密码重新询问，只需输入一次，无确认步骤。首次无参数启动始终执行引导；自动化环境使用 `serve` 或显式参数。
 
-服务默认监听 `0.0.0.0:8088`，`HUB_LISTEN` 可覆盖。默认支持直接 HTTP 和可信代理后的 HTTPS；根据真实 socket 对端决定是否采信单值 `X-Forwarded-Proto` / `X-Forwarded-Host`，不使用 X-Forwarded-For 判断信任。默认仅信任回环地址，其他代理需配置 IP/CIDR；完整示例见 [OPERATIONS.md](OPERATIONS.md)。
+服务默认监听 `0.0.0.0:8088`，`HUB_LISTEN` 可覆盖。默认支持任意指向 Hub 的域名、IP、HTTP 和 HTTPS，无需外部地址配置。浏览器来源的域名/端口必须匹配本次请求 Host；保留 Host 的反代不依赖转发头也能识别浏览器 HTTPS。改写 Host 时，根据真实 socket 对端决定是否采信 `X-Forwarded-Host`，不使用 X-Forwarded-For 判断信任。默认仅信任回环地址，其他代理需配置 IP/CIDR；完整示例见 [OPERATIONS.md](OPERATIONS.md)。
 
 ```sh
 ./gotty-hub
@@ -28,12 +28,11 @@ config按要求保存原始admin密码：
 ```json
 {
   "password": "YOUR_ADMIN_PASSWORD",
-  "origin": "https://hub.example.com",
   "trusted_proxies": ["127.0.0.1/32", "::1/128"]
 }
 ```
 
-`origin` 优先级为 `--origin` > `HUB_ORIGIN` > config > 自动识别，`--origin auto` 清除固定地址。可信代理优先级为 `--trusted-proxies`（逗号分隔）> `HUB_TRUSTED_PROXIES` > config 的 `trusted_proxies` 数组 > 回环默认值；`none` 或空数组禁用转发头。启动覆盖只对本次进程生效，`config` 子命令保存生效的参数；`check` 同时校验网络设置。Web 修改管理员密码保留这些字段。
+`--origin`、`HUB_ORIGIN` 和旧 config 中的 `origin` 兼容接受但忽略，已有配置无需清理，更换域名无需执行配置命令。保存配置或 Web 修改管理员密码时不再写入 origin。可信代理优先级为 `--trusted-proxies`（逗号分隔）> `HUB_TRUSTED_PROXIES` > config 的 `trusted_proxies` 数组 > 回环默认值；`none` 或空数组禁用转发头。启动覆盖只对本次进程生效，`config` 子命令保存生效的参数；`check` 同时校验网络设置。Web 修改管理员密码保留可信代理设置。
 
 config权限0600、目录0700。数据库保存Argon2id哈希。Web修改admin密码同时保存config；下次启动如仍有CLI或环境覆盖，以覆盖值为准。通过stdin启动也支持后台exec重启，不会重复读取已耗尽的管道。
 

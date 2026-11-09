@@ -22,6 +22,7 @@ let proxy;
 let base;
 let backendPort;
 let home;
+let proxyMode = 'forwarded';
 
 async function until(predicate, message, ms = 10000) {
   const deadline = Date.now() + ms;
@@ -46,8 +47,13 @@ function track(socket) {
   return socket;
 }
 function forwarded(headers) {
-  // A proxy must overwrite incoming forwarding headers, including on upgrades.
-  return {...headers, host: `127.0.0.1:${backendPort}`,
+  // Strip client hints about the proxy itself in both modes. Host-only mode
+  // models TLS offload that preserves Host but sends no forwarding headers.
+  const clean = {...headers};
+  delete clean['x-forwarded-proto'];
+  delete clean['x-forwarded-host'];
+  if (proxyMode === 'host-only') return clean;
+  return {...clean, host: `127.0.0.1:${backendPort}`,
     'x-forwarded-proto': 'https', 'x-forwarded-host': headers.host};
 }
 async function startProxy() {
@@ -88,7 +94,8 @@ function request(route, {body, session, method, origin = base, headers = {}} = {
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const req = https.request(base + route, {method: method ?? (payload === undefined ? 'GET' : 'POST'),
       rejectUnauthorized: false, agent: false, headers: {
-        origin, ...(payload === undefined ? {} : {'content-type': 'application/json'}),
+        ...(origin === null ? {} : {origin}),
+        ...(payload === undefined ? {} : {'content-type': 'application/json'}),
         ...(session ? {cookie: session.cookie, 'x-csrf-token': session.csrf} : {}), ...headers,
       }}, response => {
       let text = '';
@@ -113,8 +120,10 @@ async function login() {
 }
 async function start() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('HUB_')));
-  Object.assign(env, {HUB_HOME: home, HUB_LISTEN: `127.0.0.1:${backendPort}`, HUB_FIXTURE: 'preserved'});
-  const child = spawn(binary, ['serve', '--password-stdin'], {env, cwd: tmp, stdio: ['pipe', 'pipe', 'pipe']});
+  Object.assign(env, {HUB_HOME: home, HUB_LISTEN: `127.0.0.1:${backendPort}`, HUB_FIXTURE: 'preserved',
+    HUB_ORIGIN: 'http://ignored-environment.invalid'});
+  const child = spawn(binary, ['serve', '--password-stdin', '--origin', 'http://ignored-cli.invalid'],
+    {env, cwd: tmp, stdio: ['pipe', 'pipe', 'pipe']});
   children.add(child);
   const state = {child, logs: '', exited: false};
   child.stdout.on('data', data => state.logs = (state.logs + data).slice(-65536));
@@ -188,6 +197,40 @@ async function active(session, registration) {
   const idleBrowser = await terminal(session, registration, false);
   return {connector, browser, sse, idleDevice, idleBrowser};
 }
+async function domainChanges(registration) {
+  proxyMode = 'host-only';
+  const connector = await device(registration);
+  try {
+    for (const host of ['first.invalid', 'changed.invalid:8443']) {
+      const origin = `https://${host}`;
+      const result = await request('/api/v1/auth/password/login', {origin, headers: {host},
+        body: {username: 'admin', password: adminPassword}});
+      assert.equal(result.status, 200, 'Host-only HTTPS proxy login failed after domain change');
+      assert.equal(result.data.hub_address, origin);
+      assert.match(result.headers['set-cookie'][0], /; Secure/);
+      const session = {cookie: result.headers['set-cookie'][0].split(';')[0], csrf: result.data.csrf};
+      const refreshed = await request('/api/v1/me', {session, origin: null,
+        headers: {host, 'x-hub-origin': origin}});
+      assert.equal(refreshed.status, 200);
+      assert.equal(refreshed.data.hub_address, origin, 'Refresh lost the HTTPS public address');
+      const ticket = await request(`/api/v1/instances/${registration.instance_id}/terminal-tickets`,
+        {session, origin, headers: {host}, body: {}});
+      assert.equal(ticket.status, 200);
+      const route = `/api/v1/terminal-connections/${registration.instance_id}/ws`;
+      const browser = await connect(route, {host, origin, cookie: session.cookie}, {ticket: ticket.data.ticket});
+      await until(() => browser.messages.some(text => text.startsWith('1')), 'Host-only WSS terminal relay failed');
+      browser.close();
+      await bounded(browser.closed, 2000, 'Domain-switch terminal did not close');
+      await assert.rejects(connect(route, {host, origin: 'https://foreign.invalid', cookie: session.cookie}), /403/);
+      await assert.rejects(connect(route, {host, 'x-hub-origin': origin, cookie: session.cookie}), /403/);
+    }
+  } finally {
+    connector.terminate();
+    await connector.closed;
+    proxyMode = 'forwarded';
+  }
+  console.log('PASS changed domains with Host-only TLS proxy, ignored legacy origins, HTTPS refresh, WSS and foreign/missing Origin rejection');
+}
 async function closed(streams, code) {
   const results = await bounded(Promise.all([streams.connector.closed, streams.browser.closed,
     streams.idleDevice.closed, streams.idleBrowser.closed, streams.sse.closed]), 4500, 'active streams did not close');
@@ -215,7 +258,8 @@ async function main() {
   home = path.join(tmp, 'home');
   fs.mkdirSync(home, {mode: 0o700});
   // Keep a different saved password to prove a consumed stdin override survives exec.
-  fs.writeFileSync(path.join(home, 'config'), JSON.stringify({password: 'different saved password'}), {mode: 0o600});
+  fs.writeFileSync(path.join(home, 'config'), JSON.stringify({password: 'different saved password',
+    origin: 'http://ignored-saved.invalid'}), {mode: 0o600});
   const portHolder = net.createServer();
   await new Promise(resolve => portHolder.listen(0, '127.0.0.1', resolve));
   backendPort = portHolder.address().port;
@@ -228,6 +272,7 @@ async function main() {
   const result = await request('/api/v1/instances/register', {body: {username: 'admin', name: 'proxy-ci', request_id: secret(), claim: secret()}});
   assert.equal(result.status, 200);
   const registration = result.data;
+  await domainChanges(registration);
   let streams = await active(session, registration);
   const listening = () => state.logs.split('Hub listening').length - 1;
   const before = listening();

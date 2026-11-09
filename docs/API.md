@@ -2,7 +2,7 @@
 
 API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "invalid_request|forbidden|origin_mismatch|invalid_proxy_headers|server_shutting_down|authentication_required|rate_limit|password_length|invalid_username|username_taken|user_not_found|instance_name_exists|registration_expired|rotation_pending|config_write_failed|database_error" }`，结合 HTTP 状态处理。未知字段不授予权限。OpenAPI 路径目录见 [openapi.json](openapi.json)，设备帧结构见 [connector-v1.schema.json](connector-v1.schema.json)。动态业务校验以服务端及端到端测试为准。
 
-外部地址优先取 --origin > HUB_ORIGIN > config.origin，否则按 Host 推断HTTP；实际socket对端在可信IP/CIDR内时，单值 X-Forwarded-Proto / X-Forwarded-Host 可覆盖scheme/host。默认仅信任回环代理，不采信X-Forwarded-For，不解析Forwarded，拒绝可信代理的重复或逗号链头（400 `invalid_proxy_headers`）。浏览器 Origin 必须与解析结果规范化后相同；终端 WS 必须提供 Origin。来源错误返回403 `origin_mismatch`，密码错误返回401 `invalid_credentials`；Cookie Secure、HSTS及登录和 `/me` 的 `hub_address` 共用该外部地址。详情见 [OPERATIONS.md](OPERATIONS.md)。
+外部地址随每次请求识别，支持任意指向 Hub 的域名或 IP；旧 --origin / HUB_ORIGIN / config.origin 接受但忽略。authority 使用 Host，仅实际 socket 对端可信时允许单值 X-Forwarded-Host 覆盖。浏览器 Origin 可确定 HTTP/HTTPS，但规范化后的域名和端口必须匹配该 authority；前端所有 API 发送 X-Hub-Origin（当前 location.origin），用于没有 Origin 的同源 GET，该值也须匹配 authority 且不能与 Origin 冲突。终端 WS 必须提供真正的 Origin。无浏览器来源时 scheme 使用可信 X-Forwarded-Proto 或 HTTP。默认仅信任回环代理，不采信 X-Forwarded-For，不解析 Forwarded，拒绝可信代理的重复或逗号链头（400 `invalid_proxy_headers`）。来源错误返回403 `origin_mismatch`，密码错误返回401 `invalid_credentials`；Cookie Secure、HSTS及登录和 `/me` 的 `hub_address` 共用该外部地址。详情见 [OPERATIONS.md](OPERATIONS.md)。
 
 ## 认证
 

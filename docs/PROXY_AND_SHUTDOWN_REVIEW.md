@@ -1,5 +1,7 @@
 # HTTPS 反代登录与前台退出修复 Review
 
+本文记录首轮修复。后续无域名配置方案及验证以 [REQUEST_ADDRESS_REVIEW.md](REQUEST_ADDRESS_REVIEW.md) 为准，固定 origin 已弃用并忽略。
+
 本轮范围：修复 HTTPS 反代下登录的 `origin_mismatch` 和前台 Ctrl-C 无法退出；统一后台重启/升级的生命周期。不改变 GoTTY 终端、远端 PTY、实例凭据、授权及用户名账号结构。
 
 ## 根因与处理

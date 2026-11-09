@@ -1,4 +1,4 @@
-//! Resolve the public address from configuration or a trusted, single-hop proxy.
+//! Resolve each request's public address without a configured domain allowlist.
 use crate::{config, security::*, App};
 use axum::{
     async_trait,
@@ -12,7 +12,6 @@ use std::net::{IpAddr, SocketAddr};
 
 #[derive(Clone)]
 pub struct Policy {
-    pub fixed: Option<String>,
     trusted: Vec<IpNet>,
 }
 impl Policy {
@@ -22,11 +21,6 @@ impl Policy {
             .clone()
             .unwrap_or_else(|| vec!["127.0.0.0/8".into(), "::1/128".into()]);
         Ok(Self {
-            fixed: config
-                .origin
-                .as_deref()
-                .map(config::parse_origin)
-                .transpose()?,
             trusted: trusted
                 .iter()
                 .map(|v| parse_network(v))
@@ -34,9 +28,6 @@ impl Policy {
         })
     }
     pub fn resolve(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> Result<PublicOrigin> {
-        if let Some(fixed) = &self.fixed {
-            return Ok(PublicOrigin(fixed.clone()));
-        }
         let trusted = peer.is_some_and(|peer| {
             let ip = match peer.ip() {
                 IpAddr::V6(ip) => ip
@@ -79,9 +70,22 @@ impl Policy {
         // Authority validation rejects paths and port confusion before URL normalization.
         host.parse::<axum::http::uri::Authority>()
             .map_err(|_| invalid_host())?;
-        let origin =
+        // A browser knows the external scheme even when TLS terminates at an
+        // unconfigured proxy. It may select HTTP/HTTPS only for this request's
+        // authority; an unrelated Origin can never select the public host.
+        let supplied = browser_origin(headers)?;
+        if let Some(origin) = &supplied {
+            scheme = if origin.starts_with("https://") {
+                "https"
+            } else {
+                "http"
+            };
+        }
+        let expected =
             config::parse_origin(&format!("{scheme}://{host}")).map_err(|_| invalid_host())?;
-        Ok(PublicOrigin(origin))
+        let origin = PublicOrigin(expected);
+        origin.check(headers, false)?;
+        Ok(origin)
     }
 }
 
@@ -107,6 +111,26 @@ fn single_header<'a>(
     Ok(value)
 }
 
+// Same-origin fetches do not always include Origin (notably GET /me). The web
+// client supplies its address explicitly so refreshes retain the HTTPS address.
+// This hint is subject to the same authority check and cannot replace or
+// contradict a browser-supplied Origin. WebSockets still require a real Origin.
+fn browser_origin(headers: &HeaderMap) -> Result<Option<String>> {
+    let mismatch = || Error(StatusCode::FORBIDDEN, "origin_mismatch");
+    let parse = |name| -> Result<Option<String>> {
+        single_header(headers, name)
+            .map_err(|_| mismatch())?
+            .map(|value| config::parse_origin(value).map_err(|_| mismatch()))
+            .transpose()
+    };
+    let origin = parse("origin")?;
+    let hint = parse("x-hub-origin")?;
+    if origin.is_some() && hint.is_some() && origin != hint {
+        return Err(mismatch());
+    }
+    Ok(origin.or(hint))
+}
+
 #[derive(Clone, Debug)]
 pub struct PublicOrigin(pub String);
 impl PublicOrigin {
@@ -114,11 +138,9 @@ impl PublicOrigin {
         self.0.starts_with("https://")
     }
     pub fn check(&self, headers: &HeaderMap, required: bool) -> Result<()> {
-        let supplied = single_header(headers, "origin")
-            .map_err(|_| Error(StatusCode::FORBIDDEN, "origin_mismatch"))?;
-        let received = supplied.and_then(|value| config::parse_origin(value).ok());
-        if (supplied.is_some() && received.as_deref() != Some(self.0.as_str()))
-            || (required && supplied.is_none())
+        let received = browser_origin(headers)?;
+        if (received.is_some() && received.as_deref() != Some(self.0.as_str()))
+            || (required && !headers.contains_key("origin"))
         {
             tracing::warn!(expected=%self.0, received=?received, "Request origin does not match public Hub address");
             return Err(Error(StatusCode::FORBIDDEN, "origin_mismatch"));
@@ -198,13 +220,16 @@ mod tests {
             assert!(origin.check(&headers, true).is_ok());
         }
         for peer in [None, Some("192.0.2.1:12000".parse().unwrap())] {
-            let origin = policy().resolve(&headers, peer).unwrap();
+            assert!(policy().resolve(&headers, peer).is_err());
+            let mut no_browser = headers.clone();
+            no_browser.remove("origin");
+            let origin = policy().resolve(&no_browser, peer).unwrap();
             assert_eq!(origin.0, "http://127.0.0.1:8088");
             assert!(origin.check(&headers, true).is_err());
         }
     }
     #[test]
-    fn supports_explicit_proxy_networks_or_disabling_trust_and_keeps_fixed_origins_strict() {
+    fn supports_explicit_proxy_networks_or_disabling_trust() {
         let mut config = config::Config {
             trusted_proxies: Some(vec!["192.0.2.0/24".into()]),
             ..Default::default()
@@ -219,17 +244,86 @@ mod tests {
             "https://hub.example"
         );
         config.trusted_proxies = Some(vec![]);
+        let mut headers = headers;
+        assert!(Policy::new(&config)
+            .unwrap()
+            .resolve(&headers, Some("127.0.0.1:80".parse().unwrap()))
+            .is_err());
+        headers.remove("origin");
         assert!(!Policy::new(&config)
             .unwrap()
             .resolve(&headers, Some("127.0.0.1:80".parse().unwrap()))
             .unwrap()
             .secure());
-        config.origin = Some("https://fixed.example".into());
-        let origin = Policy::new(&config)
-            .unwrap()
-            .resolve(&headers, None)
-            .unwrap();
+    }
+    #[test]
+    fn domain_changes_and_https_work_without_proxy_headers_despite_a_saved_origin() {
+        let policy = Policy::new(&config::Config {
+            origin: Some("http://old.example".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        for (host, browser) in [
+            ("first.example", "https://first.example"),
+            ("NEW.Example:443", "https://new.example"),
+            ("new.example:8443", "https://new.example:8443"),
+            ("new.example:80", "http://new.example"),
+            ("192.0.2.10:8088", "http://192.0.2.10:8088"),
+            ("[2001:db8::1]:8088", "https://[2001:db8::1]:8088"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("host", host.parse().unwrap());
+            headers.insert("origin", browser.parse().unwrap());
+            // Even a nested proxy's HTTP last hop must not downgrade the
+            // browser's HTTPS scheme when the public authority matches.
+            headers.insert("x-forwarded-proto", "http".parse().unwrap());
+            for peer in [None, Some("127.0.0.1:12000".parse().unwrap())] {
+                let origin = policy.resolve(&headers, peer).unwrap();
+                assert_eq!(origin.0, browser);
+                assert!(origin.check(&headers, true).is_ok());
+            }
+        }
+    }
+    #[test]
+    fn rejects_foreign_hosts_ports_and_invalid_browser_metadata() {
+        for (name, value) in [
+            ("origin", "https://foreign.example"),
+            ("origin", "https://hub.example:8443"),
+            ("origin", "http://hub.example:443"),
+            ("origin", "null"),
+            ("origin", "https://hub.example/path"),
+            ("origin", "https://hub.example,https://foreign.example"),
+            ("x-hub-origin", "https://foreign.example"),
+            ("x-hub-origin", "null"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("host", "hub.example".parse().unwrap());
+            headers.insert(name, value.parse().unwrap());
+            assert!(policy().resolve(&headers, None).is_err(), "{name}={value}");
+        }
+        for name in ["origin", "x-hub-origin"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("host", "hub.example".parse().unwrap());
+            headers.append(name, "https://hub.example".parse().unwrap());
+            headers.append(name, "https://hub.example".parse().unwrap());
+            assert!(policy().resolve(&headers, None).is_err());
+        }
+    }
+    #[test]
+    fn refresh_hint_preserves_https_but_cannot_replace_a_websocket_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "hub.example".parse().unwrap());
+        headers.insert("x-hub-origin", "https://hub.example".parse().unwrap());
+        let origin = policy().resolve(&headers, None).unwrap();
+        assert_eq!(origin.0, "https://hub.example");
+        assert!(origin.check(&headers, false).is_ok());
         assert!(origin.check(&headers, true).is_err());
+        headers.insert("origin", "https://hub.example".parse().unwrap());
+        assert!(origin.check(&headers, true).is_ok());
+        for value in ["http://hub.example", "https://foreign.example"] {
+            headers.insert("origin", value.parse().unwrap());
+            assert!(policy().resolve(&headers, None).is_err());
+        }
     }
     #[test]
     fn rejects_ambiguous_forwarding_and_invalid_origins() {

@@ -15,7 +15,7 @@ pub struct Cli {
     pub password: Option<String>,
     #[arg(long, global = true)]
     pub password_stdin: bool,
-    /// Public HTTP(S) origin; use 'auto' to infer it from the request.
+    /// Deprecated compatibility option; addresses now follow each request.
     #[arg(long, global = true)]
     pub origin: Option<String>,
     /// Comma-separated proxy IPs/CIDRs; 'none' disables forwarding headers.
@@ -48,7 +48,8 @@ pub enum UserCommand {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub password: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Read old configs without retaining a domain restriction on the next save.
+    #[serde(default, skip_serializing)]
     pub origin: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_proxies: Option<Vec<String>>,
@@ -122,18 +123,9 @@ pub fn valid_admin_password(value: &str) -> bool {
 }
 fn network_options(
     stored: &Config,
-    cli_origin: Option<String>,
-    env_origin: Option<String>,
     cli_proxies: Option<String>,
     env_proxies: Option<String>,
-) -> Result<(Option<String>, Option<Vec<String>>)> {
-    let origin = cli_origin
-        .or(env_origin.filter(|v| !v.trim().is_empty()))
-        .or_else(|| stored.origin.clone());
-    let origin = origin
-        .filter(|v| v != "auto")
-        .map(|v| parse_origin(&v))
-        .transpose()?;
+) -> Result<Option<Vec<String>>> {
     let proxies = cli_proxies
         .or(env_proxies)
         .map(|value| -> Result<Vec<String>> {
@@ -150,7 +142,7 @@ fn network_options(
     for proxy in proxies.iter().flatten() {
         crate::origin::parse_network(proxy)?;
     }
-    Ok((origin, proxies))
+    Ok(proxies)
 }
 pub fn load() -> Result<Option<Runtime>> {
     let cli = Cli::parse();
@@ -168,10 +160,13 @@ pub fn load() -> Result<Option<Runtime>> {
     } else {
         Config::default()
     };
-    let (origin, trusted_proxies) = network_options(
+    if cli.origin.is_some() || std::env::var_os("HUB_ORIGIN").is_some() || stored.origin.is_some() {
+        eprintln!(
+            "Fixed origin settings are deprecated and ignored; Hub addresses follow each request."
+        );
+    }
+    let trusted_proxies = network_options(
         &stored,
-        cli.origin,
-        std::env::var("HUB_ORIGIN").ok(),
         cli.trusted_proxies,
         std::env::var("HUB_TRUSTED_PROXIES").ok(),
     )?;
@@ -202,7 +197,7 @@ pub fn load() -> Result<Option<Runtime>> {
     }
     let config = Config {
         password,
-        origin,
+        origin: None,
         trusted_proxies,
     };
     if !existed || matches!(cli.command, Some(Command::Config)) {
@@ -286,61 +281,40 @@ mod tests {
     }
 
     #[test]
-    fn network_settings_follow_cli_environment_and_file_precedence_without_new_prompts() {
+    fn proxy_settings_follow_cli_environment_and_file_precedence_without_new_prompts() {
         let stored = Config {
             password: "password".into(),
             origin: Some("https://file.example".into()),
             trusted_proxies: Some(vec!["10.0.0.0/24".into()]),
         };
-        let effective = |cli: Option<&str>, env: Option<&str>, proxies: Option<&str>| {
-            network_options(
-                &stored,
-                cli.map(str::to_owned),
-                env.map(str::to_owned),
-                proxies.map(str::to_owned),
-                None,
-            )
-            .unwrap()
+        let effective = |cli: Option<&str>, env: Option<&str>| {
+            network_options(&stored, cli.map(str::to_owned), env.map(str::to_owned)).unwrap()
         };
         assert_eq!(
-            effective(
-                Some("https://CLI.example:443/"),
-                Some("https://env.example"),
-                None
-            )
-            .0
-            .as_deref(),
-            Some("https://cli.example")
+            effective(Some("127.0.0.1,::1"), Some("invalid")),
+            Some(vec!["127.0.0.1/32".into(), "::1/128".into()])
         );
         assert_eq!(
-            effective(None, Some("https://env.example"), None)
-                .0
-                .as_deref(),
-            Some("https://env.example")
+            effective(None, Some("192.0.2.1")),
+            Some(vec!["192.0.2.1/32".into()])
         );
-        assert_eq!(effective(None, None, None).0, stored.origin);
-        assert_eq!(effective(None, None, None).1, stored.trusted_proxies);
-        let with_env =
-            network_options(&stored, None, None, None, Some("192.0.2.1".into())).unwrap();
-        assert_eq!(with_env.1, Some(vec!["192.0.2.1/32".into()]));
-        let overridden = network_options(
-            &stored,
-            None,
-            None,
-            Some("none".into()),
-            Some("invalid".into()),
-        )
-        .unwrap();
-        assert_eq!(overridden.1, Some(vec![]));
-        assert!(network_options(&stored, None, None, Some("invalid".into()), None).is_err());
-        assert!(effective(Some("auto"), Some("https://env.example"), None)
-            .0
-            .is_none());
-        assert_eq!(effective(None, None, Some("none")).1, Some(vec![]));
+        assert_eq!(effective(None, None), stored.trusted_proxies);
+        assert_eq!(effective(Some("none"), Some("invalid")), Some(vec![]));
+        assert_eq!(effective(Some(""), None), Some(vec![]));
+        assert!(network_options(&stored, Some("invalid".into()), None).is_err());
+    }
+
+    #[test]
+    fn legacy_origin_is_read_but_never_saved_as_a_domain_restriction() {
+        let stored: Config =
+            serde_json::from_str(r#"{"password":"existing","origin":"https://old.example"}"#)
+                .unwrap();
+        assert_eq!(stored.origin.as_deref(), Some("https://old.example"));
         assert_eq!(
-            effective(None, None, Some("192.0.2.1,::1")).1,
-            Some(vec!["192.0.2.1/32".into(), "::1/128".into()])
+            serde_json::to_value(&stored).unwrap(),
+            serde_json::json!({"password":"existing"})
         );
+        assert!(Cli::try_parse_from(["gotty-hub", "--origin", "https://old.example"]).is_ok());
         let legacy: Config = serde_json::from_str(r#"{"password":"existing"}"#).unwrap();
         assert!(legacy.origin.is_none() && legacy.trusted_proxies.is_none());
         assert_eq!(

@@ -590,11 +590,7 @@ mod tests {
                 reset_password: None,
             })),
             db,
-            addresses: crate::origin::Policy::new(&crate::config::Config {
-                origin: Some("https://hub.test".into()),
-                ..Default::default()
-            })
-            .unwrap(),
+            addresses: crate::origin::Policy::new(&crate::config::Config::default()).unwrap(),
             shutdown: crate::shutdown::Shutdown::new(),
             devices: Default::default(),
             rates: Default::default(),
@@ -642,8 +638,7 @@ mod tests {
     async fn https_proxy_login_uses_the_real_peer_and_one_public_origin_for_cookie_account_and_hsts(
     ) {
         let _serial = PASSWORD_TEST_LOCK.lock().await;
-        let mut app = app().await;
-        app.addresses.fixed = None;
+        let app = app().await;
         let password = "proxy admin password";
         sync_admin(&app.db, password).await.unwrap();
         let routes = auth_routes(app.clone());
@@ -694,6 +689,99 @@ mod tests {
             routes.oneshot(chained).await.unwrap().status(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test]
+    async fn https_login_and_refresh_follow_changed_domains_without_proxy_configuration() {
+        let _serial = PASSWORD_TEST_LOCK.lock().await;
+        let mut app = app().await;
+        app.addresses = crate::origin::Policy::new(&crate::config::Config {
+            origin: Some("http://stale.example".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let password = "domain-independent admin password";
+        sync_admin(&app.db, password).await.unwrap();
+        let routes = auth_routes(app);
+        for (host, origin) in [
+            ("first.example", "https://first.example"),
+            ("changed.example", "https://changed.example"),
+            ("changed.example:8443", "https://changed.example:8443"),
+            ("changed.example:8088", "http://changed.example:8088"),
+        ] {
+            let response = routes
+                .clone()
+                .oneshot(login_request(host, origin, password))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let set_cookie = response.headers()["set-cookie"].to_str().unwrap();
+            let secure = origin.starts_with("https://");
+            assert_eq!(set_cookie.contains("; Secure"), secure);
+            assert_eq!(
+                response.headers().contains_key("strict-transport-security"),
+                secure
+            );
+            let cookie = set_cookie.split(';').next().unwrap().to_owned();
+            let account: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap())
+                    .unwrap();
+            assert_eq!(account["hub_address"], origin);
+            // Same-origin browser GETs omit Origin, so a refresh must use the
+            // validated client hint to keep the correct HTTPS public address.
+            let response = routes
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/me")
+                        .header("host", host)
+                        .header("x-hub-origin", origin)
+                        .header("cookie", &cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let refreshed: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap())
+                    .unwrap();
+            assert_eq!(refreshed["hub_address"], origin);
+            for with_csrf in [false, true] {
+                let mut request = Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/me/preferences")
+                    .header("host", host)
+                    .header("origin", origin)
+                    .header("x-hub-origin", origin)
+                    .header("cookie", &cookie)
+                    .header("content-type", "application/json");
+                if with_csrf {
+                    request = request.header("x-csrf-token", account["csrf"].as_str().unwrap());
+                }
+                let response = routes
+                    .clone()
+                    .oneshot(request.body(Body::from("{}")).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    if with_csrf {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                );
+            }
+            let mut foreign = login_request(host, "https://foreign.example", password);
+            foreign
+                .headers_mut()
+                .insert("x-hub-origin", origin.parse().unwrap());
+            assert_eq!(
+                routes.clone().oneshot(foreign).await.unwrap().status(),
+                StatusCode::FORBIDDEN
+            );
+        }
     }
 
     #[tokio::test]
@@ -760,17 +848,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_password_changes_preserve_persisted_network_configuration() {
+    async fn admin_password_changes_preserve_proxy_settings_and_drop_legacy_origin() {
         let _serial = PASSWORD_TEST_LOCK.lock().await;
         let app = app().await;
         sync_admin(&app.db, "old password").await.unwrap();
         let directory = &app.admin.runtime.home;
         crate::config::private_dir(directory).unwrap();
-        let stored = crate::config::Config {
-            password: "old password".into(),
-            origin: Some("https://hub.example".into()),
-            trusted_proxies: Some(vec!["192.0.2.0/24".into()]),
-        };
+        let stored = json!({"password":"old password", "origin":"https://old.example", "trusted_proxies":["192.0.2.0/24"]});
         crate::config::save(
             &directory.join("config"),
             &serde_json::to_vec(&stored).unwrap(),
@@ -782,16 +866,15 @@ mod tests {
         let saved: crate::config::Config =
             serde_json::from_slice(&std::fs::read(directory.join("config")).unwrap()).unwrap();
         assert_eq!(saved.password, "new password");
-        assert_eq!(saved.origin, stored.origin);
-        assert_eq!(saved.trusted_proxies, stored.trusted_proxies);
+        assert!(saved.origin.is_none());
+        assert_eq!(saved.trusted_proxies, Some(vec!["192.0.2.0/24".into()]));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
     async fn admin_can_login_at_server_ip_without_configuring_an_origin() {
         let _serial = PASSWORD_TEST_LOCK.lock().await;
-        let mut app = app().await;
-        app.addresses.fixed = None;
+        let app = app().await;
         let password = "correct admin test password";
         sync_admin(&app.db, password).await.unwrap();
         let routes = auth_routes(app.clone());
@@ -876,91 +959,6 @@ mod tests {
             serde_json::from_slice(&to_bytes(foreign_origin.into_body(), 65536).await.unwrap())
                 .unwrap();
         assert_eq!(error["error"], "origin_mismatch");
-
-        app.addresses.fixed = Some("https://hub.example".into());
-        let response = auth_routes(app)
-            .oneshot(login_request(
-                "127.0.0.1:8088",
-                "https://hub.example",
-                password,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(response.headers()["set-cookie"]
-            .to_str()
-            .unwrap()
-            .contains("; Secure"));
-        let account: Value =
-            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
-        assert_eq!(account["hub_address"], "https://hub.example");
-    }
-
-    #[tokio::test]
-    async fn origin_policy_matches_the_http_host_and_keeps_configured_origins_strict() {
-        let mut app = app().await;
-        app.addresses.fixed = None;
-        for host in ["192.0.2.10:8088", "hub.example:8088", "[2001:db8::1]:8088"] {
-            let mut headers = HeaderMap::new();
-            headers.insert("host", host.parse().unwrap());
-            headers.insert("origin", format!("http://{host}").parse().unwrap());
-            assert!(app
-                .addresses
-                .resolve(&headers, None)
-                .unwrap()
-                .check(&headers, true)
-                .is_ok());
-            headers.insert("x-forwarded-host", "foreign.example".parse().unwrap());
-            headers.insert("x-forwarded-proto", "https".parse().unwrap());
-            assert_eq!(
-                app.addresses.resolve(&headers, None).unwrap().0,
-                format!("http://{host}")
-            );
-            for foreign in [
-                "null",
-                "http://foreign.example:8088",
-                "https://192.0.2.10:8088",
-                "http://192.0.2.10:8089",
-            ] {
-                headers.insert("origin", foreign.parse().unwrap());
-                assert!(app
-                    .addresses
-                    .resolve(&headers, None)
-                    .unwrap()
-                    .check(&headers, true)
-                    .is_err());
-            }
-            headers.remove("origin");
-            assert!(app
-                .addresses
-                .resolve(&headers, None)
-                .unwrap()
-                .check(&headers, false)
-                .is_ok());
-            assert!(app
-                .addresses
-                .resolve(&headers, None)
-                .unwrap()
-                .check(&headers, true)
-                .is_err());
-        }
-        app.addresses.fixed = Some("https://hub.example".into());
-        let mut headers = HeaderMap::new();
-        headers.insert("host", "127.0.0.1:8088".parse().unwrap());
-        headers.insert("origin", "http://127.0.0.1:8088".parse().unwrap());
-        assert!(app
-            .addresses
-            .resolve(&headers, None)
-            .unwrap()
-            .check(&headers, true)
-            .is_err());
-        headers.insert("origin", "https://hub.example".parse().unwrap());
-        assert!(app
-            .addresses
-            .resolve(&headers, None)
-            .unwrap()
-            .check(&headers, true)
-            .is_ok());
     }
 
     #[tokio::test]

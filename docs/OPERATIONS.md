@@ -2,7 +2,7 @@
 
 ## 生产部署
 
-构建 `Dockerfile` 或 `make build`。镜像包含静态资源，以 UID 10001 运行，持久卷 `/data`。部署模板在 `deploy/compose.yaml`；复制 `deploy/hub.env.example` 到私有配置，填写实际 HTTP(S) origin 和 HUB_PASSWORD。
+构建 `Dockerfile` 或 `make build`。镜像包含静态资源，以 UID 10001 运行，持久卷 `/data`。部署模板在 `deploy/compose.yaml`；复制 `deploy/hub.env.example` 到私有配置，填写 HUB_PASSWORD，无需配置域名。
 
 ```sh
 cd deploy
@@ -10,13 +10,15 @@ docker compose --env-file /private/hub.env config
 docker compose --env-file /private/hub.env up -d --build
 ```
 
-Hub binary 默认监听 `0.0.0.0:8088`，直接 HTTP 访问根据 Host 校验同源；可信代理后的 HTTPS 则根据代理覆盖的 `X-Forwarded-Proto` / `X-Forwarded-Host` 识别外部地址，登录、`hub_address`、Secure Cookie、HSTS 及浏览器 WS 校验共用同一结果。
+Hub binary 默认监听 `0.0.0.0:8088`，接受任意指向 Hub 的域名或 IP，按每次请求识别地址。浏览器 `Origin` 必须匹配请求 `Host` 的域名和端口，可为这同一地址确定 HTTP/HTTPS scheme；因此保留 Host 的 TLS 反代即使未提供转发头，也可正常登录和连接终端。前端 API 额外发送 `X-Hub-Origin: location.origin`，使不含 Origin 的 GET（例如刷新后的 `/me`）也保持正确的 HTTPS 地址；该头不能覆盖或违背真正的 Origin，不能代替终端 WS 必需的 Origin。登录、`hub_address`、Secure Cookie、HSTS 及浏览器 WS 共用单次解析结果。
 
 默认可信代理为 `127.0.0.0/8`、`::1/128`，信任依据是实际 socket 对端 IP（包含IPv4映射IPv6的规范化），不依据 X-Forwarded-For。容器网桥/远程代理应填写实际代理 IP 或最小 CIDR，例如 `--trusted-proxies 172.20.0.2/32`；这会替换默认信任列表，需要同时信任回环时将它一起列出。不要对公网配置 `0.0.0.0/0`。
 
-只支持单值 X-Forwarded-Proto（http/https）和 X-Forwarded-Host。最后一跳可信代理必须覆盖客户端的同名头，不能追加逗号链；重复/逗号链返回400 `invalid_proxy_headers`。不可信对端的转发头完全忽略；不解析 RFC Forwarded。多层代理需由最后一跳输出确定的公共地址，或用 `--origin` / `HUB_ORIGIN` 固定外部根地址，固定值优先于推断。`--origin auto` 清除旧的固定值。
+只支持单值 X-Forwarded-Proto（http/https）和 X-Forwarded-Host。最后一跳可信代理必须覆盖客户端的同名头，不能追加逗号链；重复/逗号链返回400 `invalid_proxy_headers`。不可信对端的转发头完全忽略；不解析 RFC Forwarded。如果代理将 Host 改为内网地址，应保留外部 Host，或配置真实代理 IP/CIDR 并由代理覆盖 X-Forwarded-Host。客户端提供的来源只能为匹配的 authority 选择 scheme，不能用其他域名替换 Host；没有浏览器来源时，scheme 使用可信 X-Forwarded-Proto 或 HTTP。
 
-`deploy/Caddyfile` 已显式覆盖这两个头，替换域名并配置 DNS 即可用于本机 HTTPS 反代；binary 可设置 `HUB_LISTEN=127.0.0.1:8088`。Compose 的宿主机端口仅向回环发布，但容器内实际对端通常为网桥IP；模板继续要求显式 HUB_ORIGIN，以免依赖容器网段猜测。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要缓存终端请求或记录请求体。认证限流继续按实际连接IP聚合。
+`--origin`、`HUB_ORIGIN`、config 的 `origin` 已弃用，兼容接受但忽略。已有配置不需要手动清除；再次保存 config 或修改管理员密码时不再写入 origin。更换域名后无需执行任何 origin 配置命令，也不需要仅为换域名重启 Hub；域名解析、证书及反代路由需指向该服务。浏览器 Cookie 按域名隔离，在新域名登录即可。
+
+`deploy/Caddyfile` 已显式覆盖这两个头，替换域名并配置 DNS 即可用于本机 HTTPS 反代；binary 可设置 `HUB_LISTEN=127.0.0.1:8088`。Compose 的宿主机端口仅向回环发布；容器内对端常为网桥 IP，保留外部 Host 时无需猜测网段或设置 HUB_ORIGIN，改写 Host 时应配置真实代理 IP。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要缓存终端请求或记录请求体。认证限流继续按实际连接IP聚合。
 
 Nginx 的 `http` 段添加 `map $http_upgrade $connection_upgrade { default upgrade; '' close; }`，在已配置 TLS 证书的 server 中使用：
 
@@ -36,7 +38,7 @@ location / {
 
 | 配置 | 用途 |
 |---|---|
-| HUB_ORIGIN | 可选固定外部 HTTP(S) origin，不带路径；低于 --origin，高于 config；auto 清除固定值 |
+| HUB_ORIGIN | 已弃用并忽略；地址始终随本次请求识别，无需配置 |
 | HUB_TRUSTED_PROXIES | 可信代理 IP/CIDR，逗号分隔；低于 --trusted-proxies，高于 config；默认回环，none 禁用 |
 | HUB_LISTEN | 默认 0.0.0.0:8088，可显式设为 127.0.0.1:8088 |
 | HUB_DATABASE | SQLite URL，默认 ~/.gotty-hub/hub.db |
@@ -51,7 +53,7 @@ GoTTY 需对应 Connector 版本，Hub 功能默认开启，可用 `--hub-disabl
 - `/healthz`：进程存活。`/readyz`：数据库查询。
 - `/api/v1/diagnostics`：需要 Cookie 会话的汇总信息，不包含终端负载或凭据。
 - 实例离线：检查 GoTTY 到 Hub 的 DNS/TLS/防火墙及 WSS。设备每15秒心跳，45秒失联；自动退避重连。Hub 重启时先显示离线，认证重连后恢复。
-- 浏览器401/403：`origin_mismatch` 表示浏览器 Origin 与解析出的外部地址不同。先检查旧的 CLI/环境/config 固定值，再检查代理真实对端是否在可信列表、代理是否覆盖上述两个头。日志只记录规范化的预期/实际 origin，不记录密码或会话。`invalid_proxy_headers` 表示可信代理发送了无效或含歧义的头；密码错误为401 `invalid_credentials`。
+- 浏览器401/403：`origin_mismatch` 表示 Origin / X-Hub-Origin 无效、相互冲突或与本次请求的 Host 域名/端口不同。检查代理是否保留外部 Host；改写 Host 时，检查真实对端信任列表和覆盖的 X-Forwarded-Host。旧的固定 origin 不再影响请求。日志只记录规范化的预期/实际 origin，不记录密码或会话。`invalid_proxy_headers` 表示可信代理发送了无效或含歧义的头；密码错误为401 `invalid_credentials`。
 - 文件：服务器安装 rz/sz；单文件64MiB，观察者禁用。取消后终端应可继续输入。
 - ASR：仅使用 GoTTY 配置的 ASRBackend；HTTPS 下授予麦克风权限；每流120秒/16MiB。不开放通用上游 URL。
 - 磁盘满/数据库错误：停止接入写入、释放空间，检查 SQLite 完整性；错误不会授予新权限。部署监控应包含磁盘剩余、进程内存、WS 断开率。

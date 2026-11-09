@@ -11,9 +11,10 @@ def read_until(fd,word):
    except OSError:break
    if word.encode() in output:return output
  raise AssertionError('missing interactive prompt '+word)
-def login(origin,password,request_origin=None):
+def login(origin,password,request_origin=None,request_host=None):
  headers={'Content-Type':'application/json'}
  if request_origin is not None:headers['Origin']=request_origin
+ if request_host is not None:headers['Host']=request_host
  request=urllib.request.Request(origin+'/api/v1/auth/password/login',data=json.dumps({'username':'admin','password':password}).encode(),headers=headers)
  try:
   with urllib.request.urlopen(request) as response:return response.status,json.load(response),response.headers.get('Set-Cookie').split(';')[0]
@@ -26,11 +27,13 @@ with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
  subprocess.run([binary,'config','--password','cli password'],env={**env,'HUB_PASSWORD':'env password'},check=True,capture_output=True);assert json.loads(config.read_text())['password']=='cli password'
  subprocess.run([binary,'config','--password-stdin'],input=b'  spaced password  \n',env=env,check=True,capture_output=True);assert json.loads(config.read_text())['password']=='  spaced password  '
  result=subprocess.run([binary,'serve','--password',' '],env=env,stdin=subprocess.DEVNULL,capture_output=True);assert result.returncode!=0
- # Optional network options use CLI > environment > file without another setup prompt.
+ # Proxy settings keep their precedence; old fixed origins no longer pin a domain.
  network={**env,'HUB_HOME':tmp+'/network','HUB_ORIGIN':'https://env.example','HUB_TRUSTED_PROXIES':'192.0.2.0/24'}
  subprocess.run([binary,'config','--password','network password','--origin','https://CLI.example:443/','--trusted-proxies','127.0.0.1,::1'],env=network,check=True,capture_output=True)
  network_config=pathlib.Path(network['HUB_HOME'],'config');saved=json.loads(network_config.read_text())
- assert saved['origin']=='https://cli.example' and saved['trusted_proxies']==['127.0.0.1/32','::1/128']
+ assert 'origin' not in saved and saved['trusted_proxies']==['127.0.0.1/32','::1/128']
+ network_config.write_text(json.dumps({**saved,'origin':'https://old.example'}))
+ assert subprocess.run([binary,'check'],env=network,capture_output=True).returncode==0
  subprocess.run([binary,'config','--origin','auto','--trusted-proxies','none'],env=network,check=True,capture_output=True)
  saved=json.loads(network_config.read_text());assert 'origin' not in saved and saved['trusted_proxies']==[]
  assert subprocess.run([binary,'check','--trusted-proxies','invalid'],env=network,capture_output=True).returncode!=0
@@ -54,12 +57,12 @@ with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
     if process.poll() is not None:raise AssertionError(process.stderr.read().decode())
     time.sleep(.1)
   process.terminate();process.wait();raise AssertionError('standalone launch failed')
- # HTTP origins work without a development flag; the exact Origin guard still applies.
+ # Any public Host works without a domain setting, even with a stale HUB_ORIGIN.
  public_origin='http://hub.example:8088'
  process=start(['serve'],public_origin=public_origin)
  try:
-  status,user,cookie=login(origin,'env password',public_origin);assert status==200 and user['hub_address']==public_origin
-  assert login(origin,'env password','http://other.example:8088')[0]==403
+  status,user,cookie=login(origin,'env password',public_origin,'hub.example:8088');assert status==200 and user['hub_address']==public_origin
+  assert login(origin,'env password','http://other.example:8088','hub.example:8088')[0]==403
  finally:process.terminate();process.wait(timeout=10)
  # Admin requires a nonempty password, without the ordinary user's 12-byte minimum.
  process=start(['serve','--password','x'])
@@ -87,4 +90,4 @@ with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
   assert process.poll() is None and login(origin,'stdin startup override')[0]==200
   assert b'--password-stdin' not in pathlib.Path(f'/proc/{process.pid}/cmdline').read_bytes()
  finally:process.terminate();process.wait(timeout=10)
-print('PASS HTTP origin without development flags, exact Origin guard, single hidden admin prompt, fixed identity, private config, stdin/spaces, CLI > env > config, admin Web password persistence and startup override')
+print('PASS request-based domains, ignored legacy origins, same-authority Origin guard, single hidden admin prompt, fixed identity, private config, stdin/spaces, password/proxy precedence, admin Web password persistence and startup override')
