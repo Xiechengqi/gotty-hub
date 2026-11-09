@@ -100,6 +100,8 @@ async fn main() -> anyhow::Result<()> {
         .execute(&db)
         .await?;
     sqlx::migrate!("../../migrations").run(&db).await?;
+    security::sync_admin(&db, &runtime.config.password).await?;
+    let reset_password = runtime.reset_password.clone();
     let app = App {
         admin: Arc::new(admin::Admin::new(runtime)),
         db,
@@ -112,7 +114,14 @@ async fn main() -> anyhow::Result<()> {
             .timeout(std::time::Duration::from_secs(15))
             .build()?,
     };
-    tokio::spawn(api::mail_worker(app.clone()));
+    if let Some((username, password)) = reset_password {
+        api::reset_password_local(&app, &username, &password)
+            .await
+            .map_err(|e| anyhow::anyhow!("Password reset failed: {}", e.1))?;
+        println!("Password reset: {username}");
+        return Ok(());
+    }
+    tokio::spawn(api::cleanup_worker(app.clone()));
     let routes = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(api::ready))
@@ -125,14 +134,8 @@ async fn main() -> anyhow::Result<()> {
             get(admin::status).post(admin::upgrade),
         )
         .route("/api/v1/admin/restart", post(admin::restart))
-        .route("/api/v1/auth/otp/request", post(api::otp_request))
-        .route("/api/v1/auth/otp/verify", post(api::otp_verify))
+        .route("/api/v1/auth/register", post(api::register))
         .route("/api/v1/auth/password/login", post(api::password_login))
-        .route("/api/v1/auth/password/reset", post(api::password_reset))
-        .route(
-            "/api/v1/auth/password/verify-reset",
-            post(api::verify_reset),
-        )
         .route("/api/v1/auth/logout", post(api::logout))
         .route("/api/v1/me", get(api::me))
         .route("/api/v1/me/password", put(api::change_password))
@@ -150,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
             get(api::grants).put(api::set_grant),
         )
         .route(
-            "/api/v1/instances/:id/grants/:email",
+            "/api/v1/instances/:id/grants/:username",
             delete(api::remove_grant),
         )
         .route("/api/v1/instances/:id/binding", delete(api::unbind))
@@ -164,8 +167,7 @@ async fn main() -> anyhow::Result<()> {
             get(gateway::browser_upgrade),
         )
         .route("/api/v1/events", get(api::events))
-        .route("/api/v1/enrollments", post(api::enroll))
-        .route("/api/v1/enrollments/:id/confirm", post(api::confirm))
+        .route("/api/v1/instances/register", post(api::register_instance))
         .route("/connector/v1/connect", get(gateway::device_upgrade))
         .layer(middleware::from_fn_with_state(app.clone(), security::guard))
         .with_state(app.clone());
@@ -230,7 +232,7 @@ async fn main() -> anyhow::Result<()> {
         app.db.close().await;
         tracing::info!("Restarting Hub");
         drop(_log_guard);
-        return admin::exec_restart(&app.admin.executable);
+        return admin::exec_restart(&app.admin.executable, &app.admin.runtime.config.password);
     }
     let _ = admin;
     Ok(())

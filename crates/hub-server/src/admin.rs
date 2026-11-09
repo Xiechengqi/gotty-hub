@@ -25,6 +25,7 @@ pub struct Admin {
     pub operation: AtomicBool,
     pub restart: Notify,
     pub update: Mutex<Update>,
+    pub credentials: Mutex<()>,
 }
 impl Admin {
     pub fn new(runtime: crate::config::Runtime) -> Self {
@@ -49,15 +50,13 @@ impl Admin {
             operation: AtomicBool::new(false),
             restart: Notify::new(),
             update: Mutex::new(previous),
+            credentials: Mutex::new(()),
         }
     }
 }
-pub fn is_admin(app: &App, mail: &str) -> bool {
-    mail == app.admin.runtime.config.admin_email
-}
 async fn require(app: &App, h: &HeaderMap) -> Result<Session> {
     let s = session(app, h).await?;
-    if !is_admin(app, &s.email) {
+    if !s.is_admin {
         return Err(denied());
     }
     Ok(s)
@@ -74,13 +73,9 @@ pub async fn dashboard(State(app): State<App>, h: HeaderMap) -> Result<Json<Valu
         .bind(now())
         .fetch_one(&app.db)
         .await?;
-    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM outbox WHERE sent=0 AND expires>?")
-        .bind(now())
-        .fetch_one(&app.db)
-        .await?;
     let devices = app.devices.lock().await;
     Ok(Json(
-        json!({"users":users,"instances":instances,"online":devices.len(),"sessions":sessions,"mail_pending":pending,"uptime_seconds":app.admin.started.elapsed().as_secs(),"version":env!("CARGO_PKG_VERSION"),"revision":env!("HUB_REVISION")}),
+        json!({"users":users,"instances":instances,"online":devices.len(),"sessions":sessions,"offline":instances.saturating_sub(devices.len() as i64).max(0),"uptime_seconds":app.admin.started.elapsed().as_secs(),"version":env!("CARGO_PKG_VERSION"),"revision":env!("HUB_REVISION")}),
     ))
 }
 pub async fn logs(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
@@ -119,7 +114,7 @@ pub async fn restart(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>
     if app.admin.operation.swap(true, Ordering::SeqCst) {
         return Err(Error(axum::http::StatusCode::CONFLICT, "operation_active"));
     }
-    crate::api::audit(&app, &s.email, "system_restart", "").await;
+    crate::api::audit(&app, &s.username, "system_restart", "").await;
     schedule_restart(app.admin.clone());
     Ok(Json(json!({"ok":true})))
 }
@@ -217,7 +212,7 @@ pub async fn upgrade(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>
         }
     })
     .await;
-    crate::api::audit(&app, &s.email, "system_upgrade", "").await;
+    crate::api::audit(&app, &s.username, "system_upgrade", "").await;
     tokio::spawn(async move {
         match install(&app).await {
             Ok(()) => {
@@ -346,6 +341,7 @@ async fn install(app: &App) -> anyhow::Result<()> {
             "release binary verification failed"
         );
         let probe_text = String::from_utf8_lossy(&probe.stdout);
+        supported_release(&probe_text)?;
         if let Some(revision) = probe_text
             .split('(')
             .nth(1)
@@ -375,23 +371,68 @@ async fn install(app: &App) -> anyhow::Result<()> {
     }
     result
 }
-pub fn exec_restart(path: &std::path::Path) -> anyhow::Result<()> {
+fn supported_release(output: &str) -> anyhow::Result<()> {
+    fn version(value: &str) -> Option<(u64, u64, u64)> {
+        let parts: Vec<_> = value.split('.').map(str::parse::<u64>).collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        Some((
+            *parts[0].as_ref().ok()?,
+            *parts[1].as_ref().ok()?,
+            *parts[2].as_ref().ok()?,
+        ))
+    }
+    let candidate = output
+        .split_whitespace()
+        .nth(1)
+        .and_then(version)
+        .ok_or_else(|| anyhow::anyhow!("invalid release version"))?;
+    let current = version(env!("CARGO_PKG_VERSION")).expect("package version");
+    anyhow::ensure!(
+        candidate >= current,
+        "release is older than this installation; refusing incompatible downgrade"
+    );
+    Ok(())
+}
+pub fn exec_restart(path: &std::path::Path, password: &str) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let error = std::process::Command::new(path)
-            .args(std::env::args_os().skip(1))
-            .exec();
+        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        let stdin_password = args.iter().any(|arg| arg == "--password-stdin");
+        let mut command = std::process::Command::new(path);
+        command.args(
+            args.iter()
+                .filter(|arg| arg.as_os_str() != "--password-stdin"),
+        );
+        // A pipe cannot be consumed again after exec. Keep its startup override in the environment.
+        if stdin_password {
+            command.env("HUB_PASSWORD", password);
+        }
+        let error = command.exec();
         Err(error.into())
     }
     #[cfg(not(unix))]
     {
+        let _ = (path, password);
         anyhow::bail!("restart requires Unix")
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn release_must_not_downgrade_username_schema() {
+        assert!(supported_release("gotty-hub 0.1.0 (legacy)").is_err());
+        assert!(supported_release(concat!(
+            "gotty-hub ",
+            env!("CARGO_PKG_VERSION"),
+            " (current)"
+        ))
+        .is_ok());
+        assert!(supported_release("gotty-hub invalid").is_err());
+    }
     #[test]
     fn trusted_urls_and_checksums() {
         assert!(download_url(

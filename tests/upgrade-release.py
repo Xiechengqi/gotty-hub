@@ -7,8 +7,8 @@ with tempfile.TemporaryDirectory(prefix='hub-real-upgrade-') as tmp:
  directory=pathlib.Path(tmp);binary=directory/'gotty-hub';shutil.copy2(root/'target/debug/gotty-hub',binary)
  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
  origin=f'http://127.0.0.1:{port}';home=directory/'home'
- env={**os.environ,'HUB_HOME':str(home),'HUB_DEV':'1','HUB_LISTEN':f'127.0.0.1:{port}','HUB_ORIGIN':origin,'RESEND_API_KEY':'test-key','HUB_ADMIN_EMAIL':'admin@example.test'}
- for key in ['HUB_DATABASE','HUB_ASSETS','HUB_DEV_MAIL_DIR']:env.pop(key,None)
+ env={**os.environ,'HUB_HOME':str(home),'HUB_DEV':'1','HUB_LISTEN':f'127.0.0.1:{port}','HUB_ORIGIN':origin,'HUB_PASSWORD':'admin integration password'}
+ for key in ['HUB_DATABASE','HUB_ASSETS']:env.pop(key,None)
  with open(directory/'process.log','w') as log:
   process=subprocess.Popen([str(binary),'serve'],env=env,cwd=tmp,stdout=log,stderr=log)
   try:
@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='hub-real-upgrade-') as tmp:
    else:raise AssertionError('startup failed')
    token=secrets.token_hex(32);csrf=secrets.token_hex(32)
    with sqlite3.connect(home/'hub.db') as db:
-    db.execute('INSERT INTO users(email) VALUES(?)',('admin@example.test',));db.execute('INSERT INTO sessions VALUES(?,?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),'admin@example.test',csrf,int(time.time())+3600))
+    admin_id=db.execute("SELECT id FROM users WHERE username='admin'").fetchone()[0];db.execute('INSERT INTO sessions VALUES(?,?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),admin_id,csrf,int(time.time())+3600))
    def api(path,body=None):
     request=urllib.request.Request(origin+'/api/v1'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Cookie':'hub_session='+token,'Content-Type':'application/json','X-CSRF-Token':csrf,'Origin':origin})
     with urllib.request.urlopen(request,timeout=35) as response:return json.load(response)

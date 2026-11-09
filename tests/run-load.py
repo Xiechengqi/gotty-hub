@@ -11,15 +11,15 @@ def wait(url):
  raise RuntimeError('service not ready')
 report=pathlib.Path(os.environ.get('HUB_LOAD_REPORT','/tmp/gotty-hub-load-report.json'))
 with tempfile.TemporaryDirectory(prefix='gotty-hub-load-') as tmp:
- port=free();url=f'http://127.0.0.1:{port}';env={**os.environ,'HUB_DEV':'1','HUB_HOME':tmp+'/home','RESEND_API_KEY':'test-key','HUB_ADMIN_EMAIL':'owner@example.test','HUB_LISTEN':f'127.0.0.1:{port}','HUB_ORIGIN':url,'HUB_DATABASE':f'sqlite://{tmp}/hub.db?mode=rwc','HUB_DEV_MAIL_DIR':tmp+'/mail'}
+ port=free();url=f'http://127.0.0.1:{port}';env={**os.environ,'HUB_DEV':'1','HUB_HOME':tmp+'/home','HUB_PASSWORD':'admin integration password','HUB_LISTEN':f'127.0.0.1:{port}','HUB_ORIGIN':url,'HUB_DATABASE':f'sqlite://{tmp}/hub.db?mode=rwc'}
  processes=[];samples=[]
  with open(tmp+'/process.log','w') as log:
   try:
    hub=subprocess.Popen([str(root/'target/debug/gotty-hub'),'serve'],cwd=root,env=env,stdout=log,stderr=log,start_new_session=True);processes.append(hub);wait(url+'/healthz')
    conn=sqlite3.connect(tmp+'/hub.db');digest=lambda s:hashlib.sha256(s.encode()).hexdigest();session=os.urandom(32).hex();csrf=os.urandom(32).hex()
-   conn.execute('INSERT INTO users(email) VALUES(?)',('load@example.test',));conn.execute('INSERT INTO sessions VALUES(?,?,?,?)',(digest(session),'load@example.test',csrf,int(time.time())+7200))
+   conn.execute('INSERT INTO users(id,username,password_hash,created) VALUES(?,?,?,?)',('load-user','load-user','unused-load-fixture-hash',int(time.time())));conn.execute('INSERT INTO sessions VALUES(?,?,?,?)',(digest(session),'load-user',csrf,int(time.time())+7200))
    for i in range(50):
-    key=os.urandom(32).hex();identity=f'load-{i}';conn.execute('INSERT INTO instances(id,name,owner,device) VALUES(?,?,?,?)',(identity,identity,'load@example.test',digest(key)));conn.execute('INSERT INTO grants VALUES(?,?,?)',(identity,'load@example.test','owner'))
+    key=os.urandom(32).hex();identity=f'load-{i}';conn.execute('INSERT INTO instances(id,name,owner_id,device) VALUES(?,?,?,?)',(identity,identity,'load-user',digest(key)));conn.execute('INSERT INTO grants VALUES(?,?,?)',(identity,'load-user','owner'))
     directory=pathlib.Path(tmp,f'device-{i}');directory.mkdir(mode=0o700);state=directory/'hub.json';state.write_text(json.dumps({'url':url,'instance_id':identity,'credential':key}));state.chmod(0o600)
     process=subprocess.Popen([os.environ.get('GOTTY_BIN','/tmp/gotty-hub-tools/gotty'),'--address','127.0.0.1','--port',str(free()),'--permit-write','--hub-enabled','--hub-allow-http','--hub-state-file',str(state),'bash'],cwd=tmp,env=env,stdout=log,stderr=log,start_new_session=True);processes.append(process)
    conn.commit();conn.close();time.sleep(5)

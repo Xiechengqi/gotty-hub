@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { RiTerminalBoxLine, RiAddLine, RiSettings3Line, RiSunLine, RiMoonLine, RiMenuLine, RiCloseLine, RiArrowLeftLine, RiEyeLine, RiEyeOffLine, RiTranslate2, RiArrowRightLine, RiExpandDiagonalLine, RiCollapseDiagonalLine, RiWifiOffLine, RiSideBarLine, RiLayoutTopLine } from '@remixicon/react';
+import { RiTerminalBoxLine, RiAddLine, RiSettings3Line, RiSunLine, RiMoonLine, RiMenuLine, RiCloseLine, RiEyeLine, RiEyeOffLine, RiTranslate2, RiArrowRightLine, RiExpandDiagonalLine, RiCollapseDiagonalLine, RiWifiOffLine, RiSideBarLine, RiLayoutTopLine } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
 import { Input } from '@/components/base/input/input';
 import { Drawer, DrawerHeader, DrawerBody } from '@/components/base/drawer/drawer';
@@ -25,13 +25,13 @@ const demoInstances: Instance[] = [
   { id:'home', name:'home-server', description:'homeDescription', group:'personal', online:false, role:'owner', host:'user@home' },
   { id:'staging', name:'staging-preview', description:'stagingDescription', group:'production', online:true, role:'operator', host:'deploy@staging' },
 ];
-const validEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+const validUsername = (value: string) => /^[a-z0-9][a-z0-9_.-]{2,63}$/i.test(value.trim());
+const passwordBytes = (value:string) => new TextEncoder().encode(value).length;
 
 const preview=new URLSearchParams(location.search).get('preview')==='1';
 function App() {
   const [instances,setInstances]=useState<Instance[]>(preview?demoInstances:[]);
   const [account,setAccount]=useState<Account|null>(null);
-  const [challenge,setChallenge]=useState('');
   const [busy,setBusy]=useState(false);
   const [preferencesLoaded,setPreferencesLoaded]=useState(false);
   const remembered=useRef<any>({});
@@ -74,7 +74,7 @@ function App() {
     events.addEventListener('instances',event=>{try{if(ready)update(JSON.parse((event as MessageEvent).data))}catch(error){fail(error)}});
     events.onerror=()=>{api('/me').catch(()=>{acceptAccount(null);setInstances([]);setOpened([]);setPanel('login')})};
     return()=>{events.close();setPreferencesLoaded(false)};
-  },[account?.email]);
+  },[account?.username]);
 
   const [locale,setLocale] = useState(initialLocale);
   const t = (key: MessageKey) => translate(locale,key);
@@ -94,7 +94,7 @@ function App() {
     if(preview||!account||!preferencesLoaded)return;
     const timeout=setTimeout(()=>api('/me/preferences',{opened,active,dark,sidebarCollapsed,navbarCollapsed,split,locale},'PUT').catch(fail),600);
     return()=>clearTimeout(timeout);
-  },[account?.email,preferencesLoaded,opened,active,dark,sidebarCollapsed,navbarCollapsed,split,locale]);
+  },[account?.username,preferencesLoaded,opened,active,dark,sidebarCollapsed,navbarCollapsed,split,locale]);
   useEffect(()=>{if(opened.length&&!opened.includes(active))setActive(opened[0])},[opened,active]);
   const [terminalStates,setTerminalStates] = useState<Record<string,'red'|'gray'|'yellow'|'green'>>(()=>Object.fromEntries(instances.filter(i=>i.online).map(i=>[i.id,'gray'])));
   useEffect(()=>{
@@ -118,19 +118,16 @@ function App() {
     return <img className="terminal-status" data-state={color} src={`/gotty-status/${color}.svg`} alt={label} title={label}/>;
   }
   const [notice,setNotice] = useState<MessageKey|null>(null);
-  const [email,setEmail] = useState('');
-  const [grantEmail,setGrantEmail] = useState('');
+  const [username,setUsername] = useState('');
+  const [grantUsername,setGrantUsername] = useState('');
   const [grantRole,setGrantRole]=useState<'operator'|'observer'>('operator');
   const [grantRoles,setGrantRoles]=useState<Record<string,string>>({});
-  const [authStep,setAuthStep] = useState<'email'|'code'|'reset'>('email');
-  const [passwordMode,setPasswordMode] = useState(false);
-  const [recovering,setRecovering] = useState(false);
-  const [code,setCode] = useState('');
+  const [authMode,setAuthMode] = useState<'login'|'register'|'recover'>(()=>new URLSearchParams(location.search).get('auth')==='register'?'register':'login');
   const [password,setPassword] = useState('');
   const [confirmation,setConfirmation] = useState('');
   const [showPassword,setShowPassword] = useState(false);
   const [error,setError] = useState<MessageKey|null>(null);
-  const [grants,setGrants] = useState<Record<string,string[]>>(()=>Object.fromEntries(instances.map(i=>[i.id,['owner@example.com','operator@example.com']])));
+  const [grants,setGrants] = useState<Record<string,string[]>>(()=>Object.fromEntries(instances.map(i=>[i.id,['owner','operator']])));
 
   useEffect(()=>{
     document.documentElement.lang=locale;
@@ -142,41 +139,31 @@ function App() {
   const selected = instances.find(i=>i.id===active)??instances[0];
   const detailInstance = instances.find(i=>i.id===detail)??{id:'',name:'',online:false,role:'observer' as const};
   function open(i:Instance){setApiError('');if(!i.online){setDetail(i.id);showPanel('detail');return}setOpened(a=>a.includes(i.id)?a:[...a,i.id]);setActive(i.id);setDrawer(false)}
-  function showPanel(value:Panel){if(value==='account'&&!preview&&account)api<{sessions:{expires:number}[]}>('/me/sessions').then(v=>setSessions(v.sessions)).catch(fail);setApiError('');setNotice(null);setDrawer(false);setPanel(value);setError(null);setPassword('');setConfirmation('');setShowPassword(false);setCode('');setRecovering(false);setAuthStep('email');setPasswordMode(false)}
-  function closePanel(){if(!preview&&!account)return;setPanel('');setPassword('');setConfirmation('');setCode('');setError(null)}
+  function showPanel(value:Panel){if(value==='account'&&!preview&&account)api<{sessions:{expires:number}[]}>('/me/sessions').then(v=>setSessions(v.sessions)).catch(fail);setApiError('');setNotice(null);setDrawer(false);setPanel(value);setError(null);setPassword('');setConfirmation('');setShowPassword(false);setAuthMode('login')}
+  function closePanel(){if(!preview&&!account)return;setPanel('');setPassword('');setConfirmation('');setError(null)}
   async function savePassword(){
-    if(password.length<(preview?8:12)){setError('passwordMissing');return}
+    if(passwordBytes(password)<(account?.is_admin?1:12)||passwordBytes(password)>256||!password.trim()){setError('passwordMissing');return}
     if(password!==confirmation){setError('passwordMismatch');return}
     if(preview){setError(null);setPassword('');setConfirmation('');setNotice('passwordSaved');return}
     setBusy(true);setApiError('');try{acceptAccount(await api<Account>('/me/password',{password},'PUT'));setPassword('');setConfirmation('');closePanel()}catch(error){fail(error)}finally{setBusy(false)}
   }
   async function submitAuth(){
     setError(null);setApiError('');
-    if(preview){
-      if(authStep==='reset'){savePassword();return}
-      if(!validEmail(email)){setError('invalidEmail');return}
-      if(passwordMode){if(!password){setError('passwordMissing');return}setPassword('');setNotice('loginDone');return}
-      if(authStep==='email'){setAuthStep('code');setNotice('codeSent');return}
-      if(code!=='123456'){setError('invalidCode');return}
-      if(recovering){setAuthStep('reset');setCode('')}else{setNotice('loginDone');setCode('')}return;
-    }
-    setBusy(true);try{
-      if(!validEmail(email)){setError('invalidEmail');return}
-      if(authStep==='reset'){
-        if(password.length<12){setError('passwordMissing');return}
-        if(password!==confirmation){setError('passwordMismatch');return}
-        acceptAccount(await api<Account>('/auth/password/reset',{challenge,code,password}));setPanel('');
-      }else if(passwordMode){acceptAccount(await api<Account>('/auth/password/login',{email,password}));setPanel('')}
-      else if(authStep==='email'){const v=await api('/auth/otp/request',{email,purpose:recovering?'reset':'login'});setChallenge(v.challenge);setAuthStep('code')}
-      else if(recovering){await api('/auth/password/verify-reset',{challenge,code});setAuthStep('reset')}
-      else{acceptAccount(await api<Account>('/auth/otp/verify',{challenge,code}));setPanel('')}
+    if(!validUsername(username)){setError('invalidUsername');return}
+    if(!password.trim()||passwordBytes(password)>256||(authMode==='register'&&passwordBytes(password)<12)){setError('passwordMissing');return}
+    if(preview){setNotice('loginDone');setPassword('');return}
+    setBusy(true);
+    try{
+      const value=await api<Account>(authMode==='register'?'/auth/register':'/auth/password/login',{username:username.trim(),password});
+      acceptAccount(value);setPanel('');setPassword('');
+      const url=new URL(location.href);url.searchParams.delete('auth');history.replaceState(null,'',url);
     }catch(error){fail(error)}finally{setBusy(false)}
   }
-  async function manage(id:string){setDetail(id);setGrantEmail('');showPanel('detail');if(!preview&&instances.find(i=>i.id===id)?.role==='owner'){try{const rows=await api<any[]>(`/instances/${id}/grants`);setGrants(g=>({...g,[id]:rows.map(x=>x.email)}));setGrantRoles(Object.fromEntries(rows.map(x=>[x.email,x.role])))}catch(error){fail(error)}}}
-  async function addGrant(){const value=grantEmail.trim();if(!validEmail(value)||(grants[detail]??[]).includes(value)){setNotice('duplicateEmail');return}try{if(!preview)await api(`/instances/${detail}/grants`,{email:value,role:grantRole},'PUT');setGrants(g=>({...g,[detail]:[...(g[detail]??[]),value]}));setGrantRoles(r=>({...r,[value]:grantRole}));setGrantEmail('')}catch(error){fail(error)}}
-  async function removeGrant(mail:string){try{if(!preview)await api(`/instances/${detail}/grants/${encodeURIComponent(mail)}`,{},'DELETE');setGrants(g=>({...g,[detail]:g[detail].filter(v=>v!==mail)}))}catch(error){fail(error)}}
+  async function manage(id:string){setDetail(id);setGrantUsername('');showPanel('detail');if(!preview&&instances.find(i=>i.id===id)?.role==='owner'){try{const rows=await api<any[]>(`/instances/${id}/grants`);setGrants(g=>({...g,[id]:rows.map(x=>x.username)}));setGrantRoles(Object.fromEntries(rows.map(x=>[x.username,x.role])))}catch(error){fail(error)}}}
+  async function addGrant(){const value=grantUsername.trim().toLowerCase();if(!validUsername(value)||(grants[detail]??[]).includes(value)){setNotice('duplicateUsername');return}try{if(!preview)await api(`/instances/${detail}/grants`,{username:value,role:grantRole},'PUT');setGrants(g=>({...g,[detail]:[...(g[detail]??[]),value]}));setGrantRoles(r=>({...r,[value]:grantRole}));setGrantUsername('')}catch(error){fail(error)}}
+  async function removeGrant(name:string){try{if(!preview)await api(`/instances/${detail}/grants/${encodeURIComponent(name)}`,{},'DELETE');setGrants(g=>({...g,[detail]:g[detail].filter(v=>v!==name)}))}catch(error){fail(error)}}
   const navigation = <>
-    <div className="sidebar-account-heading"><h1 className="text-headline-medium">{preview?t('demoAccount'):account?.email??t('login')}</h1><p className="text-caption-1-regular" dir="ltr">{preview?'owner@example.com':account?.email??''}</p></div>
+    <div className="sidebar-account-heading"><h1 className="text-headline-medium">{preview?t('demoAccount'):account?.username??t('login')}</h1></div>
     <div className="instances-nav-heading"><span className="text-caption-1-regular">{t('registeredInstances')} <span className="nav-count">{instances.length}</span></span><Button variant="ghost" className="quiet-button" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div>
     {instances.map(i=><div className="instance-nav-row" key={i.id}><Button variant="ghost" className="nav-item terminal-nav registered-instance" data-active={opened.includes(i.id)&&active===i.id} aria-current={opened.includes(i.id)&&active===i.id?'page':undefined} title={`${i.name} · ${t(i.online?'online':'offline')}`} onClick={()=>open(i)}><span className="session-label">{i.online?statusIcon(i.id):<span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>}<span className="instance-nav-name">{i.name}</span></span></Button><Button className="instance-manage quiet-button" variant="ghost" iconOnly leadingIcon={RiSettings3Line} aria-label={`${t('manage')} ${i.name}`} onClick={()=>manage(i.id)}/></div>)}
 
@@ -196,20 +183,20 @@ function App() {
     </main>
     <Drawer isOpen={drawer} onOpenChange={setDrawer} placement="start"><DrawerHeader title={t('switchInstance')} closeLabel={t('close')}/><DrawerBody><div className="mobile-navigation">{navigation}</div></DrawerBody></Drawer>
     <Modal isOpen={panel==='login'||panel==='account'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay">
-      <ModalHeader title={t(panel==='account'?'account':recovering?'resetTitle':'loginTitle')} description={t(panel==='account'?'changeDescription':recovering?'resetDescription':'loginDescription')} closeLabel={t('close')}/>
-      <ModalBody><form className="auth-form" onSubmit={e=>{e.preventDefault();if(!busy){if(panel==='account')savePassword();else submitAuth()}}}>
-        {panel==='account'?<>{account?.is_admin&&<Button variant="secondary" onClick={()=>{closePanel();setAdminOpen(true)}}>{locale==='zh-CN'?'管理后台':'Administration'}</Button>}<div className="account-identity"><span className="avatar">{preview?'D':account?.email.slice(0,1).toUpperCase()}</span><div className="min-w-0"><p className="text-body-medium">{preview?t('demoAccount'):account?.email}</p><p className="text-caption-1-regular text-text-secondary">{preview?'owner@example.com':account?.email??''}</p></div></div>{passwordFields}<p className="text-caption-1-regular text-text-secondary">{t('passwordHint')}</p>{errorMessage}<Button className="primary-action auth-submit" disabled={busy} type="submit">{t('setPassword')}</Button><Button className="quiet-button" variant="ghost" onClick={()=>{showPanel('login');setRecovering(true)}}>{t('forgot')}</Button>{!preview&&<><p className="text-caption-1-regular">{t('activeSessions')}: {sessions.length}</p><Button variant="secondary" onClick={async()=>{try{await api('/me/sessions',{},'DELETE');acceptAccount(null);setInstances([]);setOpened([]);setPanel('login')}catch(error){fail(error)}}}>{t('signOutAll')}</Button></>}{!preview&&<Button variant="secondary" onClick={async()=>{try{await api('/auth/logout',{});acceptAccount(null);setInstances([]);setOpened([]);setPanel('login')}catch(error){fail(error)}}}>{t('signOut')}</Button>}</>:<>
-          {authStep==='reset'?passwordFields:<><Input label={t('email')} type="email" autoComplete="email" value={email} onChange={v=>{setEmail(v);setError(null)}} isReadOnly={authStep==='code'} isRequired/>{passwordMode?<div className="password-field"><Input label={t('password')} type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={v=>{setPassword(v);setError(null)}}/><Button className="password-toggle quiet-button" variant="ghost" iconOnly leadingIcon={showPassword?RiEyeOffLine:RiEyeLine} aria-label={t(showPassword?'hidePassword':'showPassword')} onClick={()=>setShowPassword(!showPassword)}/></div>:authStep==='code'?<Input label={t('code')} autoComplete="one-time-code" value={code} onChange={v=>{setCode(v);setError(null)}} hint={preview?t('codeHint'):t('realCodeHint')}/>:null}</>}
-          {errorMessage}<Button className="primary-action auth-submit" disabled={busy} type="submit" trailingIcon={RiArrowRightLine}>{t(authStep==='reset'?'setPassword':passwordMode?'login':authStep==='email'?'getCode':'verify')}</Button>
-          {!recovering&&<div className="auth-links"><Button variant="ghost" className="quiet-button" onClick={()=>{setPasswordMode(!passwordMode);setAuthStep('email');setError(null);setPassword('');setCode('')}}>{t(passwordMode?'useCode':'usePassword')}</Button><Button variant="ghost" className="quiet-button" onClick={()=>{setPasswordMode(false);setRecovering(true);setAuthStep('email');setError(null);setPassword('')}}>{t('forgot')}</Button></div>}
-          {(recovering||authStep==='code')&&<Button variant="ghost" className="quiet-button" leadingIcon={RiArrowLeftLine} onClick={()=>{setRecovering(false);setAuthStep('email');setCode('');setError(null);setPassword('');setConfirmation('')}}>{t('backLogin')}</Button>}
+      <ModalHeader title={t(panel==='account'?'account':authMode==='recover'?'resetTitle':authMode==='register'?'registerTitle':'loginTitle')} description={t(panel==='account'?'changeDescription':authMode==='recover'?'resetDescription':authMode==='register'?'registerDescription':'loginDescription')} closeLabel={t('close')}/>
+      <ModalBody>{panel==='login'&&authMode==='recover'?<div className="auth-form"><p className="text-body-regular text-text-secondary">{t('resetInstructions')}</p><Button variant="secondary" onClick={()=>{setAuthMode('login');setError(null);setApiError('')}}>{t('backLogin')}</Button></div>:<form className="auth-form" onSubmit={e=>{e.preventDefault();if(!busy){if(panel==='account')savePassword();else submitAuth()}}}>
+        {panel==='account'?<>{account?.is_admin&&<Button variant="secondary" onClick={()=>{closePanel();setAdminOpen(true)}}>{locale==='zh-CN'?'管理后台':'Administration'}</Button>}<div className="account-identity"><span className="avatar">{preview?'D':account?.username.slice(0,1).toUpperCase()}</span><p className="text-body-medium break-all">{preview?t('demoAccount'):account?.username}</p></div>{passwordFields}<p className="text-caption-1-regular text-text-secondary">{t('passwordHint')}</p>{errorMessage}<Button className="primary-action auth-submit" disabled={busy} type="submit">{t('setPassword')}</Button>{!preview&&<><p className="text-caption-1-regular">{t('activeSessions')}: {sessions.length}</p><Button variant="secondary" onClick={async()=>{try{await api('/me/sessions',{},'DELETE');acceptAccount(null);setInstances([]);setOpened([]);setAuthMode('login');setPanel('login')}catch(error){fail(error)}}}>{t('signOutAll')}</Button><Button variant="secondary" onClick={async()=>{try{await api('/auth/logout',{});acceptAccount(null);setInstances([]);setOpened([]);setAuthMode('login');setPanel('login')}catch(error){fail(error)}}}>{t('signOut')}</Button></>}</>:<>
+          <Input label={t('username')} autoComplete="username" value={username} onChange={v=>{setUsername(v);setError(null)}} hint={authMode==='register'?t('usernameHint'):undefined} isRequired/>
+          <div className="password-field"><Input label={t('password')} type={showPassword?'text':'password'} autoComplete={authMode==='register'?'new-password':'current-password'} value={password} onChange={v=>{setPassword(v);setError(null)}} isRequired/><Button className="password-toggle quiet-button" variant="ghost" iconOnly leadingIcon={showPassword?RiEyeOffLine:RiEyeLine} aria-label={t(showPassword?'hidePassword':'showPassword')} onClick={()=>setShowPassword(!showPassword)}/></div>
+          {authMode==='register'&&<p className="text-caption-1-regular text-text-secondary">{t('registrationPasswordHint')}</p>}{errorMessage}<Button className="primary-action auth-submit" disabled={busy} type="submit" trailingIcon={RiArrowRightLine}>{t(authMode==='register'?'register':'login')}</Button>
+          <div className="auth-links"><Button variant="ghost" className="quiet-button" onClick={()=>{setAuthMode(authMode==='register'?'login':'register');setError(null);setApiError('');setPassword('')}}>{t(authMode==='register'?'haveAccount':'createAccount')}</Button><Button variant="ghost" className="quiet-button" onClick={()=>{setAuthMode('recover');setError(null);setApiError('');setPassword('')}}>{t('forgot')}</Button></div>
         </>}
         {preview&&<p className="auth-footnote text-caption-1-regular">{t('demoAuth')}</p>}
-      </form></ModalBody>
+      </form>}</ModalBody>
     </Modal>
-    <Modal isOpen={panel==='connect'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay"><ModalHeader title={t('connectTitle')} closeLabel={t('close')}/><ModalBody><div className="panel-content"><p className="text-body-regular text-text-secondary">{t('connectDescription')}</p><ol className="connect-steps">{(['stepOne','stepTwo','stepThree'] as const).map((key,index)=><li key={key}><span className="step-number text-caption-1-regular">0{index+1}</span><span className="text-body-regular">{t(key)}</span></li>)}</ol><Input label={t('hubAddress')} value={account?.hub_address??location.origin} isReadOnly/><p className="text-caption-1-regular text-text-secondary">{t(preview?'connectHint':'realConnectHint')}</p><Button className="primary-action" onClick={closePanel}>{t('done')}</Button></div></ModalBody></Modal>
+    <Modal isOpen={panel==='connect'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay"><ModalHeader title={t('connectTitle')} closeLabel={t('close')}/><ModalBody><div className="panel-content"><p className="text-body-regular text-text-secondary">{t('connectDescription')}</p><ol className="connect-steps">{(['stepOne','stepTwo','stepThree'] as const).map((key,index)=><li key={key}><span className="step-number text-caption-1-regular">0{index+1}</span><span className="text-body-regular">{t(key)}</span></li>)}</ol><Input label={t('hubAddress')} value={account?.hub_address??location.origin} isReadOnly/><Input label={t('username')} value={preview?'owner':account?.username??''} isReadOnly/><p className="text-caption-1-regular text-text-secondary">{t(preview?'connectHint':'realConnectHint')}</p><Button className="primary-action" onClick={closePanel}>{t('done')}</Button></div></ModalBody></Modal>
     <Drawer isOpen={panel==='detail'} onOpenChange={v=>{if(!v)closePanel()}} placement="end" size="md"><DrawerHeader title={t(panel==='detail'?'instanceDetails':'connectTitle')} closeLabel={t('close')}/><DrawerBody><div className="panel-content">
-      <><div className="detail-banner"><RiTerminalBoxLine size={24}/><div className="min-w-0"><h2 className="text-headline-medium break-all">{detailInstance.name}</h2><p className="text-caption-1-regular text-text-secondary">{t(detailInstance.online?'online':'waiting')}</p><p className="text-caption-1-regular">{t(detailInstance.role)}</p></div></div>{(preview||detailInstance.role==='owner')&&<><h3 className="text-body-medium">{t('authorizedEmails')}</h3>{(grants[detail]??[]).map((g,index)=><div className="grant" key={g}><div className="min-w-0"><div className="text-body-regular truncate" dir="ltr">{g}</div><div className="text-caption-1-regular text-text-secondary">{t(preview?(index===0?'owner':'operator'):(grantRoles[g]??'operator') as 'owner'|'operator'|'observer')}</div></div>{(preview?index!==0:grantRoles[g]!=='owner')&&<Button className="quiet-button" variant="ghost" aria-label={`${t('remove')} ${g}`} onClick={()=>removeGrant(g)}>{t('remove')}</Button>}</div>)}<Input label={t('addEmail')} type="email" value={grantEmail} onChange={setGrantEmail} placeholder="member@example.com"/><div className="grant-role-controls"><Button variant="ghost" aria-pressed={grantRole==='operator'} onClick={()=>setGrantRole('operator')}>{t('operator')}</Button><Button variant="ghost" aria-pressed={grantRole==='observer'} onClick={()=>setGrantRole('observer')}>{t('observer')}</Button></div><Button variant="secondary" className="neutral-button" onClick={addGrant}>{t(grantRole==='operator'?'addOperator':'addObserver')}</Button>{errorMessage}{preview&&<p className="text-caption-1-regular text-text-secondary">{t('grantHint')}</p>}{!preview&&<Button variant="secondary" onClick={async()=>{try{await api(`/instances/${detail}/credentials/rotate`,{});closePanel()}catch(error){fail(error)}}}>{t('rotateDevice')}</Button>}{!preview&&<Button variant="danger" onClick={async()=>{try{await api(`/instances/${detail}/binding`,{},'DELETE');closePanel()}catch(error){fail(error)}}}>{t('unbind')}</Button>}</>}</>
+      <><div className="detail-banner"><RiTerminalBoxLine size={24}/><div className="min-w-0"><h2 className="text-headline-medium break-all">{detailInstance.name}</h2><p className="text-caption-1-regular text-text-secondary">{t(detailInstance.online?'online':'waiting')}</p><p className="text-caption-1-regular">{t(detailInstance.role)}</p></div></div>{(preview||detailInstance.role==='owner')&&<><h3 className="text-body-medium">{t('authorizedUsers')}</h3>{(grants[detail]??[]).map((g,index)=><div className="grant" key={g}><div className="min-w-0"><div className="text-body-regular truncate" dir="ltr">{g}</div><div className="text-caption-1-regular text-text-secondary">{t(preview?(index===0?'owner':'operator'):(grantRoles[g]??'operator') as 'owner'|'operator'|'observer')}</div></div>{(preview?index!==0:grantRoles[g]!=='owner')&&<Button className="quiet-button" variant="ghost" aria-label={`${t('remove')} ${g}`} onClick={()=>removeGrant(g)}>{t('remove')}</Button>}</div>)}<Input label={t('addUsername')} autoComplete="off" value={grantUsername} onChange={setGrantUsername} placeholder="member"/><div className="grant-role-controls"><Button variant="ghost" aria-pressed={grantRole==='operator'} onClick={()=>setGrantRole('operator')}>{t('operator')}</Button><Button variant="ghost" aria-pressed={grantRole==='observer'} onClick={()=>setGrantRole('observer')}>{t('observer')}</Button></div><Button variant="secondary" className="neutral-button" onClick={addGrant}>{t(grantRole==='operator'?'addOperator':'addObserver')}</Button>{errorMessage}{preview&&<p className="text-caption-1-regular text-text-secondary">{t('grantHint')}</p>}{!preview&&<Button variant="secondary" onClick={async()=>{try{await api(`/instances/${detail}/credentials/rotate`,{});closePanel()}catch(error){fail(error)}}}>{t('rotateDevice')}</Button>}{!preview&&<Button variant="danger" onClick={async()=>{try{await api(`/instances/${detail}/binding`,{},'DELETE');closePanel()}catch(error){fail(error)}}}>{t('unbind')}</Button>}</>}</>
     </div></DrawerBody></Drawer>
     {account?.is_admin&&<AdminPanel open={adminOpen} onClose={()=>setAdminOpen(false)} locale={locale}/>}
     {notice&&<div className="notice text-body-regular" role="status">{t(notice)}</div>}

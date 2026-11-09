@@ -1,7 +1,7 @@
 const {fs,assert,WebSocket,hub,sleep,login,api,connect,closes}=require('./client.cjs');
 const state=process.env.GOTTY_TEST_STATE;const sessionFile=state+'.test-session';const stage=process.argv[2];
 (async()=>{
- let owner;if(fs.existsSync(sessionFile))owner=JSON.parse(fs.readFileSync(sessionFile));else{owner=await login('owner@example.test');fs.writeFileSync(sessionFile,JSON.stringify(owner),{mode:0o600})}
+ let owner;if(fs.existsSync(sessionFile))owner=JSON.parse(fs.readFileSync(sessionFile));else{owner=await login('owner');fs.writeFileSync(sessionFile,JSON.stringify(owner),{mode:0o600})}
  let id;for(let i=0;i<300;i++){const rows=(await api(owner,'/instances')).data;id=rows.find(x=>x.online)?.id;if(id)break;await sleep(100)}assert(id,'device did not reconnect');
  const ticket=(await api(owner,`/instances/${id}/terminal-tickets`,{})).data.ticket;const ws=await connect(owner,id,ticket);await sleep(200);
  if(stage==='rotate'){

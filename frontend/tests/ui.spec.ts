@@ -36,19 +36,22 @@ test('login and account security are centered, keyboard dismissable dialogs', as
   await expect(dialog.getByRole('alert')).toHaveText('两次输入的密码不一致。');
 });
 
-test('forgot-password flow verifies the demo code before showing new password fields', async ({ page }) => {
-  await page.goto('/?preview=1');
+test('username registration has two fields and password recovery uses local administration', async ({ page }) => {
+  await page.goto('/?preview=1&auth=register');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '注册账号', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: '注册 GoTTY Hub 账号' })).toBeVisible();
+  await expect(dialog.locator('input')).toHaveCount(2);
+  await dialog.getByRole('textbox', { name:'用户名', exact: true }).fill('new-user');
+  await dialog.getByLabel('登录密码').fill('registration password');
+  await dialog.getByRole('button', { name: '显示密码' }).click();
+  await expect(dialog.getByLabel('登录密码')).toHaveAttribute('type','text');
   await dialog.getByRole('button', { name: '忘记密码？' }).click();
-  await dialog.getByRole('textbox', { name: '邮箱', exact: true }).fill('demo@example.com');
-  await dialog.getByRole('button', { name: '获取验证码' }).click();
-  await dialog.getByLabel('邮箱验证码', { exact: true }).fill('000000');
-  await dialog.getByRole('button', { name: '验证并登录' }).click();
-  await expect(dialog.getByRole('alert')).toHaveText('请输入演示验证码 123456。');
-  await dialog.getByLabel('邮箱验证码', { exact: true }).fill('123456');
-  await dialog.getByRole('button', { name: '验证并登录' }).click();
-  await expect(dialog.getByLabel('新密码', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('管理员可在服务器执行', { exact: false })).toBeVisible();
+  await expect(dialog.locator('input')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '返回登录' }).click();
+  await expect(dialog.getByRole('textbox', { name:'用户名', exact: true })).toBeVisible();
 });
 
 for (const width of [320, 375, 414, 768, 1440]) {
@@ -82,12 +85,12 @@ test('mobile account settings open from the topbar and close instance navigation
 test('authorization edits remain isolated to the selected instance', async ({ page }) => {
   await page.goto('/?preview=1');
   await page.getByRole('button', { name: '管理 production-api', exact: true }).click();
-  await page.getByLabel('新增授权邮箱').fill('new@example.com');
+  await page.getByLabel('新增授权用户名').fill('new-user');
   await page.getByRole('button', { name: '添加操作者' }).click();
-  await expect(page.getByRole('dialog').getByText('new@example.com', { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('new-user', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '管理 dev-workspace', exact: true }).click();
-  await expect(page.getByRole('dialog').getByText('new@example.com', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('dialog').getByText('new-user', { exact: true })).toHaveCount(0);
 });
 
 for (const width of [375, 1440]) {

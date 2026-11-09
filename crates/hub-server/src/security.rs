@@ -44,17 +44,26 @@ pub fn token() -> String {
 pub fn hash(s: &str) -> String {
     format!("{:x}", Sha256::digest(s.as_bytes()))
 }
-pub fn email(s: &str) -> Result<String> {
-    let s = s.trim().to_lowercase();
-    if s.len() > 254
-        || s.contains(['\r', '\n', ' '])
-        || s.split('@').count() != 2
-        || !s.split('@').nth(1).unwrap_or("").contains('.')
-        || s.starts_with('@')
+pub fn username(s: &str) -> Result<String> {
+    let s = s.trim().to_ascii_lowercase();
+    if !(3..=64).contains(&s.len())
+        || !s.as_bytes()[0].is_ascii_alphanumeric()
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
     {
-        return Err(bad());
+        return Err(Error(StatusCode::BAD_REQUEST, "invalid_username"));
     }
     Ok(s)
+}
+pub fn validate_password(s: &str) -> Result<()> {
+    if !(12..=256).contains(&s.len()) {
+        return Err(Error(StatusCode::BAD_REQUEST, "password_length"));
+    }
+    Ok(())
+}
+pub fn secret(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 pub async fn limit(app: &App, key: String, max: u32) -> Result<()> {
     let mut rates = app.rates.lock().await;
@@ -78,7 +87,9 @@ pub async fn limit(app: &App, key: String, max: u32) -> Result<()> {
 #[derive(Clone)]
 pub struct Session {
     pub key: String,
-    pub email: String,
+    pub user_id: String,
+    pub username: String,
+    pub is_admin: bool,
     pub csrf: String,
 }
 pub async fn session(app: &App, headers: &HeaderMap) -> Result<Session> {
@@ -91,7 +102,7 @@ pub async fn session(app: &App, headers: &HeaderMap) -> Result<Session> {
         .find_map(|c| c.trim().strip_prefix("hub_session="))
         .ok_or(Error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     let key = hash(value);
-    let row = sqlx::query("SELECT email,csrf FROM sessions WHERE token=? AND expires>?")
+    let row = sqlx::query("SELECT s.user_id,u.username,u.is_admin,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?")
         .bind(&key)
         .bind(now())
         .fetch_optional(&app.db)
@@ -99,14 +110,20 @@ pub async fn session(app: &App, headers: &HeaderMap) -> Result<Session> {
         .ok_or(Error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     Ok(Session {
         key,
-        email: row.get("email"),
+        user_id: row.get("user_id"),
+        username: row.get("username"),
+        is_admin: row.get("is_admin"),
         csrf: row.get("csrf"),
     })
 }
 pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let path = request.uri().path();
-    if path.starts_with("/api/v1/auth/") || path.starts_with("/api/v1/enrollments") {
+    let public = matches!(
+        path,
+        "/api/v1/auth/register" | "/api/v1/auth/password/login" | "/api/v1/instances/register"
+    );
+    if public {
         let ip = request
             .extensions()
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -131,12 +148,7 @@ pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Resp
         {
             return bad().into_response();
         }
-        if !path.starts_with("/api/v1/enrollments")
-            && !path.starts_with("/api/v1/auth/otp/")
-            && !path.ends_with("/password/login")
-            && !path.ends_with("/password/reset")
-            && !path.ends_with("/password/verify-reset")
-        {
+        if !public {
             match session(&app, request.headers()).await {
                 Ok(s) => {
                     if request
@@ -159,34 +171,33 @@ pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Resp
     h.insert("referrer-policy", "no-referrer".parse().unwrap());
     response
 }
-pub async fn login(app: &App, mail: &str) -> Result<(HeaderMap, Json<Value>)> {
-    login_checked(app, mail, None).await
+pub fn account(app: &App, s: &Session) -> Value {
+    json!({"id":s.user_id,"username":s.username,"csrf":s.csrf,"hub_address":app.origin,"is_admin":s.is_admin})
 }
 pub async fn login_checked(
     app: &App,
-    mail: &str,
-    expected_password: Option<&str>,
+    user_id: &str,
+    expected_password: &str,
 ) -> Result<(HeaderMap, Json<Value>)> {
-    sqlx::query("INSERT OR IGNORE INTO users(email) VALUES(?)")
-        .bind(mail)
-        .execute(&app.db)
-        .await?;
-    crate::api::audit(app, mail, "login", "").await;
     let raw = token();
     let csrf = token();
-    let inserted = sqlx::query("INSERT INTO sessions SELECT ?,?,?,? WHERE ? IS NULL OR EXISTS(SELECT 1 FROM users WHERE email=? AND password=?)")
-        .bind(hash(&raw))
-        .bind(mail)
-        .bind(&csrf)
-        .bind(now() + 86400 * 7)
-        .bind(expected_password)
-        .bind(mail)
-        .bind(expected_password)
-        .execute(&app.db)
-        .await?;
+    let inserted=sqlx::query("INSERT INTO sessions(token,user_id,csrf,expires) SELECT ?,id,?,? FROM users WHERE id=? AND password_hash=?")
+        .bind(hash(&raw)).bind(&csrf).bind(now()+86400*7).bind(user_id).bind(expected_password).execute(&app.db).await?;
     if inserted.rows_affected() != 1 {
         return Err(Error(StatusCode::UNAUTHORIZED, "invalid_credentials"));
     }
+    let row = sqlx::query("SELECT username,is_admin FROM users WHERE id=?")
+        .bind(user_id)
+        .fetch_one(&app.db)
+        .await?;
+    let s = Session {
+        key: hash(&raw),
+        user_id: user_id.into(),
+        username: row.get("username"),
+        is_admin: row.get("is_admin"),
+        csrf,
+    };
+    crate::api::audit(app, &s.username, "login", "").await;
     let mut headers = HeaderMap::new();
     headers.insert(
         "set-cookie",
@@ -197,16 +208,48 @@ pub async fn login_checked(
         .parse()
         .unwrap(),
     );
-    Ok((
-        headers,
-        Json(
-            json!({"email":mail,"csrf":csrf,"hub_address":app.origin,"is_admin":crate::admin::is_admin(app,mail)}),
-        ),
-    ))
+    Ok((headers, Json(account(app, &s))))
+}
+pub async fn sync_admin(db: &sqlx::SqlitePool, password: &str) -> anyhow::Result<()> {
+    let existing: Option<(String, String)> =
+        sqlx::query_as("SELECT id,password_hash FROM users WHERE username='admin'")
+            .fetch_optional(db)
+            .await?;
+    if let Some((id, encoded)) = existing {
+        if !password_verify(password.into(), encoded).await {
+            let encoded = password_hash(password.into())
+                .await
+                .map_err(|_| anyhow::anyhow!("Cannot hash admin password"))?;
+            let mut tx = db.begin().await?;
+            sqlx::query("UPDATE users SET password_hash=?,is_admin=1 WHERE id=?")
+                .bind(encoded)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM sessions WHERE user_id=?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+        }
+    } else {
+        let encoded = password_hash(password.into())
+            .await
+            .map_err(|_| anyhow::anyhow!("Cannot hash admin password"))?;
+        sqlx::query(
+            "INSERT INTO users(id,username,password_hash,is_admin,created) VALUES(?,'admin',?,1,?)",
+        )
+        .bind(token())
+        .bind(encoded)
+        .bind(now())
+        .execute(db)
+        .await?;
+    }
+    Ok(())
 }
 static PASSWORD_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 pub async fn password_hash(password: String) -> Result<String> {
-    if password.len() < 12 || password.len() > 256 {
+    if !crate::config::valid_admin_password(&password) {
         return Err(Error(StatusCode::BAD_REQUEST, "password_length"));
     }
     let permit = PASSWORD_WORKERS
@@ -252,53 +295,11 @@ pub async fn password_verify(password: String, encoded: String) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn email_normalization_preserves_aliases() {
-        assert_eq!(
-            email(" User.Name+Work@Example.COM ").unwrap(),
-            "user.name+work@example.com"
-        );
-        assert!(email("bad\n@example.com").is_err());
-        assert!(email("missing").is_err());
-    }
-    #[tokio::test]
-    async fn stale_password_cannot_create_session() {
-        let db = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("../../migrations").run(&db).await.unwrap();
-        let app = App {
-            admin: std::sync::Arc::new(crate::admin::Admin::new(crate::config::Runtime {
-                home: std::env::temp_dir(),
-                config: crate::config::Config {
-                    admin_email: "owner@example.test".into(),
-                    resend_api_key: "test".into(),
-                },
-            })),
-            db,
-            origin: "https://hub.test".into(),
-            secure: true,
-            dev: true,
-            devices: Default::default(),
-            rates: Default::default(),
-            http: reqwest::Client::new(),
-        };
-        sqlx::query("INSERT INTO users(email,password) VALUES('owner@example.test','new-hash')")
-            .execute(&app.db)
-            .await
-            .unwrap();
-        assert!(login_checked(&app, "owner@example.test", Some("old-hash"))
-            .await
-            .is_err());
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-        assert_eq!(count, 0);
-        assert!(login_checked(&app, "owner@example.test", Some("new-hash"))
-            .await
-            .is_ok());
+    fn username_normalization() {
+        assert_eq!(username(" User.Name-01 ").unwrap(), "user.name-01");
+        for value in ["ab", "bad name", "bad@example.test", "-name", "用户"] {
+            assert!(username(value).is_err());
+        }
     }
     #[tokio::test]
     async fn password_roundtrip() {
@@ -307,6 +308,7 @@ mod tests {
             .unwrap();
         assert!(password_verify("a strong test password".into(), h.clone()).await);
         assert!(!password_verify("incorrect".into(), h).await);
-        assert!(password_hash("short".into()).await.is_err());
+        assert!(password_hash(" ".into()).await.is_err());
+        assert!(validate_password("short").is_err());
     }
 }

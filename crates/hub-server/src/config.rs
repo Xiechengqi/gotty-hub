@@ -2,19 +2,19 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{self, IsTerminal, Write},
+    io::{self, IsTerminal, Read},
     path::{Path, PathBuf},
 };
 
 #[derive(Parser)]
-#[command(version=concat!(env!("CARGO_PKG_VERSION")," (",env!("HUB_REVISION"),")"), about = "Self-hosted GoTTY terminal hub")]
+#[command(version=concat!(env!("CARGO_PKG_VERSION")," (",env!("HUB_REVISION"),")"), about="Self-hosted GoTTY terminal hub")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
+    #[arg(long, global = true, conflicts_with = "password_stdin")]
+    pub password: Option<String>,
     #[arg(long, global = true)]
-    pub resend_api_key: Option<String>,
-    #[arg(long, global = true)]
-    pub admin_email: Option<String>,
+    pub password_stdin: bool,
 }
 #[derive(Subcommand)]
 pub enum Command {
@@ -22,16 +22,32 @@ pub enum Command {
     #[command(alias = "configure")]
     Config,
     Check,
+    Users {
+        #[command(subcommand)]
+        command: UserCommand,
+    },
+}
+#[derive(Subcommand)]
+pub enum UserCommand {
+    ResetPassword {
+        #[arg(long)]
+        username: String,
+        #[arg(long, conflicts_with = "new_password_stdin")]
+        new_password: Option<String>,
+        #[arg(long)]
+        new_password_stdin: bool,
+    },
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
-    pub resend_api_key: String,
-    pub admin_email: String,
+    pub password: String,
 }
 #[derive(Clone)]
 pub struct Runtime {
     pub home: PathBuf,
     pub config: Config,
+    pub reset_password: Option<(String, String)>,
 }
 pub fn private_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;
@@ -64,8 +80,20 @@ pub fn save(path: &Path, value: &[u8]) -> Result<()> {
     }
     result
 }
-fn resolve(cli: Option<String>, env: Option<String>, stored: String) -> String {
-    cli.or(env).unwrap_or(stored).trim().to_string()
+pub fn stdin_password() -> Result<String> {
+    let mut value = String::new();
+    io::stdin().take(1026).read_to_string(&mut value)?;
+    // Strip only the line ending supplied by printf/echo; spaces belong to the password.
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+    Ok(value)
+}
+pub fn valid_admin_password(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 256
 }
 pub fn load() -> Result<Option<Runtime>> {
     let cli = Cli::parse();
@@ -79,51 +107,36 @@ pub fn load() -> Result<Option<Runtime>> {
     let path = home.join("config");
     let existed = path.exists();
     let stored: Config = if existed {
-        serde_json::from_slice(&std::fs::read(&path)?).context("Invalid ~/.gotty-hub/config")?
+        serde_json::from_slice(&std::fs::read(&path)?).context("Invalid ~/.gotty-hub/config; a fresh data directory is required for the username account schema")?
     } else {
         Config::default()
     };
-    let mut config = Config {
-        resend_api_key: resolve(
-            cli.resend_api_key,
-            std::env::var("RESEND_API_KEY").ok(),
-            stored.resend_api_key,
-        ),
-        admin_email: resolve(
-            cli.admin_email,
-            std::env::var("HUB_ADMIN_EMAIL").ok(),
-            stored.admin_email,
-        ),
+    let mut password = if cli.password_stdin {
+        stdin_password()?
+    } else {
+        cli.password
+            .or_else(|| std::env::var("HUB_PASSWORD").ok())
+            .unwrap_or(stored.password)
     };
-    // A literal first no-argument launch always runs the setup wizard.
-    // Automated environments use `serve` or `config` explicitly.
     if !existed && std::env::args_os().len() == 1 {
-        config.resend_api_key.clear();
-        config.admin_email.clear();
+        password.clear();
     }
-    for (name, value, secret) in [
-        ("Resend API key", &mut config.resend_api_key, true),
-        ("Admin email", &mut config.admin_email, false),
-    ] {
-        while value.trim().is_empty() {
-            anyhow::ensure!(io::stdin().is_terminal(),"{name} is required; run gotty-hub config --resend-api-key VALUE --admin-email EMAIL or use an interactive terminal");
-            *value = if secret {
-                rpassword::prompt_password(format!("{name}: "))?
-            } else {
-                print!("{name}: ");
-                io::stdout().flush()?;
-                let mut line = String::new();
-                io::stdin().read_line(&mut line)?;
-                line.trim().to_string()
-            };
-        }
+    if matches!(cli.command, Some(Command::Check)) {
+        anyhow::ensure!(
+            valid_admin_password(&password),
+            "admin password is required (1–256 bytes, not whitespace only)"
+        );
+        println!("Configuration valid: {}", path.display());
+        return Ok(None);
     }
-    config.admin_email = crate::security::email(&config.admin_email)
-        .map_err(|_| anyhow::anyhow!("Invalid admin email"))?;
-    anyhow::ensure!(
-        !config.resend_api_key.trim().is_empty(),
-        "Resend API key cannot be empty"
-    );
+    while !valid_admin_password(&password) {
+        anyhow::ensure!(
+            io::stdin().is_terminal(),
+            "admin password is required (1–256 bytes); use --password VALUE or --password-stdin"
+        );
+        password = rpassword::prompt_password("admin password: ")?;
+    }
+    let config = Config { password };
     if !existed || matches!(cli.command, Some(Command::Config)) {
         save(&path, &serde_json::to_vec_pretty(&config)?)?;
     }
@@ -132,23 +145,39 @@ pub fn load() -> Result<Option<Runtime>> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
-    if matches!(cli.command, Some(Command::Config | Command::Check)) {
-        println!("Configuration valid: {}", path.display());
+    if matches!(cli.command, Some(Command::Config)) {
+        println!("Configuration saved: {} (username: admin)", path.display());
         return Ok(None);
     }
-    Ok(Some(Runtime { home, config }))
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn precedence_and_explicit_empty() {
-        assert_eq!(
-            resolve(Some(" cli ".into()), Some("env".into()), "file".into()),
-            "cli"
-        );
-        assert_eq!(resolve(None, Some("env".into()), "file".into()), "env");
-        assert_eq!(resolve(None, None, "file".into()), "file");
-        assert_eq!(resolve(Some(" ".into()), None, "file".into()), "");
-    }
+    let reset_password = if let Some(Command::Users {
+        command:
+            UserCommand::ResetPassword {
+                username,
+                new_password,
+                new_password_stdin,
+            },
+    }) = cli.command
+    {
+        let username = crate::security::username(&username)
+            .map_err(|_| anyhow::anyhow!("Invalid username"))?;
+        let password = if new_password_stdin {
+            stdin_password()?
+        } else if let Some(value) = new_password {
+            value
+        } else {
+            anyhow::ensure!(
+                io::stdin().is_terminal(),
+                "use --new-password or --new-password-stdin"
+            );
+            rpassword::prompt_password("New password: ")?
+        };
+        Some((username, password))
+    } else {
+        None
+    };
+    Ok(Some(Runtime {
+        home,
+        config,
+        reset_password,
+    }))
 }

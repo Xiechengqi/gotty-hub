@@ -5,10 +5,8 @@ services:
     ports:
       - "127.0.0.1:8088:8088"
     environment:
+      HUB_PASSWORD: ${HUB_PASSWORD:?Set the admin password}
       HUB_ORIGIN: ${HUB_ORIGIN:?Set the public HTTPS origin}
-      RESEND_API_KEY: ${RESEND_API_KEY:?Set the Resend API key}
-      HUB_ADMIN_EMAIL: ${HUB_ADMIN_EMAIL:?Set the admin email}
-      HUB_MAIL_FROM: ${HUB_MAIL_FROM:?Set a verified sender}
     volumes:
       - hub-data:/data
     security_opt:

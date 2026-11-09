@@ -7,7 +7,6 @@ frontend/test-results/
 frontend/playwright-report/
 /target/
 /hub.db*
-/.dev-mail/
 /data/
 
 __pycache__/

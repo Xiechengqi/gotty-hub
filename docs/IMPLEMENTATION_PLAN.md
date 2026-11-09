@@ -1,4 +1,6 @@
-# GoTTY Hub 完整实施规划
+# GoTTY Hub 原始实施规划（历史基线）
+
+当前账号、管理员和接入流程以 [用户名方案](USERNAME_AUTH_PLAN.md) 与 [本次 Review](USERNAME_AUTH_REVIEW.md) 为准。下文保留原始方案记录，不作为当前邮箱或启动配置说明。
 
 日期：2026-11-09  
 状态：已按用户后续授权实施，本文保留原规划基线。最终实现、技术取舍及验证边界见 [整体 Review](IMPLEMENTATION_REVIEW.md)、[ADR](ARCHITECTURE_DECISIONS.md) 和 [运维说明](OPERATIONS.md)。未执行生产部署或真实邮件投递。

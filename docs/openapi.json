@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "GoTTY Hub API route catalog",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Route catalog; detailed business contract is in API.md."
   },
   "servers": [
@@ -11,72 +11,6 @@
     }
   ],
   "paths": {
-    "/auth/otp/request": {
-      "post": {
-        "operationId": "post_auth_otp_request",
-        "description": "See API.md for body fields, authorization and response semantics.",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "429": {
-            "description": "Rate limited"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/otp/verify": {
-      "post": {
-        "operationId": "post_auth_otp_verify",
-        "description": "See API.md for body fields, authorization and response semantics.",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "429": {
-            "description": "Rate limited"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
     "/auth/password/login": {
       "post": {
         "operationId": "post_auth_password_login",
@@ -96,6 +30,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "requestBody": {
@@ -103,73 +43,21 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/password/verify-reset": {
-      "post": {
-        "operationId": "post_auth_password_verify_reset",
-        "description": "See API.md for body fields, authorization and response semantics.",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "429": {
-            "description": "Rate limited"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/password/reset": {
-      "post": {
-        "operationId": "post_auth_password_reset",
-        "description": "See API.md for body fields, authorization and response semantics.",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "429": {
-            "description": "Rate limited"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "writeOnly": true
+                  }
+                }
               }
             }
           }
@@ -195,6 +83,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "requestBody": {
@@ -228,6 +122,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         }
       }
@@ -251,6 +151,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "requestBody": {
@@ -284,6 +190,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         }
       },
@@ -305,6 +217,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         }
       }
@@ -328,6 +246,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         }
       },
@@ -349,6 +273,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "requestBody": {
@@ -382,6 +312,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         }
       }
@@ -405,6 +341,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "parameters": [
@@ -436,6 +378,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "parameters": [
@@ -460,47 +408,6 @@
         }
       }
     },
-    "/instances/{id}/grants/{email}": {
-      "delete": {
-        "operationId": "delete_instances_id_grants_email",
-        "description": "See API.md for body fields, authorization and response semantics.",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "429": {
-            "description": "Rate limited"
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "email",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
     "/instances/{id}/binding": {
       "delete": {
         "operationId": "delete_instances_id_binding",
@@ -520,6 +427,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "parameters": [
@@ -553,6 +466,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "parameters": [
@@ -596,82 +515,12 @@
           },
           "429": {
             "description": "Rate limited"
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/enrollments": {
-      "post": {
-        "operationId": "post_enrollments",
-        "description": "See API.md for body fields, authorization and response semantics.",
-        "responses": {
-          "200": {
-            "description": "Success"
           },
-          "400": {
-            "description": "Invalid request"
+          "404": {
+            "description": "User or resource not found"
           },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "429": {
-            "description": "Rate limited"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/enrollments/{id}/confirm": {
-      "post": {
-        "operationId": "post_enrollments_id_confirm",
-        "description": "See API.md for body fields, authorization and response semantics.",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request"
-          },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "429": {
-            "description": "Rate limited"
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         },
         "parameters": [
@@ -715,6 +564,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         }
       }
@@ -738,6 +593,12 @@
           },
           "429": {
             "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
           }
         }
       }
@@ -757,7 +618,10 @@
             "description": "Administrator required"
           },
           "409": {
-            "description": "Operation in progress"
+            "description": "Username conflict, expired registration or active operation"
+          },
+          "404": {
+            "description": "User or resource not found"
           }
         }
       }
@@ -777,7 +641,10 @@
             "description": "Administrator required"
           },
           "409": {
-            "description": "Operation in progress"
+            "description": "Username conflict, expired registration or active operation"
+          },
+          "404": {
+            "description": "User or resource not found"
           }
         }
       }
@@ -797,7 +664,10 @@
             "description": "Administrator required"
           },
           "409": {
-            "description": "Operation in progress"
+            "description": "Username conflict, expired registration or active operation"
+          },
+          "404": {
+            "description": "User or resource not found"
           }
         }
       }
@@ -817,7 +687,10 @@
             "description": "Administrator required"
           },
           "409": {
-            "description": "Operation in progress"
+            "description": "Username conflict, expired registration or active operation"
+          },
+          "404": {
+            "description": "User or resource not found"
           }
         }
       },
@@ -835,7 +708,10 @@
             "description": "Administrator required"
           },
           "409": {
-            "description": "Operation in progress"
+            "description": "Username conflict, expired registration or active operation"
+          },
+          "404": {
+            "description": "User or resource not found"
           }
         }
       }
@@ -855,7 +731,175 @@
             "description": "Administrator required"
           },
           "409": {
-            "description": "Operation in progress"
+            "description": "Username conflict, expired registration or active operation"
+          },
+          "404": {
+            "description": "User or resource not found"
+          }
+        }
+      }
+    },
+    "/instances/{id}/grants/{username}": {
+      "delete": {
+        "operationId": "delete_instances_id_grants_username",
+        "description": "See API.md for body fields, authorization and response semantics.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "operationId": "post_auth_register",
+        "description": "See API.md for body fields, authorization and response semantics.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 64
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/instances/register": {
+      "post": {
+        "operationId": "post_instances_register",
+        "description": "See API.md for body fields, authorization and response semantics.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "404": {
+            "description": "User or resource not found"
+          },
+          "409": {
+            "description": "Username conflict, expired registration or active operation"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "name",
+                  "request_id",
+                  "claim"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$"
+                  },
+                  "claim": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
           }
         }
       }

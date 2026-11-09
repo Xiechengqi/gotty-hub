@@ -1,59 +1,65 @@
-# 首次配置、管理员与 Release
+# 管理员、配置与 Release
 
-## 单文件启动
+## 初始化与密码优先级
 
-从 GitHub Release 下载 `gotty-hub-linux-amd64` 或 `gotty-hub-linux-arm64`，使用同名 `.sha256` 校验后赋予执行权限。前端已经嵌入，不需要在旁边保留 frontend/dist。
-
-首次直接运行 `./gotty-hub` 会交互要求两个非空值：Resend API key（隐藏回显）和管理员邮箱。未连接终端且缺少值时拒绝启动，并给出子命令用法。输入后保存到 `~/.gotty-hub/config`，JSON格式，权限0600，目录0700。
+管理员用户名固定为 `admin`，不可通过Web注册或CLI改名。首次完全不带参数启动 `gotty-hub` 会在终端隐藏输入管理员密码；空白密码重新询问，只需输入一次，无确认步骤。首次无参数启动始终执行引导；自动化环境使用 `serve` 或显式参数。
 
 ```sh
-./gotty-hub config --resend-api-key 'YOUR_RESEND_KEY' --admin-email 'admin@example.com'
 ./gotty-hub
+./gotty-hub --password 'YOUR_ADMIN_PASSWORD'
+./gotty-hub serve --password 'YOUR_ADMIN_PASSWORD'
+./gotty-hub config --password 'YOUR_ADMIN_PASSWORD'
 ```
 
-`configure` 是 `config` 的别名；config 子命令仅保存配置。`check` 验证配置后退出。`--help`、`--version` 不触发配置引导。
+也支持 `--password-stdin` 从stdin读取；只移除最后的换行，密码首尾空格参与校验。`--password` 与 `--password-stdin` 互斥，可位于子命令前后。`configure`是`config`别名；`check`检查配置后退出；help/version不触发引导。
 
-临时覆盖配置并启动：
+优先级：CLI > `HUB_PASSWORD` > `~/.gotty-hub/config`。首次初始化会保存有效密码；已有配置下的启动覆盖仅对本次进程生效，`config`子命令显式持久化。有效密码与数据库不同会更新admin密码哈希并撤销其旧会话。普通用户密码至少12字节；admin密码非空且最多256字节。
 
-```sh
-./gotty-hub serve --resend-api-key 'OVERRIDE_KEY' --admin-email 'other@example.com'
+config按要求保存原始admin密码：
+
+```json
+{"password":"YOUR_ADMIN_PASSWORD"}
 ```
 
-优先级：命令行参数 > `RESEND_API_KEY` / `HUB_ADMIN_EMAIL` > config。serve 覆盖仅本次运行；config 子命令才更新已有配置。首次完全不带参数启动始终进入交互引导，即使存在环境变量；自动化部署请显式使用serve/config子命令。首次serve/config若值由环境或参数提供，同样持久化首次配置。命令行参数可能出现在本机进程列表；交互或私有环境注入适合处理密钥。
+config权限0600、目录0700。数据库保存Argon2id哈希。Web修改admin密码同时保存config；下次启动如仍有CLI或环境覆盖，以覆盖值为准。通过stdin启动也支持后台exec重启，不会重复读取已耗尽的管道。
 
-默认监听127.0.0.1:8088，origin为http://127.0.0.1:8088。生产通过反向代理配置真实 `HUB_ORIGIN=https://hub.example.com`，需要时设置 HUB_LISTEN；非本机公开origin必须HTTPS。`HUB_MAIL_FROM` 设置验证过的发件人，默认使用Resend测试发件人 `onboarding@resend.dev`（其投递范围受Resend限制）。不要求增加第三个首次必填输入。
-
-## 数据布局
+## 数据目录与恢复访问
 
 ```text
 ~/.gotty-hub/
-  config             # resend_api_key / admin_email
-  hub.db             # SQLite（可能伴随WAL/SHM）
-  logs/hub.log.*     # 按天轮换，保留最近7个日志文件
-  mail/              # 仅HUB_DEV=1开发邮箱
-  upgrade.json       # 升级进度与结果
-  updates/
-    previous.bin     # 上一版本程序
-    hub-*.db         # 升级前SQLite一致性快照
+  config
+  hub.db
+  logs/hub.log.*
+  upgrade.json
+  updates/previous.bin
+  updates/hub-*.db
 ```
 
-容器/隔离测试可用 `HUB_HOME` 改变整个根目录，默认仍是 `~/.gotty-hub`。兼容已有 `HUB_DATABASE` / `HUB_ASSETS` / `HUB_DEV_MAIL_DIR` 显式覆盖；普通安装无需配置。升级下载的临时可执行文件放在当前binary同目录，以保证原子rename，失败清理。此目录需可写。
+`HUB_HOME`可覆盖整个目录；`HUB_DATABASE` / `HUB_ASSETS`可显式覆盖数据库及静态资源位置。当前0.2使用全新用户名schema，以全新数据目录初始化。
 
-旧版本若使用工作目录hub.db，请停服、一致性备份并将数据库迁到新目录，或暂时显式设置HUB_DATABASE；不要遗漏活动WAL。
+普通用户在Web注册用户名和密码。忘记密码时，在服务器运行：
 
-## 管理员后台
+```sh
+./gotty-hub users reset-password --username USER
+./gotty-hub users reset-password --username USER --new-password 'NEW_PASSWORD'
+./gotty-hub users reset-password --username USER --new-password-stdin
+```
 
-管理员用配置邮箱完成正常验证码/密码认证后，在右上角齿轮的“账号与安全”中进入“管理后台”。没有默认密码、万能token或匿名后台；普通用户的管理员API访问返回403。运行中管理员邮箱以本次进程有效配置为准，改config后重启生效。
+重置撤销该用户所有会话。admin也可通过修改config并重启，或启动传入`--password`恢复访问。本机命令使用与服务相同的HUB_HOME/数据库设置。
 
-- 统计概览：用户、注册/在线实例、有效会话、待投递邮件、运行时间、版本/commit。
-- 升级与重启：检查GitHub最新Release，展示下载进度；按钮二次确认。后台操作有独占锁，禁止同时升级/重启。
-- 系统日志：管理员读取当前日志末尾最多128KiB，3秒刷新。不会记录邮件key、Cookie、设备凭据或终端输入输出。API不接受任意文件路径。
+## 管理后台与在线更新
 
-重启采用Unix exec，保留PID、启动参数及环境；先停止监听，给现有连接3秒退出，再重启，设备和浏览器自动重连。当前共享PTY在GoTTY侧保持运行。容器建议用镜像升级，容器内非root用户无法替换只读镜像中的程序时，在线升级会安全失败并保留旧程序。
+admin登录后从右上角齿轮进入“管理后台”。普通用户API访问返回403；写操作要求会话、CSRF和精确Origin。
 
-升级固定使用 `Xiechengqi/gotty-hub` 的发布资产，不接受任意下载地址。下载最大256MiB、SHA256校验、执行 `--version` 预检后，SQLite `VACUUM INTO` 一致性备份与旧程序副本写入updates，再原子替换并重启。下载失败/校验失败不替换程序；新进程按目标commit核对升级完成状态。GitHub API受限流时回退公开Release重定向页面。
+- 统计：用户、注册/在线/离线实例、有效会话、运行时间、版本及commit。
+- 升级/重启：固定GitHub仓库的最新Release、进度和互斥操作；继续保留系统操作确认。
+- 日志：当前日志末尾最多128KiB，3秒刷新，保留最近7个日志文件；不记录密码、Cookie、设备秘密或终端负载。
 
-升级后若启动失败，停止服务，用updates/previous.bin替换程序；涉及不兼容迁移时同时恢复配对的hub-*.db备份。不要用旧程序盲目读取新schema。备份包含账号、授权和会话元数据，保持目录私有；自行按运维保留策略清理旧升级备份。
+重启使用Unix exec，保留PID、启动参数及环境，给现有连接3秒退出。PTY在GoTTY侧运行，设备重新连接后浏览器恢复访问。
+
+升级仅下载 `Xiechengqi/gotty-hub` 的发布资产，最大256MiB，验证SHA256及 `--version`，拒绝低于当前程序版本的资产。替换前保存SQLite一致性备份及旧程序，再原子替换并重启。GitHub API受限时回退公开Release页面。容器通常使用镜像升级；程序目录不可写时在线替换会失败并保留原程序。
+
+回滚时停止服务，使用配套的previous.bin、数据库和config备份恢复。保持升级备份目录私有。
 
 ## GitHub Actions
 
@@ -67,4 +73,4 @@
 4. 输出两个binary及各自SHA256文件，GitHub Actions内置GITHUB_TOKEN发布Release。
 5. main/dispatch生成唯一build-run-attempt-sha标签并设为latest；v*使用明确版本标签。保留历史Release，不删除旧Release或强推latest标签。
 
-CI权限只在发布job提升contents:write；无个人令牌或Resend密钥。check工作流继续验证PR。实际执行记录与本轮验证见 IMPLEMENTATION_REVIEW.md。
+CI权限只在发布job提升contents:write；无个人令牌或外部邮件服务密钥。check工作流继续验证PR。本轮验证见 [USERNAME_AUTH_REVIEW.md](USERNAME_AUTH_REVIEW.md)，早期发布记录保留在历史review中。

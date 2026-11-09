@@ -1,4 +1,4 @@
-export type Account={email:string;csrf:string;hub_address:string;is_admin?:boolean};
+export type Account={id:string;username:string;csrf:string;hub_address:string;is_admin?:boolean};
 let csrf='';
 export function useAccount(value:Account|null){csrf=value?.csrf??''}
 export async function api<T=any>(path:string,body?:unknown,method?:string):Promise<T>{

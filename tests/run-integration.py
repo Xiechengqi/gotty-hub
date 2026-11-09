@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated real Hub + real GoTTY smoke test; no external mail or ASR requests."""
+"""Isolated real Hub + real GoTTY smoke test; no external services."""
 import os, pathlib, signal, socket, sqlite3, subprocess, tempfile, time, urllib.request, shutil
 root=pathlib.Path(__file__).resolve().parents[1]
 def port():
@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
  hub_binary=tmp+'/gotty-hub';shutil.copy2(root/'target/debug/gotty-hub',hub_binary)
  hubport,gottyport,asrport=port(),port(),port()
  hub=f'http://127.0.0.1:{hubport}';gotty=f'http://127.0.0.1:{gottyport}'
- env={**os.environ,'HUB_DEV':'1','HUB_HOME':tmp+'/home','RESEND_API_KEY':'test-key','HUB_ADMIN_EMAIL':'owner@example.test','HUB_ORIGIN':hub,'HUB_LISTEN':f'127.0.0.1:{hubport}','HUB_DATABASE':f'sqlite://{tmp}/hub.db?mode=rwc','HUB_DEV_MAIL_DIR':tmp+'/mail','HUB_TEST_BINARY':hub_binary,'HUB_TEST_URL':hub,'GOTTY_TEST_URL':gotty,'HUB_TEST_MAIL':tmp+'/mail','GOTTY_TEST_STATE':tmp+'/device/hub.json'}
+ env={**os.environ,'HUB_DEV':'1','HUB_HOME':tmp+'/home','HUB_PASSWORD':'admin integration password','HUB_ORIGIN':hub,'HUB_LISTEN':f'127.0.0.1:{hubport}','HUB_DATABASE':f'sqlite://{tmp}/hub.db?mode=rwc','HUB_TEST_BINARY':hub_binary,'HUB_TEST_URL':hub,'GOTTY_TEST_URL':gotty,'GOTTY_TEST_STATE':tmp+'/device/hub.json'}
  binary=os.environ.get('GOTTY_BIN','/tmp/gotty-hub-tools/gotty')
  processes=[]
  try:

@@ -1,13 +1,13 @@
 const {assert,fs,hub,sleep,api,login}=require('./client.cjs');
 const {chromium}=require('../frontend/node_modules/@playwright/test');
 (async()=>{
- const owner=JSON.parse(fs.readFileSync(process.env.GOTTY_TEST_STATE+'.test-session'));
+ const owner=await login('admin');
  const me=await api(owner,'/me');assert.equal(me.data.is_admin,true);
- const other=await login('non-admin@example.test');assert.equal((await api(other,'/me')).data.is_admin,false);
+ const other=await login('non-admin');assert.equal((await api(other,'/me')).data.is_admin,false);
  for(const path of ['/admin/dashboard','/admin/logs','/admin/version','/admin/upgrade'])assert.equal((await api(other,path)).status,403,path);
  for(const path of ['/admin/restart','/admin/upgrade'])assert.equal((await api(other,path,{})).status,403,path);
  const stats=await api(owner,'/admin/dashboard');assert.equal(stats.status,200);assert(stats.data.users>=2&&stats.data.online===1);
- const logs=await api(owner,'/admin/logs');assert.equal(logs.status,200);assert(!logs.data.text.includes('test-key'));assert(logs.data.text.length<=140000);
+ const logs=await api(owner,'/admin/logs');assert.equal(logs.status,200);assert(!logs.data.text.includes(process.env.HUB_PASSWORD));assert(logs.data.text.length<=140000);
  const browser=await chromium.launch();const context=await browser.newContext({locale:'zh-CN'});const [name,value]=owner.cookie.split('=');await context.addCookies([{name,value,url:hub}]);const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(hub);await page.getByRole('button',{name:'账号与安全',exact:true}).click();await page.getByRole('button',{name:'管理后台',exact:true}).click();await page.getByRole('heading',{name:'管理后台',exact:true}).waitFor();await page.getByText('注册实例',{exact:true}).waitFor();
  await page.getByRole('button',{name:'系统日志',exact:true}).click();await page.getByText('最近 128 KiB',{exact:false}).waitFor();await page.setViewportSize({width:375,height:812});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'admin overflows mobile');

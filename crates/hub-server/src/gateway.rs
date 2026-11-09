@@ -25,7 +25,7 @@ pub struct Device {
     pub capabilities: Value,
 }
 pub async fn new_ticket(app: &App, s: &Session, id: &str) -> Result<Json<Value>> {
-    let version:Option<i64>=sqlx::query_scalar("SELECT i.version FROM instances i JOIN grants g ON i.id=g.instance WHERE i.id=? AND g.email=?").bind(id).bind(&s.email).fetch_optional(&app.db).await?;
+    let version:Option<i64>=sqlx::query_scalar("SELECT i.version FROM instances i JOIN grants g ON i.id=g.instance WHERE i.id=? AND g.user_id=?").bind(id).bind(&s.user_id).fetch_optional(&app.db).await?;
     let version = version.ok_or(denied())?;
     if !app.devices.lock().await.contains_key(id) {
         return Err(Error(axum::http::StatusCode::CONFLICT, "instance_offline"));
@@ -255,5 +255,5 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
     let _ = sink.send(Message::Close(None)).await;
 }
 async fn access(app: &App, s: &Session, id: &str, version: i64) -> Option<(String, i64)> {
-    sqlx::query("SELECT g.role,i.version FROM grants g JOIN instances i ON i.id=g.instance JOIN sessions s ON s.email=g.email WHERE s.token=? AND s.expires>? AND i.id=? AND i.version=?").bind(&s.key).bind(now()).bind(id).bind(version).fetch_optional(&app.db).await.ok().flatten().map(|r|(r.get("role"),r.get("version")))
+    sqlx::query("SELECT g.role,i.version FROM grants g JOIN instances i ON i.id=g.instance JOIN sessions s ON s.user_id=g.user_id WHERE s.token=? AND s.expires>? AND i.id=? AND i.version=?").bind(&s.key).bind(now()).bind(id).bind(version).fetch_optional(&app.db).await.ok().flatten().map(|r|(r.get("role"),r.get("version")))
 }
