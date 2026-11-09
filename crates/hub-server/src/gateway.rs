@@ -235,8 +235,8 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
         if device.tx.try_send(Frame::new("asr_data",&stream,json!({"binary":false,"payload":t}))).is_err(){break}continue}
                let kind=t.as_bytes().first().copied().unwrap_or(0);
                let writable=role!="observer"&&device.capabilities["write"]==true;
-               if ![b'1',b'2',b'3',b'4',b'7'].contains(&kind){break}
-               if !writable && ![b'2',b'4'].contains(&kind){break}
+               if !b"12347".contains(&kind){break}
+               if !writable && !b"24".contains(&kind){break}
                if device.tx.try_send(Frame::new("data",&stream,Value::String(t))).is_err(){break}
               },
               Some(Ok(Message::Binary(data)))=>{

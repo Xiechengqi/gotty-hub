@@ -27,3 +27,7 @@ API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "inval
 `/connector/v1/connect` 用 Authorization Bearer 设备凭据和 `X-Instance-ID` 实例身份请求头鉴权。首帧 hello 协商 protocol=1，Hub 返回 hello_ack 及 generation。帧 `{kind,stream?,data}`；种类、限额、时序、替换与轮换参见 [架构决策](ARCHITECTURE_DECISIONS.md)。JSON data 是 WebTTY 原始字符串，避免重新解释终端内容；ASR 二进制按 base64 包装。
 
 双方必须释放 close 对应流，未知流不能创建目标。64流/设备，128帧队列，1MiB/帧，10秒发送超时。浏览器与设备身份分离；不提供任意地址代理或本机管理 API 透传。
+
+## 管理接口
+
+配置管理员邮箱认证后 `/me` 和登录响应增加 `is_admin`。所有 `/admin/*` 服务端复核管理员邮箱；写操作继续要求CSRF与精确Origin。GET `/admin/dashboard` 统计平台元数据；GET `/admin/logs` 限定当前日志尾部128KiB；GET `/admin/version` 检查固定GitHub仓库最新Release；GET/POST `/admin/upgrade` 读取进度/提交升级；POST `/admin/restart` 确认重启。升级与重启互斥，冲突409 `operation_active`，发布不可达502 `release_unavailable`。
