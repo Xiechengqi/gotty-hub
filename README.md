@@ -4,6 +4,20 @@
 
 已实现公开用户名注册/密码登录、本机密码重置、授权角色、一次性终端票据、设备注册/轮换/解绑、实时状态、多标签/双分屏、折叠/最大化、ZMODEM 文件和可选 ASR。默认页面连接真实后端；`?preview=1` 仅用于保留 UI 演示。
 
+## 安装
+
+Linux amd64：
+
+```sh
+wget https://github.com/Xiechengqi/gotty-hub/releases/download/latest/gotty-hub-linux-amd64 -O /usr/local/bin/gotty-hub && chmod +x /usr/local/bin/gotty-hub
+```
+
+Linux arm64：
+
+```sh
+wget https://github.com/Xiechengqi/gotty-hub/releases/download/latest/gotty-hub-linux-arm64 -O /usr/local/bin/gotty-hub && chmod +x /usr/local/bin/gotty-hub
+```
+
 ## 首次配置与管理员
 
 发布 binary 已嵌入前端。管理员用户名固定为 `admin`，首次直接运行只需交互设置密码，保存到权限 `0600` 的 `~/.gotty-hub/config`；数据库、日志和升级数据也默认存放在 `~/.gotty-hub`。
@@ -49,7 +63,7 @@ gotty --permit-write --hub-enabled --hub-allow-http bash
 
 ## 构建与验证
 
-推送 `main` 后，GitHub Actions 会自动构建 Linux amd64/arm64 单文件程序并发布 Release。
+推送 `main` 后，GitHub Actions 会自动构建 Linux amd64/arm64 单文件程序，更新固定的 `latest` Release 和同名下载文件。
 
 ```sh
 make build

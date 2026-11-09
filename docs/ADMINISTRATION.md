@@ -71,6 +71,6 @@ admin登录后从右上角齿轮进入“管理后台”。普通用户API访问
 2. 前端构建、浏览器UI回归；Rust格式/Clippy/单测/配置引导测试。
 3. Zig交叉编译Linux amd64/arm64静态musl单文件。
 4. 输出两个binary及各自SHA256文件，GitHub Actions内置GITHUB_TOKEN发布Release。
-5. main/dispatch生成唯一build-run-attempt-sha标签并设为latest；v*使用明确版本标签。保留历史Release，不删除旧Release或强推latest标签。
+5. 所有触发方式统一发布名为 `latest`、标签为 `latest` 的 Release；校验产物后将标签更新到当前提交，重复发布覆盖同名 binary 和 SHA256 文件。工作流串行执行，发布说明记录实际 commit，并提供下载到 `/usr/local/bin` 后执行 `chmod +x` 的安装命令。
 
 CI权限只在发布job提升contents:write；无个人令牌或外部邮件服务密钥。check工作流继续验证PR。本轮验证见 [USERNAME_AUTH_REVIEW.md](USERNAME_AUTH_REVIEW.md)，早期发布记录保留在历史review中。

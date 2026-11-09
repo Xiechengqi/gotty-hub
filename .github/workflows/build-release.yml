@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-latest
   cancel-in-progress: false
 jobs:
   frontend:
@@ -93,15 +93,22 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
         run: |
-          if [ "$REF_TYPE" = tag ]; then
-            RELEASE_TAG="$REF_NAME"
-          else
-            RELEASE_TAG="build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${COMMIT:0:8}"
-          fi
           (cd release-files && sha256sum --check gotty-hub-linux-amd64.sha256)
           (cd release-files && sha256sum --check gotty-hub-linux-arm64.sha256)
-          gh release create "$RELEASE_TAG" release-files/* --target "$COMMIT" --title "GoTTY Hub $RELEASE_TAG" --generate-notes --latest
+          printf '%s\n' \
+            "Commit: $COMMIT" \
+            '' '### Linux amd64' '```sh' \
+            "wget https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/gotty-hub-linux-amd64 -O /usr/local/bin/gotty-hub && chmod +x /usr/local/bin/gotty-hub" \
+            '```' '' '### Linux arm64' '```sh' \
+            "wget https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/gotty-hub-linux-arm64 -O /usr/local/bin/gotty-hub && chmod +x /usr/local/bin/gotty-hub" \
+            '```' > "$RUNNER_TEMP/gotty-hub-release-notes.md"
+          git tag --force latest "$COMMIT"
+          git push --force origin refs/tags/latest
+          if gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload latest release-files/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit latest --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --title latest --notes-file "$RUNNER_TEMP/gotty-hub-release-notes.md" --latest --draft=false --prerelease=false
+          else
+            gh release create latest release-files/* --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --verify-tag --title latest --notes-file "$RUNNER_TEMP/gotty-hub-release-notes.md" --latest
+          fi
