@@ -15,7 +15,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Error(pub StatusCode, pub &'static str);
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error":self.1}))).into_response()
+        (
+            self.0,
+            [("cache-control", "no-store")],
+            Json(json!({"error":self.1})),
+        )
+            .into_response()
     }
 }
 impl From<sqlx::Error> for Error {

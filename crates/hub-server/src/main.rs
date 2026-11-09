@@ -14,12 +14,12 @@ use axum::{
 use sqlx::sqlite::SqlitePoolOptions;
 use std::{collections::HashMap, future::IntoFuture, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
-use tower_http::services::{ServeDir, ServeFile};
 #[derive(Clone)]
 pub struct App {
     pub admin: Arc<admin::Admin>,
     pub db: sqlx::SqlitePool,
     pub addresses: origin::Policy,
+    pub assets: Arc<assets::Store>,
     pub shutdown: shutdown::Shutdown,
     pub devices: Arc<Mutex<HashMap<String, gateway::Device>>>,
     pub rates: Arc<Mutex<HashMap<String, (u64, u32)>>>,
@@ -112,10 +112,17 @@ async fn serve(
     sqlx::migrate!("../../migrations").run(&db).await?;
     security::sync_admin(&db, &runtime.config.password).await?;
     let reset_password = runtime.reset_password.clone();
+    let assets = Arc::new(assets::Store::load(
+        &runtime.home,
+        std::env::var_os("HUB_ASSETS")
+            .as_deref()
+            .map(std::path::Path::new),
+    )?);
     let app = App {
         admin: Arc::new(admin::Admin::new(runtime)),
         db,
         addresses,
+        assets,
         shutdown: shutdown.clone(),
         devices: Default::default(),
         rates: Default::default(),
@@ -180,21 +187,15 @@ async fn serve(
         .route("/connector/v1/connect", get(gateway::device_upgrade))
         .route("/connector/v1/name", post(api::rename_device))
         .layer(middleware::from_fn_with_state(app.clone(), security::guard))
-        .with_state(app.clone());
-    let routes = if let Ok(assets) = std::env::var("HUB_ASSETS") {
-        routes.fallback_service(
-            ServeDir::new(&assets)
-                .not_found_service(ServeFile::new(format!("{assets}/index.html"))),
-        )
-    } else {
-        routes.fallback(assets::embedded)
-    };
-    let routes = routes.layer(middleware::from_fn_with_state(app.clone(), origin::headers));
+        .fallback(assets::serve)
+        .with_state(app.clone())
+        .layer(middleware::from_fn_with_state(app.clone(), origin::headers))
+        .layer(middleware::from_fn_with_state(app.clone(), assets::observe));
     let listener = tokio::net::TcpListener::bind(
         std::env::var("HUB_LISTEN").unwrap_or_else(|_| "0.0.0.0:8088".into()),
     )
     .await?;
-    tracing::info!(address=%listener.local_addr()?,"Hub listening");
+    tracing::info!(address=%listener.local_addr()?, revision=env!("HUB_REVISION"), assets=%app.assets.generation, "Hub listening");
     let stop = shutdown.clone();
     let server = axum::serve(
         listener,

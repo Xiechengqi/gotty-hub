@@ -181,7 +181,7 @@ pub async fn headers(State(app): State<App>, mut request: Request, next: Next) -
     request.extensions_mut().insert(origin);
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert("content-security-policy", "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
+    headers.insert("content-security-policy", app.assets.csp().parse().unwrap());
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("referrer-policy", "no-referrer".parse().unwrap());
     headers.insert("permissions-policy", "microphone=(self)".parse().unwrap());

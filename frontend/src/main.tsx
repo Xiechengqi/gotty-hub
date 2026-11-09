@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RiTerminalBoxLine, RiAddLine, RiSettings3Line, RiSunLine, RiMoonLine, RiMenuLine, RiCloseLine, RiEyeLine, RiEyeOffLine, RiTranslate2, RiArrowRightLine, RiExpandDiagonalLine, RiCollapseDiagonalLine, RiWifiOffLine, RiSideBarLine, RiLayoutTopLine } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
@@ -14,6 +14,8 @@ import {api,useAccount,type Account} from './api';
 import {AdminPanel} from './Admin';
 import {errorText} from './errors';
 import {RealTerminal} from './terminal/Terminal';
+import {normalizeOrder} from './instances/order';
+import {InstanceSortProvider,InstanceSortList,SortableInstance} from './instances/SortableInstances';
 
 type Group = 'production' | 'development' | 'personal';
 type Instance = { status?: 'red'|'gray'|'yellow'|'green'; capabilities?: {write?:boolean;files?:boolean;asr?:boolean;controls?:boolean}; id: string; name: string; description: MessageKey; group: Group; online: boolean; role: 'owner' | 'operator' | 'observer'; host: string };
@@ -30,7 +32,12 @@ const passwordBytes = (value:string) => new TextEncoder().encode(value).length;
 
 const preview=new URLSearchParams(location.search).get('preview')==='1';
 function App() {
+  useLayoutEffect(()=>window.hubBoot?.complete(),[]);
   const [instances,setInstances]=useState<Instance[]>(preview?demoInstances:[]);
+  const [instanceOrder,setInstanceOrder]=useState<string[]>([]);
+  const order=normalizeOrder(instanceOrder,instances.map(i=>i.id));
+  const orderKey=JSON.stringify(order);
+  const orderedInstances=order.map(id=>instances.find(i=>i.id===id)!);
   const [account,setAccount]=useState<Account|null>(null);
   const [busy,setBusy]=useState(false);
   const [preferencesLoaded,setPreferencesLoaded]=useState(false);
@@ -48,11 +55,12 @@ function App() {
   useEffect(()=>{
     if(preview||!account)return;
     const events=new EventSource('/api/v1/events');
-    let initialized=false;let ready=false;
+    let initialized=false;let ready=false;let disposed=false;
     const update=(rows:any[])=>{
       const mapped:Instance[]=rows.map(i=>({...i,host:i.name,description:'terminalPreview',group:'personal'}));
       setInstances(mapped);
       const firstSnapshot=!initialized;initialized=true;
+      setInstanceOrder(previous=>normalizeOrder(firstSnapshot?remembered.current.instanceOrder??[]:previous,mapped.map(i=>i.id)));
       setOpened(previous=>{
         const restored=firstSnapshot&&Array.isArray(remembered.current.opened)?remembered.current.opened:previous;
         const permitted=restored.filter((id:string)=>mapped.some(i=>i.id===id));
@@ -63,6 +71,7 @@ function App() {
       setActive(previous=>{const candidate=firstSnapshot?remembered.current.active??previous:previous;return mapped.some(i=>i.id===candidate)?candidate:(mapped.find(i=>i.online)?.id??'')});
     };
     Promise.all([api<any[]>('/instances'),api('/me/preferences')]).then(([rows,prefs])=>{
+      if(disposed)return;
       remembered.current=prefs;
       if(prefs.locale==='zh-CN'||prefs.locale==='en-US')setLocale(prefs.locale);
       if(typeof prefs.dark==='boolean')setDark(prefs.dark);
@@ -70,10 +79,10 @@ function App() {
       if(typeof prefs.navbarCollapsed==='boolean')setNavbarCollapsed(prefs.navbarCollapsed);
       if(typeof prefs.split==='boolean')setSplit(prefs.split);
       ready=true;update(rows);setPreferencesLoaded(true);
-    }).catch(fail);
+    }).catch(error=>{if(!disposed)fail(error)});
     events.addEventListener('instances',event=>{try{if(ready)update(JSON.parse((event as MessageEvent).data))}catch(error){fail(error)}});
     events.onerror=()=>{api('/me').catch(()=>{acceptAccount(null);setInstances([]);setOpened([]);setPanel('login')})};
-    return()=>{events.close();setPreferencesLoaded(false)};
+    return()=>{disposed=true;events.close();setPreferencesLoaded(false)};
   },[account?.username]);
 
   const [locale,setLocale] = useState(initialLocale);
@@ -86,15 +95,16 @@ function App() {
   const [detail,setDetail] = useState(preview?'prod':'');
   const [dark,setDark] = useState(()=>{try{return localStorage.getItem('gotty-hub.theme')==='dark'}catch{return false}});
   const [split,setSplit] = useState(false);
-  const effectiveSplit=split&&!mobile&&opened.length>1;
+  const orderedOpened=order.filter(id=>opened.includes(id));
+  const effectiveSplit=split&&!mobile&&orderedOpened.length>1;
   const [maximized,setMaximized] = useState(false);
   const [sidebarCollapsed,setSidebarCollapsed] = useState(false);
   const [navbarCollapsed,setNavbarCollapsed] = useState(false);
   useEffect(()=>{
     if(preview||!account||!preferencesLoaded)return;
-    const timeout=setTimeout(()=>api('/me/preferences',{opened,active,dark,sidebarCollapsed,navbarCollapsed,split,locale},'PUT').catch(fail),600);
+    const timeout=setTimeout(()=>api('/me/preferences',{opened:orderedOpened,instanceOrder:order,active,dark,sidebarCollapsed,navbarCollapsed,split,locale},'PUT').catch(fail),600);
     return()=>clearTimeout(timeout);
-  },[account?.username,preferencesLoaded,opened,active,dark,sidebarCollapsed,navbarCollapsed,split,locale]);
+  },[account?.username,preferencesLoaded,opened,orderKey,active,dark,sidebarCollapsed,navbarCollapsed,split,locale]);
   useEffect(()=>{if(opened.length&&!opened.includes(active))setActive(opened[0])},[opened,active]);
   const [terminalStates,setTerminalStates] = useState<Record<string,'red'|'gray'|'yellow'|'green'>>(()=>Object.fromEntries(instances.filter(i=>i.online).map(i=>[i.id,'gray'])));
   useEffect(()=>{
@@ -162,26 +172,26 @@ function App() {
   async function manage(id:string){setDetail(id);setGrantUsername('');showPanel('detail');if(!preview&&instances.find(i=>i.id===id)?.role==='owner'){try{const rows=await api<any[]>(`/instances/${id}/grants`);setGrants(g=>({...g,[id]:rows.map(x=>x.username)}));setGrantRoles(Object.fromEntries(rows.map(x=>[x.username,x.role])))}catch(error){fail(error)}}}
   async function addGrant(){const value=grantUsername.trim().toLowerCase();if(!validUsername(value)||(grants[detail]??[]).includes(value)){setNotice('duplicateUsername');return}try{if(!preview)await api(`/instances/${detail}/grants`,{username:value,role:grantRole},'PUT');setGrants(g=>({...g,[detail]:[...(g[detail]??[]),value]}));setGrantRoles(r=>({...r,[value]:grantRole}));setGrantUsername('')}catch(error){fail(error)}}
   async function removeGrant(name:string){try{if(!preview)await api(`/instances/${detail}/grants/${encodeURIComponent(name)}`,{},'DELETE');setGrants(g=>({...g,[detail]:g[detail].filter(v=>v!==name)}))}catch(error){fail(error)}}
-  const navigation = <>
+  const navigation = (scope:'sidebar'|'drawer')=><>
     <div className="sidebar-account-heading"><h1 className="text-headline-medium">{preview?t('demoAccount'):account?.username??t('login')}</h1></div>
     <div className="instances-nav-heading"><span className="text-caption-1-regular">{t('registeredInstances')} <span className="nav-count">{instances.length}</span></span><Button variant="ghost" className="quiet-button" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div>
-    {instances.map(i=><div className="instance-nav-row" key={i.id}><Button variant="ghost" className="nav-item terminal-nav registered-instance" data-active={opened.includes(i.id)&&active===i.id} aria-current={opened.includes(i.id)&&active===i.id?'page':undefined} title={`${i.name} · ${t(i.online?'online':'offline')}`} onClick={()=>open(i)}><span className="session-label">{i.online?statusIcon(i.id):<span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>}<span className="instance-nav-name">{i.name}</span></span></Button><Button className="instance-manage quiet-button" variant="ghost" iconOnly leadingIcon={RiSettings3Line} aria-label={`${t('manage')} ${i.name}`} onClick={()=>manage(i.id)}/></div>)}
+    <InstanceSortList scope={scope} ids={order}>{orderedInstances.map(i=><SortableInstance scope={scope} id={i.id} name={i.name} locale={locale} className="instance-nav-row" key={i.id}><Button variant="ghost" className="nav-item terminal-nav registered-instance" data-active={opened.includes(i.id)&&active===i.id} aria-current={opened.includes(i.id)&&active===i.id?'page':undefined} title={`${i.name} · ${t(i.online?'online':'offline')}`} onClick={()=>open(i)}><span className="session-label">{i.online?statusIcon(i.id):<span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>}<span className="instance-nav-name">{i.name}</span></span></Button><Button className="instance-manage quiet-button" variant="ghost" iconOnly leadingIcon={RiSettings3Line} aria-label={`${t('manage')} ${i.name}`} onClick={()=>manage(i.id)}/></SortableInstance>)}</InstanceSortList>
 
   </>;
-  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onManage={()=>void manage(i.id)} visible={active===i.id||(effectiveSplit&&opened.find(id=>id!==active)===i.id)} locale={locale}/>;return <section className="terminal-panel dark" key={i.id}>
+  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onManage={()=>void manage(i.id)} visible={active===i.id||(effectiveSplit&&orderedOpened.find(id=>id!==active)===i.id)} locale={locale}/>;return <section className="terminal-panel dark" key={i.id}>
     <div className="terminal-heading text-caption-1-regular"><span className="terminal-host"><span className="status-dot"/>{i.host}</span><span>{t(i.role==='observer'?'readOnly':'writable')} · {t('demo')}</span></div>
     <div className="terminal-output" dir="ltr"><p className="text-text-tertiary">{t('connectedDemo')}</p><p className="text-text-tertiary">{t('terminalPreview')}</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span>gotty --version</p><p>GoTTY · web terminal</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span><span className="cursor"/></p></div>
     <div className="terminal-keys">{['Esc','Ctrl','Tab','↑','↓','←','→','⌨'].map(k=><Button key={k} variant="secondary" onClick={()=>setNotice('keyNotice')}>{k}</Button>)}</div>
   </section>}
   const passwordFields = <><div className="password-field"><Input label={t('newPassword')} type={showPassword?'text':'password'} autoComplete="new-password" value={password} onChange={v=>{setPassword(v);setError(null)}}/><Button className="password-toggle quiet-button" variant="ghost" iconOnly leadingIcon={showPassword?RiEyeOffLine:RiEyeLine} aria-label={t(showPassword?'hidePassword':'showPassword')} onClick={()=>setShowPassword(!showPassword)}/></div><Input label={t('confirmPassword')} type={showPassword?'text':'password'} autoComplete="new-password" value={confirmation} onChange={v=>{setConfirmation(v);setError(null)}}/></>;
   const errorMessage = (error||apiError)&&<p className="text-body-regular text-text-error-primary" role="alert">{error?t(error):apiError}</p>;
-  return <DirectionProvider locale={locale}><div className={cx("app",maximized&&"workspace-maximized",sidebarCollapsed&&"sidebar-collapsed",navbarCollapsed&&"navbar-collapsed")}>
-    <aside className="sidebar">{navigation}</aside>
+  return <DirectionProvider locale={locale}><InstanceSortProvider order={order} onReorder={setInstanceOrder} locale={locale}><div className={cx("app",maximized&&"workspace-maximized",sidebarCollapsed&&"sidebar-collapsed",navbarCollapsed&&"navbar-collapsed")}>
+    <aside className="sidebar">{navigation('sidebar')}</aside>
     <main className="main">
       <header className="topbar"><div className="breadcrumb"><Button className="mobile-menu quiet-button" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="topbar-actions">{preview&&<span className="prototype-label text-caption-1-regular">{t('prototype')}</span>}<Button className="quiet-button language-button" variant="ghost" leadingIcon={RiTranslate2} aria-label={t('language')} onClick={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}>{locale==='zh-CN'?'EN':'中文'}</Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={dark?RiSunLine:RiMoonLine} aria-label={t('theme')} onClick={()=>setDark(!dark)}/><span className="toolbar-divider"/>{(preview||!account)&&<Button className="login-button" variant="secondary" onClick={()=>showPanel('login')}>{t('login')}</Button>}<Button className="quiet-button account-settings-button" variant="ghost" iconOnly leadingIcon={RiSettings3Line} aria-label={t('account')} title={t('account')} onClick={()=>showPanel('account')}/></div></header>
-      <div className="workspace"><div className="terminal-tabs"><div className="chrome-controls"><Button className="quiet-button sidebar-toggle" variant="ghost" iconOnly leadingIcon={RiSideBarLine} aria-label={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} title={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} aria-expanded={!sidebarCollapsed} onClick={()=>setSidebarCollapsed(!sidebarCollapsed)}/><Button className="quiet-button mobile-menu" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="session-tabs-scroll">{opened.map(id=><div key={id} className={cx('session-tab',active===id&&'selected')}><Button className="quiet-button" variant="ghost" onClick={()=>setActive(id)}><span className="session-label">{statusIcon(id)}{instances.find(i=>i.id===id)!.name}</span></Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiCloseLine} aria-label={`${t('closeTab')} ${instances.find(i=>i.id===id)!.name}`} onClick={()=>{const next=opened.filter(v=>v!==id);setOpened(next);if(active===id){setActive(next[0]??'')}}}/></div>)}<Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div><div className="workspace-actions"><Button className="quiet-button navbar-toggle" variant="ghost" iconOnly leadingIcon={RiLayoutTopLine} aria-label={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} title={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} aria-expanded={!navbarCollapsed} onClick={()=>setNavbarCollapsed(!navbarCollapsed)}/><Button className="split-button quiet-button" variant="ghost" disabled={opened.length<2} onClick={()=>setSplit(!split)}>{t(split?'single':'split')}</Button><Button className="maximize-button quiet-button" variant="ghost" iconOnly leadingIcon={maximized?RiCollapseDiagonalLine:RiExpandDiagonalLine} aria-label={t(maximized?'restoreWorkspace':'maximizeWorkspace')} title={t(maximized?'restoreWorkspace':'maximizeWorkspace')} aria-pressed={maximized} onClick={()=>setMaximized(!maximized)}/></div></div><div className={cx('terminals',effectiveSplit&&'split')}>{opened.length?opened.map(id=>{const instance=instances.find(i=>i.id===id);return instance&&<div key={id} className="terminal-slot" hidden={id!==active&&!(effectiveSplit&&opened.find(v=>v!==active)===id)}>{instance.online?terminal(instance):<div className="terminal-empty">{t('offline')}</div>}</div>}):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}</div><footer className="workspace-footer text-caption-1-regular"><span>{preview?t('demoConnection'):selected?t(selected.online?'online':'offline'):''} · {selected?t(selected.role):''}</span><span>{t('closeHint')}</span></footer></div>
+      <div className="workspace"><div className="terminal-tabs"><div className="chrome-controls"><Button className="quiet-button sidebar-toggle" variant="ghost" iconOnly leadingIcon={RiSideBarLine} aria-label={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} title={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} aria-expanded={!sidebarCollapsed} onClick={()=>setSidebarCollapsed(!sidebarCollapsed)}/><Button className="quiet-button mobile-menu" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="session-tabs-scroll"><InstanceSortList scope="tabs" ids={orderedOpened}>{orderedOpened.map(id=><SortableInstance key={id} scope="tabs" id={id} name={instances.find(i=>i.id===id)!.name} locale={locale} className={cx('session-tab',active===id&&'selected')}><Button className="quiet-button" variant="ghost" onClick={()=>setActive(id)}><span className="session-label">{statusIcon(id)}{instances.find(i=>i.id===id)!.name}</span></Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiCloseLine} aria-label={`${t('closeTab')} ${instances.find(i=>i.id===id)!.name}`} onClick={()=>{const next=opened.filter(v=>v!==id);setOpened(next);if(active===id){setActive(next[0]??'')}}}/></SortableInstance>)}</InstanceSortList><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div><div className="workspace-actions"><Button className="quiet-button navbar-toggle" variant="ghost" iconOnly leadingIcon={RiLayoutTopLine} aria-label={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} title={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} aria-expanded={!navbarCollapsed} onClick={()=>setNavbarCollapsed(!navbarCollapsed)}/><Button className="split-button quiet-button" variant="ghost" disabled={opened.length<2} onClick={()=>setSplit(!split)}>{t(split?'single':'split')}</Button><Button className="maximize-button quiet-button" variant="ghost" iconOnly leadingIcon={maximized?RiCollapseDiagonalLine:RiExpandDiagonalLine} aria-label={t(maximized?'restoreWorkspace':'maximizeWorkspace')} title={t(maximized?'restoreWorkspace':'maximizeWorkspace')} aria-pressed={maximized} onClick={()=>setMaximized(!maximized)}/></div></div><div className={cx('terminals',effectiveSplit&&'split')}>{orderedOpened.length?orderedOpened.map(id=>{const instance=instances.find(i=>i.id===id);return instance&&<div key={id} className="terminal-slot" hidden={id!==active&&!(effectiveSplit&&orderedOpened.find(v=>v!==active)===id)}>{instance.online?terminal(instance):<div className="terminal-empty">{t('offline')}</div>}</div>}):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}</div><footer className="workspace-footer text-caption-1-regular"><span>{preview?t('demoConnection'):selected?t(selected.online?'online':'offline'):''} · {selected?t(selected.role):''}</span><span>{t('closeHint')}</span></footer></div>
     </main>
-    <Drawer isOpen={drawer} onOpenChange={setDrawer} placement="start"><DrawerHeader title={t('switchInstance')} closeLabel={t('close')}/><DrawerBody><div className="mobile-navigation">{navigation}</div></DrawerBody></Drawer>
+    <Drawer isOpen={drawer} onOpenChange={setDrawer} placement="start"><DrawerHeader title={t('switchInstance')} closeLabel={t('close')}/><DrawerBody><div className="mobile-navigation">{navigation('drawer')}</div></DrawerBody></Drawer>
     <Modal isOpen={panel==='login'||panel==='account'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay">
       <ModalHeader title={t(panel==='account'?'account':authMode==='recover'?'resetTitle':authMode==='register'?'registerTitle':'loginTitle')} description={t(panel==='account'?'changeDescription':authMode==='recover'?'resetDescription':authMode==='register'?'registerDescription':'loginDescription')} closeLabel={t('close')}/>
       <ModalBody>{panel==='login'&&authMode==='recover'?<div className="auth-form"><p className="text-body-regular text-text-secondary">{t('resetInstructions')}</p><Button variant="secondary" onClick={()=>{setAuthMode('login');setError(null);setApiError('')}}>{t('backLogin')}</Button></div>:<form className="auth-form" onSubmit={e=>{e.preventDefault();if(!busy){if(panel==='account')savePassword();else submitAuth()}}}>
@@ -200,6 +210,9 @@ function App() {
     </div></DrawerBody></Drawer>
     {account?.is_admin&&<AdminPanel open={adminOpen} onClose={()=>setAdminOpen(false)} locale={locale}/>}
     {notice&&<div className="notice text-body-regular" role="status">{t(notice)}</div>}
-  </div></DirectionProvider>;
+  </div></InstanceSortProvider></DirectionProvider>;
 }
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
+const mount=()=>createRoot(document.getElementById('root')!, {
+  onUncaughtError:()=>window.hubBoot?.fail(),
+}).render(<React.StrictMode><App/></React.StrictMode>);
+if(window.hubBoot)window.hubBoot.run(mount);else mount();

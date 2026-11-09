@@ -14,5 +14,23 @@ export function terminalMessage(text:string,locale:string):string{
   if(text.startsWith('语音输入需要 HTTPS'))return 'Voice input requires HTTPS and microphone permission';
   return voice[text]??text;
  }
+ const reasons:Record<string,string>={
+  'Authentication or instance access denied':'登录已过期或实例访问权限已被取消',
+  'Authentication origin validation failed':'连接来源校验失败，请检查反向代理转发的地址',
+  'Instance offline':'GoTTY 实例已离线',
+  'Hub restarting or stopping':'Hub 正在重启或停止',
+  'Hub stopping':'Hub 正在停止',
+  'Terminal authorization temporarily unavailable':'暂时无法取得终端连接凭据',
+  'Network or proxy connection interrupted':'网络或反向代理连接中断',
+  'WebSocket handshake failed; check proxy Upgrade support and network':'WebSocket 握手失败，请检查反向代理的 Upgrade 支持及网络',
+  'Instance stream closed':'GoTTY 终端连接已关闭',
+  'Heartbeat timed out':'连接心跳超时',
+  'Authentication timed out':'终端凭据校验超时',
+  'Authentication ticket expired or invalid':'终端连接凭据已过期或无效',
+  'Authentication channel access denied':'无权访问此终端通道',
+  'Instance connection limit reached':'实例连接数已达到上限',
+  'Instance temporarily unavailable':'GoTTY 实例暂时不可用，请等待重连',
+ };
+ for(const [source,target] of Object.entries(reasons))text=text.replace(source,target);
  return text.replace('Restoring session...','正在恢复会话…').replace(/Reconnecting in (\d+)s\.\.\./g,'将在 $1 秒后重连…').replace('Refresh the page or sign in again.','请刷新页面或重新登录。').replace('Connection closed','连接已关闭').replace('Connection lost','连接已断开');
 }

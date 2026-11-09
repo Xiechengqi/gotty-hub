@@ -163,6 +163,15 @@
   --color-terminal-control-background: rgb(0 0 0 / 0.7);
   --color-terminal-control-hover: rgb(0 0 0 / 0.75);
   --color-terminal-control-foreground: rgb(255 255 255 / 0.7);
+  --color-terminal-panel-background: rgb(30 30 30 / 0.92);
+  --color-terminal-panel-border: rgb(255 255 255 / 0.12);
+  --color-terminal-panel-text: rgb(255 255 255 / 0.8);
+  --color-terminal-panel-muted: rgb(255 255 255 / 0.35);
+  --color-terminal-option-background: rgb(255 255 255 / 0.06);
+  --color-terminal-option-hover: rgb(255 255 255 / 0.08);
+  --color-terminal-option-active: rgb(255 255 255 / 0.12);
+  --color-terminal-key-armed: rgb(74 222 128 / 0.25);
+  --color-terminal-key-armed-border: #4ade80;
   /* Foreground (icons + on-fill content) */
   --color-foreground-full:               var(--color-white);
   --color-foreground-icon-primary:       var(--color-neutral-950);

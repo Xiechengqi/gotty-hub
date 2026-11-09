@@ -205,25 +205,27 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
         .until_stopped(tokio::time::timeout(Duration::from_secs(5), socket.recv()))
         .await;
     let Some(Ok(Some(Ok(Message::Text(t))))) = hello else {
-        close_socket(&app, &mut socket).await;
+        close_browser(&app, &mut socket, 1008, "Authentication timed out").await;
         return;
     };
     let Ok(auth) = serde_json::from_str::<Value>(&t) else {
+        close_browser(&app, &mut socket, 1008, "Authentication invalid").await;
         return;
     };
     let Some(raw) = auth["ticket"].as_str() else {
+        close_browser(&app, &mut socket, 1008, "Authentication required").await;
         return;
     };
     let setup = app.shutdown.until_stopped(async {
-    let row=sqlx::query("DELETE FROM tickets WHERE token=? AND session=? AND instance=? AND expires>? RETURNING version").bind(hash(raw)).bind(&s.key).bind(&id).bind(now()).fetch_optional(&app.db).await.ok().flatten();
-    let row = row?;
+    let row=sqlx::query("DELETE FROM tickets WHERE token=? AND session=? AND instance=? AND expires>? RETURNING version").bind(hash(raw)).bind(&s.key).bind(&id).bind(now()).fetch_optional(&app.db).await.map_err(|_|(1013,"Terminal authorization temporarily unavailable"))?;
+    let row = row.ok_or((1008,"Authentication ticket expired or invalid"))?;
     let version: i64 = row.get("version");
-    let (role, _) = access(&app, &s, &id, version).await?;
+    let (role, _) = access(&app, &s, &id, version).await.ok_or((1008,"Authentication or instance access denied"))?;
     let device = app.devices.lock().await.get(&id).cloned();
-    let device = device?;
+    let device = device.ok_or((1013,"Instance offline"))?;
     let channel = auth["channel"].as_str().unwrap_or("terminal");
     if !["terminal", "asr"].contains(&channel) {
-        return None;
+        return Err((1008,"Authentication channel access denied"));
     }
     let asr = channel == "asr";
     if asr
@@ -231,36 +233,54 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
             || device.capabilities["asr"] != true
             || device.capabilities["write"] != true)
     {
-        return None;
+        return Err((1008,"Authentication channel access denied"));
     }
-    Some((version, role, device, asr, channel))
-    }).await.flatten();
-    let Some((version, role, device, asr, channel)) = setup else {
-        close_socket(&app, &mut socket).await;
-        return;
+    Ok::<_,(u16,&'static str)>((version, role, device, asr, channel))
+    }).await;
+    let (version, role, device, asr, channel) = match setup {
+        Some(Ok(value)) => value,
+        failure => {
+            let (code, reason) = failure
+                .and_then(|value| value.err())
+                .unwrap_or((1001, "Hub stopping"));
+            close_browser(&app, &mut socket, code, reason).await;
+            return;
+        }
     };
     let stream = token();
     let (tx, mut rx) = mpsc::channel::<Message>(QUEUE);
     {
         let mut streams = device.streams.lock().await;
         if streams.len() >= MAX_STREAMS {
+            close_browser(&app, &mut socket, 1013, "Instance connection limit reached").await;
             return;
         }
         streams.insert(stream.clone(), tx);
     }
-    if device.tx.try_send(Frame::new("open",&stream,json!({"channel":channel,"role":role,"epoch":auth["epoch"],"offset":auth["offset"],"writable":role!="observer"&&device.capabilities["write"]==true}))).is_err(){device.streams.lock().await.remove(&stream);return}
+    if device.tx.try_send(Frame::new("open",&stream,json!({"channel":channel,"role":role,"epoch":auth["epoch"],"offset":auth["offset"],"writable":role!="observer"&&device.capabilities["write"]==true}))).is_err(){
+        device.streams.lock().await.remove(&stream);
+        close_browser(&app, &mut socket, 1013, "Instance temporarily unavailable").await;
+        return;
+    }
     let (mut sink, mut source) = socket.split();
     let mut check = tokio::time::interval(Duration::from_millis(500));
     let started = tokio::time::Instant::now();
+    let mut last = started;
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+    let mut closure = (1000, "Instance stream closed");
     let mut audio_bytes = 0usize;
     app.shutdown.until_stopped(async {
     loop {
         tokio::select! {
              _=check.tick()=>{
               if asr&&started.elapsed()>Duration::from_secs(120){break}
-              if access(&app,&s,&id,version).await.is_none(){break}
-              if app.devices.lock().await.get(&id).map(|d|d.generation.clone())!=Some(device.generation.clone()){break}
-              if device.tx.is_closed(){break}
+              if access(&app,&s,&id,version).await.is_none(){closure=(1008,"Authentication or instance access denied");break}
+              if app.devices.lock().await.get(&id).map(|d|d.generation.clone())!=Some(device.generation.clone()){closure=(1013,"Instance offline");break}
+              if device.tx.is_closed(){closure=(1013,"Instance offline");break}
+             },
+             _=heartbeat.tick()=>{
+              if last.elapsed()>Duration::from_secs(45){closure=(1001,"Heartbeat timed out");break}
+              if tokio::time::timeout(Duration::from_secs(10),sink.send(Message::Ping(vec![]))).await.map(|v|v.is_err()).unwrap_or(true){break}
              },
              message=rx.recv()=>{let Some(message)=message else{break};
               let control_result=matches!(&message,Message::Text(text) if text.starts_with("{\"control_result\":"));
@@ -268,7 +288,8 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
               if tokio::time::timeout(Duration::from_secs(10),sink.send(message)).await.map(|v|v.is_err()).unwrap_or(true){break}},
              incoming=source.next()=>match incoming{
               Some(Ok(Message::Text(t)))=>{
-               if access(&app,&s,&id,version).await.is_none(){break}
+               last=tokio::time::Instant::now();
+               if access(&app,&s,&id,version).await.is_none(){closure=(1008,"Authentication or instance access denied");break}
                if let Ok(v)=serde_json::from_str::<Value>(&t){
                 if v["viewing"].is_boolean(){let _=device.tx.try_send(Frame::new("view",&stream,json!({"viewing":v["viewing"]})));continue}
                 if let Some(control)=v.get("control"){
@@ -287,12 +308,13 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
                if device.tx.try_send(Frame::new("data",&stream,Value::String(t))).is_err(){break}
               },
               Some(Ok(Message::Binary(data)))=>{
+               last=tokio::time::Instant::now();
                if !asr||access(&app,&s,&id,version).await.is_none(){break}
                audio_bytes+=data.len();if audio_bytes>16*1024*1024{break}
                if device.tx.try_send(Frame::new("asr_data",&stream,json!({"binary":true,"payload":STANDARD.encode(data)}))).is_err(){break}
               },
               Some(Ok(Message::Ping(p)))=>{if sink.send(Message::Pong(p)).await.is_err(){break}},
-              Some(Ok(Message::Pong(_)))=>{},
+              Some(Ok(Message::Pong(_)))=>{last=tokio::time::Instant::now();},
               _=>break,
              }
             }
@@ -301,8 +323,16 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
     device.streams.lock().await.remove(&stream);
     if !app.shutdown.is_stopping() {
         let _ = device.tx.try_send(Frame::new("close", &stream, json!({})));
+    } else {
+        closure = (app.shutdown.close_code(), "Hub stopping");
     }
-    close_socket(&app, &mut sink).await;
+    tracing::info!(
+        code = closure.0,
+        reason = closure.1,
+        duration_ms = started.elapsed().as_millis() as u64,
+        "Terminal WebSocket closed"
+    );
+    close_browser(&app, &mut sink, closure.0, closure.1).await;
 }
 // A peer that stops reading must never hold the shutdown drain open.
 async fn close_socket<S: futures_util::Sink<Message> + Unpin>(app: &App, sink: &mut S) {
@@ -312,6 +342,25 @@ async fn close_socket<S: futures_util::Sink<Message> + Unpin>(app: &App, sink: &
     });
     let _ =
         tokio::time::timeout(Duration::from_millis(200), sink.send(Message::Close(frame))).await;
+}
+async fn close_browser<S: futures_util::Sink<Message> + Unpin>(
+    app: &App,
+    sink: &mut S,
+    code: u16,
+    reason: &'static str,
+) {
+    if app.shutdown.is_stopping() {
+        close_socket(app, sink).await;
+        return;
+    }
+    let _ = tokio::time::timeout(
+        Duration::from_millis(200),
+        sink.send(Message::Close(Some(CloseFrame {
+            code,
+            reason: reason.into(),
+        }))),
+    )
+    .await;
 }
 fn valid_control(role: &str, control: &Value) -> bool {
     role == "owner"

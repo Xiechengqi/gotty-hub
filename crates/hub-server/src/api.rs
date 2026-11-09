@@ -591,6 +591,7 @@ mod tests {
             })),
             db,
             addresses: crate::origin::Policy::new(&crate::config::Config::default()).unwrap(),
+            assets: std::sync::Arc::new(crate::assets::Store::embedded_for_tests()),
             shutdown: crate::shutdown::Shutdown::new(),
             devices: Default::default(),
             rates: Default::default(),

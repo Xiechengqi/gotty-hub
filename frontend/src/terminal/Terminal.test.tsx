@@ -15,10 +15,10 @@ vi.mock('@xterm/addon-web-links',()=>({WebLinksAddon:class {}}));
 vi.mock('@xterm/addon-unicode11',()=>({Unicode11Addon:class {}}));
 vi.mock('@xterm/addon-image',()=>({ImageAddon:class {}}));
 vi.mock('@xterm/addon-webgl',()=>({WebglAddon:class {onContextLoss(){}}}));
-vi.mock('./DisplaySettings',()=>({DisplaySettings:()=>null}));
-vi.mock('./ShareManager',()=>({ShareManager:()=>null}));
+vi.mock('./DisplaySettings',()=>({DisplaySettings:({trigger}:any)=>trigger}));
+vi.mock('./ShareManager',()=>({ShareManager:({trigger}:any)=>trigger}));
 vi.mock('./Transfer',()=>({FILE_LIMIT:64*1024*1024,createTransfer:()=>({consume(){},dispose(){}}),TransferModal:()=>null}));
-vi.mock('../api',()=>({api:vi.fn(async()=>({ticket:'ticket'}))}));
+vi.mock('../api',async importOriginal=>({...await importOriginal<typeof import('../api')>(),api:vi.fn(async()=>({ticket:'ticket'}))}));
 class Socket {
  static OPEN=1;static CONNECTING=0;static CLOSED=3;
  readyState=0;bufferedAmount=0;onopen:any;onmessage:any;onclose:any;send=vi.fn();

@@ -2,7 +2,7 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {displayOptions,NORD_THEME} from '@gotty/terminal-core/appearance';
 import {readAppearance,saveAppearance} from './appearance';
 import {HubConnection} from './connection';
-vi.mock('../api',()=>({api:vi.fn(async()=>({ticket:'ticket-1'}))}));
+vi.mock('../api',async importOriginal=>({...await importOriginal<typeof import('../api')>(),api:vi.fn(async()=>({ticket:'ticket-1'}))}));
 class Socket {
  readyState=1;bufferedAmount=0;send=vi.fn();onmessage:any;onclose:any;onopen:any;
  close(){this.readyState=3;this.onclose?.(new CloseEvent('close'));}
@@ -33,3 +33,30 @@ it('correlates management replies separately from terminal output and clears dis
  const stopped=value.request('restart');value.close();await expect(stopped).rejects.toThrow('disconnected');expect(value.pending.size).toBe(0);
 });
 it('does not offer unsupported controls for an older Connector',async()=>{await expect(connection(true,true,false).request('restart')).rejects.toThrow('unavailable');});
+
+it('distinguishes expired sessions, offline instances and proxy handshakes after an abnormal close',async()=>{
+ const {api,APIError}=await import('../api');const mock=vi.mocked(api);
+ const auth=connection();const authClose=vi.fn();auth.onClose(authClose);
+ mock.mockRejectedValueOnce(new APIError(401,'authentication_required'));
+ auth.ws.onclose!(new CloseEvent('close',{code:1006}));
+ await vi.waitFor(()=>expect(authClose).toHaveBeenCalled());expect(authClose.mock.calls[0][0]).toMatchObject({code:1008,reason:'Authentication or instance access denied'});
+ const offline=connection();const offlineClose=vi.fn();offline.onClose(offlineClose);
+ mock.mockResolvedValueOnce({}).mockResolvedValueOnce([{id:'id-1',online:false}]);offline.ws.onclose!(new CloseEvent('close',{code:1006}));
+ await vi.waitFor(()=>expect(offlineClose).toHaveBeenCalled());expect(offlineClose.mock.calls[0][0]).toMatchObject({code:1013,reason:'Instance offline'});
+ const proxy=connection();const proxyClose=vi.fn();proxy.onClose(proxyClose);
+ mock.mockResolvedValueOnce({}).mockResolvedValueOnce([{id:'id-1',online:true}]);proxy.ws.onclose!(new CloseEvent('close',{code:1006}));
+ await vi.waitFor(()=>expect(proxyClose).toHaveBeenCalled());expect(proxyClose.mock.calls[0][0].reason).toContain('WebSocket handshake failed');
+});
+it('uses browser-permitted close codes while reporting authorization failures to WebTTY',async()=>{
+ const {api,APIError}=await import('../api');vi.mocked(api).mockRejectedValueOnce(new APIError(403,'origin_mismatch'));
+ const value=connection(),closed=vi.fn();value.onClose(closed);const close=vi.spyOn(value.ws,'close');
+ value.ws.onopen!(new Event('open'));await vi.waitFor(()=>expect(closed).toHaveBeenCalled());
+ expect(close).toHaveBeenCalledWith(4001);expect(closed.mock.calls[0][0]).toMatchObject({code:1008,reason:'Authentication origin validation failed'});
+});
+it('keeps restart close codes and reasons without a diagnostic API round trip',()=>{
+ const value=connection(),closed=vi.fn();value.onClose(closed);
+ value.ws.onclose!(new CloseEvent('close',{code:1012,reason:'Hub stopping'}));expect(closed.mock.calls[0][0]).toMatchObject({code:1012,reason:'Hub stopping'});
+});
+it('notifies the shared WebTTY when a stale connection is explicitly closed for probing',()=>{
+ const value=connection(),closed=vi.fn();value.onClose(closed);value.close();expect(closed).toHaveBeenCalledOnce();
+});

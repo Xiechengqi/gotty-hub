@@ -395,6 +395,12 @@ async fn install(app: &App) -> anyhow::Result<()> {
             !app.shutdown.is_stopping(),
             "upgrade interrupted by shutdown"
         );
+        // Retain original hashed resources before replacing the executable.
+        app.assets.checkpoint(&app.admin.runtime.home)?;
+        anyhow::ensure!(
+            !app.shutdown.is_stopping(),
+            "upgrade interrupted by shutdown"
+        );
         // No await between the final cancellation check and atomic replacement.
         std::fs::rename(&staging, &current)?;
         Ok::<_, anyhow::Error>(())

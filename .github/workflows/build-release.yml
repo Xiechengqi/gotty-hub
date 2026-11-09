@@ -71,6 +71,11 @@ jobs:
           python3 tests/config.py
           node tests/proxy-shutdown.cjs
           python3 scripts/check-core.py
+      - name: Production UI and resource recovery through HTTPS proxy
+        if: matrix.arch == 'amd64'
+        run: |
+          (cd frontend && npx playwright install --with-deps chromium)
+          node tests/proxy-shutdown.cjs --ui
       - name: Build standalone binary
         env:
           GITHUB_SHA: ${{ github.sha }}

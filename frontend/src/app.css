@@ -72,14 +72,58 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-state{position:absolute;inset-block-start:202px;inset-inline-end:10px;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);padding:4px 8px;border-radius:4px;pointer-events:none;z-index:2}
 .terminal-api-indicator{position:absolute;inset-inline-start:12px;inset-block-end:12px;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);padding:4px 8px;border-radius:4px;pointer-events:none}
 .real-terminal .terminal-message{max-width:calc(100% - 88px);pointer-events:none;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);z-index:2}
-.real-terminal .terminal-keys{display:none}
 .real-terminal .gotty-voice-btn{inset-block-end:16px;z-index:2}
 .gotty-voice-btn--active{background:var(--color-notification-success-background);color:var(--color-notification-success-foreground)}
 .terminal-setting-options{display:flex;flex-wrap:wrap;gap:8px;margin-block-start:8px}
 .terminal-font-options{display:flex;flex-direction:column;gap:8px;margin-block-start:8px}
 .terminal-setting-options [aria-pressed=true],.terminal-font-options [aria-pressed=true]{background:var(--color-background-tertiary-default);border-color:var(--color-border-focus-ring)}
 .terminal-share-row{border-block-start:1px solid var(--color-separator-border);padding-block-start:16px}
-.terminal-display-overlay{justify-content:flex-end}
 .terminal-upload-progress{width:100%;accent-color:var(--color-notification-success-foreground)}
 .terminal-drop-overlay{position:absolute;inset:0;z-index:4;display:grid;place-items:center;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);border:2px dashed var(--color-border-focus-ring);pointer-events:none}
-@media(pointer:coarse){.real-terminal .terminal-keys{display:flex;background:var(--color-terminal-background)}.real-terminal .gotty-voice-btn{inset-block-end:76px}}
+:root{--hub-app-css:ready}
+/* GoTTY terminal controls keep fixed slots even when a permission hides one. */
+.terminal-toolbar{display:block;inline-size:52px;block-size:188px;pointer-events:none}
+.terminal-toolbar .terminal-control{position:absolute;inset-inline-end:0;pointer-events:auto}
+.terminal-connections{inset-block-start:0}.terminal-display-control{inset-block-start:32px}.terminal-clear-control{inset-block-start:64px}.terminal-upload-control{inset-block-start:96px}.terminal-restart-control{inset-block-start:128px}.terminal-hub-control{inset-block-start:160px}
+.terminal-toolbar .terminal-control>span{padding:0}
+.terminal-popover{--color-background-primary-default:var(--color-terminal-panel-background);--color-text-primary:var(--color-terminal-panel-text);--color-text-secondary:var(--color-terminal-panel-muted);background:var(--color-terminal-panel-background);border:1px solid var(--color-terminal-panel-border);border-radius:10px;padding:6px;backdrop-filter:blur(8px);box-shadow:var(--shadow-lg);color:var(--color-terminal-panel-text);max-inline-size:calc(100vw - 64px)}
+.terminal-display-popover{inline-size:240px}.terminal-share-popover{inline-size:360px}
+.terminal-popover-dialog{position:relative;padding:0;gap:0;overflow:hidden}
+.terminal-popover-scroll{max-block-size:min(560px,calc(var(--hub-viewport-height,100dvh) - 86px));overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--color-terminal-panel-border) transparent;padding:0 4px 4px}
+.terminal-section-title{padding:8px 10px 4px;color:var(--color-terminal-panel-muted);text-transform:uppercase}
+.terminal-section-divider{block-size:1px;background:var(--color-terminal-option-hover);margin:4px 10px}
+.terminal-popover button{background:transparent;color:var(--color-terminal-panel-text);box-shadow:none;border-radius:6px}
+.terminal-popover button:hover{background:var(--color-terminal-option-hover)}
+.terminal-popover button[aria-pressed=true]{background:var(--color-terminal-option-active);border-color:var(--color-terminal-panel-border)}
+.terminal-popover .terminal-theme-item,.terminal-popover .terminal-font-options button{display:flex;justify-content:space-between;inline-size:100%;padding:8px 10px}
+.terminal-theme-item>span{display:flex;align-items:center;gap:10px;padding:0}
+.terminal-theme-swatch{inline-size:20px;block-size:20px;border-radius:50%;border:2px solid var(--color-terminal-panel-border);flex-shrink:0}
+.terminal-popover .terminal-setting-options{gap:4px;margin:0;padding:2px 10px 8px}
+.terminal-popover .terminal-font-sizes button{flex:1;min-inline-size:28px;block-size:26px;padding:0 4px;border:1px solid var(--color-terminal-panel-border)}
+.terminal-popover .terminal-font-options{gap:0;margin:0}.terminal-popover button:disabled{opacity:.4}
+.terminal-share-popover form{padding:0 10px 8px;gap:8px}.terminal-share-popover input{min-block-size:28px;color:var(--color-terminal-panel-text);background:var(--color-terminal-option-background)}
+.terminal-share-row{padding:8px 10px;border-color:var(--color-terminal-panel-border)}
+.terminal-mobile-keys{display:flex;flex-direction:column;flex-shrink:0;gap:4px;padding:4px;background:var(--color-terminal-panel-background);backdrop-filter:blur(8px);border-block-start:1px solid var(--color-terminal-panel-border);user-select:none;touch-action:none}
+.terminal-mobile-key-row{display:flex;gap:4px}
+.terminal-mobile-key{flex:1 1 0;min-inline-size:0;block-size:40px;padding:0;border:1px solid var(--color-terminal-option-active);border-radius:6px;background:var(--color-terminal-option-background);color:var(--color-terminal-panel-text);box-shadow:none;touch-action:none}
+.terminal-mobile-key>span{padding:0}.terminal-mobile-key:active{background:var(--color-terminal-option-active)}
+.terminal-mobile-key.armed{background:var(--color-terminal-key-armed);border-color:var(--color-terminal-key-armed-border)}
+@media(max-height:500px){.terminal-mobile-key{block-size:32px}}
+.instance-sort-handle{flex-shrink:0;inline-size:20px;min-inline-size:20px;block-size:28px;padding:0;touch-action:none;cursor:grab;color:var(--color-foreground-icon-tertiary)}
+.instance-sort-handle:active{cursor:grabbing}.instance-sort-handle svg{inline-size:14px;block-size:14px}
+.instance-nav-row>.registered-instance{min-inline-size:0;padding-inline-start:4px}.instance-nav-row>.instance-sort-handle{opacity:0}
+.instance-nav-row:hover>.instance-sort-handle,.instance-nav-row:focus-within>.instance-sort-handle{opacity:1}
+.session-tab>.instance-sort-handle{min-inline-size:16px;inline-size:16px;padding:0}
+.instance-nav-row[data-dragging=true],.session-tab[data-dragging=true]{z-index:10;background:var(--color-background-tertiary-default);box-shadow:var(--shadow-md);border-radius:6px}
+@media(pointer:coarse){.instance-nav-row>.instance-sort-handle{opacity:1}.instance-sort-handle{inline-size:28px;min-inline-size:28px;block-size:40px}.session-tab>.instance-sort-handle{inline-size:24px;min-inline-size:24px}}
+.real-terminal:has(.terminal-mobile-keys) .gotty-voice-btn{inset-block-end:109px}
+@media(max-height:500px){.real-terminal:has(.terminal-mobile-keys) .gotty-voice-btn{inset-block-end:93px}}
+.terminal-popover .terminal-font-options button>span{display:flex;gap:8px;padding:0;flex:1}
+.terminal-share-form{display:grid}.terminal-expiry-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.terminal-share-options{display:flex;flex-wrap:wrap;gap:8px}
+.terminal-share-options span{color:var(--color-terminal-panel-text)}
+.terminal-share-form [role=group]{background:var(--color-terminal-option-background);border-color:var(--color-terminal-panel-border);border-radius:6px;box-shadow:none}
+.terminal-share-form [role=group] input{min-block-size:28px}.terminal-share-form button[aria-haspopup=listbox]{background:var(--color-terminal-option-background);border:1px solid var(--color-terminal-panel-border);border-radius:6px;padding-block:4px}
+.terminal-share-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-terminal-panel-muted)}
+.terminal-popover .terminal-share-primary{background:var(--color-terminal-key-armed);border:1px solid var(--color-terminal-key-armed-border)}
+.terminal-share-empty{padding:4px 10px 8px}

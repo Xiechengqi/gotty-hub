@@ -8,7 +8,7 @@
 
 ## ADR-002：共享现有 webtty 与语音核心
 
-`gotty/js/packages/terminal-core` 是 GoTTY 原有 WebTTY、VoiceInput 和显示偏好翻译/默认值的源代码归属；GoTTY 原路径仅重新导出。Hub 固定消费 `frontend/vendor/gotty-terminal-core-0.2.0.tgz`，npm lock 校验内容，独立检出不依赖相邻目录。该包仍是第一版开发制品，正式发布新内容必须提升版本，不能替换已经对外发布的同版本 tarball。
+`gotty/js/packages/terminal-core` 是 GoTTY 原有 WebTTY、VoiceInput、显示偏好翻译/默认值、移动快捷键布局与编码、软件键盘视口检测的源代码归属；GoTTY 原路径仅重新导出。Hub 固定消费 `frontend/vendor/gotty-terminal-core-0.2.1.tgz`，npm lock 校验内容，独立检出不依赖相邻目录。发布新内容必须提升版本，不能替换已经对外发布的同版本 tarball。
 
 Hub 使用 React xterm 适配器，未嵌入远程 GoTTY 网页。文件支持原有WebTTY `7`消息的原生上传（包括拖放），也支持同一终端通道中的ZMODEM，后者上传需rz、下载需sz；文件权限继续由Hub角色及GoTTY PermitWrite双重校验。语音录音、采样与转写合并逻辑复用 GoTTY VoiceInput，增加初始化/传输注入接口。
 
@@ -70,3 +70,15 @@ GoTTY 默认开启 Hub；使用 `--hub-disabled` 时不创建设备管理入口�
 地址始终按请求解析，接受任意映射到 Hub 的域名和 IP；旧 CLI/环境/config 的固定 origin 兼容接受但忽略。authority 来自 Host 或可信代理的单值 X-Forwarded-Host；浏览器 Origin / 前端 X-Hub-Origin 只能为匹配 authority 的地址确定 HTTP/HTTPS，不能选择其他主机或端口，两者同时存在时必须一致。后者支持不含 Origin 的同源 GET，不能代替浏览器 WS 的必需 Origin。没有浏览器来源时使用可信 X-Forwarded-Proto 或 HTTP。只按真实 socket 对端信任回环或显式 IP/CIDR，不解析 Forwarded/X-Forwarded-For 链；代理必须覆盖客户端头，不可信来源忽略转发头，可信来源有歧义时拒绝。认证、Secure Cookie、hub_address、HSTS和浏览器WS共用单次解析地址，保留跨站请求拦截与CSRF。换域名无需修改配置或重启 Hub。
 
 SIGINT/SIGTERM/后台重启通过同一取消令牌和任务追踪器通知SSE、设备/浏览器WS、清理任务与升级下载；首次退出信号可覆盖重启，后续信号强制结束。Axum排空包含持续HTTP响应体，因此SSE必须主动结束；升级后的WS任务另行追踪，不能依赖HTTP排空。连接预算3秒，数据库/日志/运行时在内总退出上限5秒，由独立线程保证；不把普通关闭解释为设备撤销。正常退出1001、重启1012，保留远端PTY及持久身份。CI独立进程验证真实TLS反代、长连接、exec及OS信号，本地仅单元/内存测试和构建。
+
+## ADR-007：资源快照与独立加载恢复
+
+binary 内嵌资源与 HUB_ASSETS 都在启动时读为不可变快照；HTML 重新验证，带构建 hash 的资源长期 immutable，缺失资源不能回退为 HTML，错误响应 no-store。SHA256 ETag 支持 GET/HEAD/304。保留当前及前两代原始 hash 资源，内置升级在替换 binary 前检查归档完整性并落盘，不用新版文件冒充旧 URL。
+
+独立内联 bootstrap 在 React 挂载前验证应用与 xterm CSS；CSS/JS 超时或失败最多自动重试两次，之后显示手动重试和重新加载。字体短暂等待后允许降级，运行中的终端不会被资源恢复逻辑自动刷新。CSP 只为构建 HTML 中 bootstrap 的精确字节授权 SHA256，不开放 unsafe-inline 脚本或 eval。
+
+## ADR-008：终端工具及统一实例顺序
+
+终端移动键盘复用 GoTTY 两行 16 键及一次性修饰/导航长按；工具按钮使用固定位置，显示设置和分享管理在按钮旁展开，保持 GoTTY 的深色面板、尺寸、间距及主题/字体选项。Hub 权限仍决定写入、上传及远端管理能力。
+
+侧边栏全实例与已打开标签使用同一份实例 ID 顺序；任一处拖动更新这份顺序，标签仅取已打开子集。鼠标、触摸长按及键盘均支持；各栏只在本栏选择拖动目标。顺序保存至用户 preferences，SSE 更新保序，新项追加，撤权项移除。按 ID 保持终端组件，不因排序重建连接。

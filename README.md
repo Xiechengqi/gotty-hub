@@ -96,6 +96,7 @@ HUB_LOAD_SECONDS=1800 GOTTY_BIN=/absolute/path/gotty python3 tests/run-load.py
 - [部署、备份恢复和升级](docs/OPERATIONS.md)
 - [历史实施与发布记录](docs/IMPLEMENTATION_REVIEW.md)
 - [反代登录与进程退出 Review](docs/PROXY_AND_SHUTDOWN_REVIEW.md)
+- [页面加载恢复、移动终端与同步排序 Review](docs/UI_LOADING_AND_TERMINAL_REVIEW.md)
 
 单节点首版，一个实例对应 GoTTY 当前共享 PTY。标签关闭不停止远端命令。iOS/Android 真机、容器运行和公网 TLS 需在目标环境验收；本地浏览器模拟不代替实机验证。
 

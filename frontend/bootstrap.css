@@ -1,0 +1,11 @@
+/* Independent, pre-React recovery UI. BoardUI components cannot run until the
+   bundle loads; use their semantic tokens with native system-color fallbacks. */
+#root[hidden], #hub-boot[hidden], #hub-boot [hidden] { display: none !important; }
+#hub-boot { position: fixed; inset: 0; display: grid; place-items: center; padding: 1.5rem; background: var(--color-background-full, Canvas); color: var(--color-text-primary, CanvasText); font-family: var(--font-sans, system-ui, sans-serif); color-scheme: light dark; }
+#hub-boot .hub-boot-card { display: grid; gap: 1rem; max-inline-size: 28rem; padding: 1.5rem; border: 1px solid var(--color-border-button-default, ButtonBorder); border-radius: 1.5rem; background: var(--color-background-primary-default, Canvas); }
+#hub-boot h1, #hub-boot p { margin: 0; }
+#hub-boot-message { color: var(--color-text-secondary, CanvasText); }
+#hub-boot .hub-boot-actions { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+#hub-boot-retry, #hub-boot-reload { font: inherit; color: inherit; }
+#hub-boot-retry { border: 1px solid var(--color-border-button-default, ButtonBorder); border-radius: .5rem; background: var(--color-background-secondary-default, ButtonFace); padding: .5rem 1rem; cursor: pointer; }
+#hub-boot :is(button, a):focus-visible { outline: 2px solid var(--color-border-focus-ring, Highlight); outline-offset: 2px; }

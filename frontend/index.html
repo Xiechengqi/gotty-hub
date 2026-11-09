@@ -1,1 +1,25 @@
-<!doctype html><html lang="zh-CN" dir="ltr"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><meta name="theme-color" content="#121212"/><title>GoTTY Hub · 终端工作台</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+<!doctype html>
+<html lang="zh-CN" dir="ltr">
+  <head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+    <meta name="theme-color" content="#121212"/>
+    <title>GoTTY Hub · 终端工作台</title>
+    <!--hub-bootstrap-->
+  </head>
+  <body>
+    <div id="hub-boot" role="status" aria-live="polite" data-state="loading">
+      <div class="hub-boot-card">
+        <h1 class="text-title-3-semibold">GoTTY Hub</h1>
+        <p id="hub-boot-message" class="text-body-regular">正在加载终端工作台…</p>
+        <noscript><p>请启用 JavaScript 以打开终端工作台。 / Enable JavaScript to open the workspace.</p></noscript>
+        <div class="hub-boot-actions text-body-medium">
+          <button id="hub-boot-retry" type="button" hidden>重试</button>
+          <a id="hub-boot-reload" href="">重新加载</a>
+        </div>
+      </div>
+    </div>
+    <div id="root" hidden></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

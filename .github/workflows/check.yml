@@ -22,4 +22,6 @@ jobs:
         working-directory: frontend
       - run: npm run test:ui
         working-directory: frontend
+      - name: Production UI and resource recovery through HTTPS proxy
+        run: node tests/proxy-shutdown.cjs --ui
       - run: python3 scripts/check-core.py
