@@ -1,6 +1,6 @@
 # 实施结果与整体 Review
 
-日期：2026-11-09。范围：GoTTY 与 GoTTY Hub 两仓库，本地实现与验证；未生产部署、发真实邮件或推送外部制品。
+日期：2026-11-09。范围：GoTTY 与 GoTTY Hub 两仓库，本地实现与验证；首轮未生产部署、发真实邮件或推送外部制品；后续管理员增量已按用户授权推送GitHub并发布Release，见文末。
 
 ## 实现结果
 
@@ -62,4 +62,8 @@ P0–P5 的主要功能已落地：终端专用 Go/Rust WSS、共享 WebTTY 核�
 
 安全review修复：在线替换后Linux current_exe可能带(deleted)，重启改用启动时保存的原路径；升级只下载固定仓库资产，强制校验SHA256和可执行版本，原子替换前备份；CLI密钥不写日志，管理员接口沿用Cookie/CSRF/Origin；日志文件读取没有任意路径输入且限制128KiB。miao只作为行为参考，未拷贝其通用代理或远程管理实现。
 
-双架构Release工作流和实际远程执行结果在本轮完成后补录。
+最终发布 [build-3-1-66125f72](https://github.com/Xiechengqi/gotty-hub/releases/tag/build-3-1-66125f72)；[Build and Release](https://github.com/Xiechengqi/gotty-hub/actions/runs/42575459103) 与 [check](https://github.com/Xiechengqi/gotty-hub/actions/runs/42575459022) 均成功。Linux amd64/arm64两份单文件资产与SHA256已发布，实际下载后核对摘要、ELF架构与无动态解释器。amd64真实执行升级已通过；arm64已交叉编译并检查ELF，未在原生arm64主机执行。
+
+最终首启测试确认：首次完全无参数时即使环境变量已有值也交互询问；自动化部署明确使用serve/config。6项Rust单元/协议测试、配置/PTY引导测试、15项UI回归、完整真实GoTTY集成均通过。使用最终公开Release完成真实下载、SHA256校验、可执行版本探测、SQLite快照备份、原子替换、exec、已有管理员会话与内嵌前端恢复。
+
+完整发布记录见 [release-validation.json](release-validation.json)。CI首轮发现新版Clippy字节数组写法告警，修复后两套工作流全部通过。当前未生产部署，未调用真实Resend投递，未执行容器内自更新。

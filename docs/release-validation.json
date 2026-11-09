@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-09",
+  "release": "https://github.com/Xiechengqi/gotty-hub/releases/tag/build-3-1-66125f72",
+  "source_commit": "66125f72",
+  "release_workflow": "https://github.com/Xiechengqi/gotty-hub/actions/runs/42575459103",
+  "check_workflow": "https://github.com/Xiechengqi/gotty-hub/actions/runs/42575459022",
+  "workflows": "success",
+  "local_config_test": "passed (including literal first no-argument launch with environment variables present)",
+  "local_integration": "passed including admin permission denials, mobile UI, atomic binary replacement and exec restart",
+  "real_release_upgrade": "passed (download, SHA256, version probe, SQLite backup, atomic replace, exec, persisted admin session and embedded assets)",
+  "native_arm64_execution": false,
+  "assets": {
+    "gotty-hub-linux-amd64": {
+      "sha256sum": "353cec60593682c7b35dc4c59627c8d6d6485c53761885099c7fdbc80f698e60  gotty-hub-linux-amd64",
+      "architecture_checked": true,
+      "static_elf_checked": true
+    },
+    "gotty-hub-linux-arm64": {
+      "sha256sum": "a29e180941876d70181bd253d38b718f63a11cbde8a389baf54b5ba646d06cec  gotty-hub-linux-arm64",
+      "architecture_checked": true,
+      "static_elf_checked": true
+    }
+  }
+}
