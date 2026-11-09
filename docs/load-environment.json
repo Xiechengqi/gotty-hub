@@ -1,0 +1,9 @@
+{
+  "platform": "Linux-5.15.0-202-generic-x86_64-with-glibc2.35",
+  "cpu_count": 16,
+  "build": "debug",
+  "notes": "30min load started before final review edits; short final-build verification recorded separately.",
+  "hub_sha256": "a23e02f32bb7c21e894f50122da67e08f1945c702bd88ee3b6451b924734ccbf",
+  "gotty_sha256": "cf4b36bd3e871126a2124a5d02fccc4630271babc4d61c07ac135a60586d01bc",
+  "final_hub_sha256": "e19aaf99c66ec7429d195fd9b25b7ab8b53c1642fcca5584f5aaa871e58e12dc"
+}

@@ -1,0 +1,63 @@
+{
+  "devices": 50,
+  "terminalConnections": 100,
+  "activeOutputDevices": 10,
+  "seconds": 60,
+  "receivedBytes": 71854808,
+  "unexpectedCloses": 0,
+  "memorySamples": [
+    {
+      "elapsed": 0,
+      "hub_rss_kib": 18840
+    },
+    {
+      "elapsed": 5,
+      "hub_rss_kib": 21916
+    },
+    {
+      "elapsed": 10,
+      "hub_rss_kib": 21916
+    },
+    {
+      "elapsed": 15,
+      "hub_rss_kib": 21916
+    },
+    {
+      "elapsed": 20,
+      "hub_rss_kib": 21916
+    },
+    {
+      "elapsed": 25,
+      "hub_rss_kib": 22176
+    },
+    {
+      "elapsed": 30,
+      "hub_rss_kib": 22176
+    },
+    {
+      "elapsed": 35,
+      "hub_rss_kib": 22176
+    },
+    {
+      "elapsed": 40,
+      "hub_rss_kib": 22176
+    },
+    {
+      "elapsed": 45,
+      "hub_rss_kib": 22176
+    },
+    {
+      "elapsed": 50,
+      "hub_rss_kib": 22176
+    },
+    {
+      "elapsed": 55,
+      "hub_rss_kib": 22176
+    },
+    {
+      "elapsed": 60,
+      "hub_rss_kib": 22176
+    }
+  ],
+  "hubPeakRSSKiB": 22176
+}

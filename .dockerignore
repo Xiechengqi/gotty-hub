@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+target
+.git
+.dev-mail
+*.db*
+.env*
+frontend/test-results
+frontend/playwright-report

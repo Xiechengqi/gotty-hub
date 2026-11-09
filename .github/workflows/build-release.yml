@@ -1,0 +1,107 @@
+name: Build and Release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci && npm run build
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium && npm run test:ui
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+  build:
+    needs: frontend
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: mlugg/setup-zig@v2
+      - uses: taiki-e/install-action@cargo-zigbuild
+      - name: Rust checks
+        if: matrix.arch == 'amd64'
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          cargo build --locked
+          python3 tests/config.py
+          python3 scripts/check-core.py
+      - name: Build standalone binary
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: cargo zigbuild --locked --release --target ${{ matrix.target }}
+      - name: Package release assets
+        env:
+          ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir release-files
+          cp "target/$TARGET/release/gotty-hub" "release-files/gotty-hub-linux-$ARCH"
+          cd release-files
+          sha256sum "gotty-hub-linux-$ARCH" > "gotty-hub-linux-$ARCH.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: release-files/*
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: release-files
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            RELEASE_TAG="$REF_NAME"
+          else
+            RELEASE_TAG="build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${COMMIT:0:8}"
+          fi
+          (cd release-files && sha256sum --check gotty-hub-linux-amd64.sha256)
+          (cd release-files && sha256sum --check gotty-hub-linux-arm64.sha256)
+          gh release create "$RELEASE_TAG" release-files/* --target "$COMMIT" --title "GoTTY Hub $RELEASE_TAG" --generate-notes --latest

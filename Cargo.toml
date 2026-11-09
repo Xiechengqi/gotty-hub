@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/hub-server", "crates/hub-protocol"]
+resolver = "2"
