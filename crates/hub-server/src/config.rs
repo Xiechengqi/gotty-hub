@@ -95,6 +95,12 @@ pub fn load() -> Result<Option<Runtime>> {
             stored.admin_email,
         ),
     };
+    // A literal first no-argument launch always runs the setup wizard.
+    // Automated environments use `serve` or `config` explicitly.
+    if !existed && std::env::args_os().len() == 1 {
+        config.resend_api_key.clear();
+        config.admin_email.clear();
+    }
     for (name, value, secret) in [
         ("Resend API key", &mut config.resend_api_key, true),
         ("Admin email", &mut config.admin_email, false),

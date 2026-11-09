@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-load-') as tmp:
  processes=[];samples=[]
  with open(tmp+'/process.log','w') as log:
   try:
-   hub=subprocess.Popen([str(root/'target/debug/gotty-hub')],cwd=root,env=env,stdout=log,stderr=log,start_new_session=True);processes.append(hub);wait(url+'/healthz')
+   hub=subprocess.Popen([str(root/'target/debug/gotty-hub'),'serve'],cwd=root,env=env,stdout=log,stderr=log,start_new_session=True);processes.append(hub);wait(url+'/healthz')
    conn=sqlite3.connect(tmp+'/hub.db');digest=lambda s:hashlib.sha256(s.encode()).hexdigest();session=os.urandom(32).hex();csrf=os.urandom(32).hex()
    conn.execute('INSERT INTO users(email) VALUES(?)',('load@example.test',));conn.execute('INSERT INTO sessions VALUES(?,?,?,?)',(digest(session),'load@example.test',csrf,int(time.time())+7200))
    for i in range(50):

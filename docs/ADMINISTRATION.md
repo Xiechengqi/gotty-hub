@@ -19,7 +19,7 @@
 ./gotty-hub serve --resend-api-key 'OVERRIDE_KEY' --admin-email 'other@example.com'
 ```
 
-优先级：命令行参数 > `RESEND_API_KEY` / `HUB_ADMIN_EMAIL` > config。serve 覆盖仅本次运行；config 子命令才更新已有配置。初次启动若值由环境或参数提供，同样持久化首次配置。命令行参数可能出现在本机进程列表；交互或私有环境注入适合处理密钥。
+优先级：命令行参数 > `RESEND_API_KEY` / `HUB_ADMIN_EMAIL` > config。serve 覆盖仅本次运行；config 子命令才更新已有配置。首次完全不带参数启动始终进入交互引导，即使存在环境变量；自动化部署请显式使用serve/config子命令。首次serve/config若值由环境或参数提供，同样持久化首次配置。命令行参数可能出现在本机进程列表；交互或私有环境注入适合处理密钥。
 
 默认监听127.0.0.1:8088，origin为http://127.0.0.1:8088。生产通过反向代理配置真实 `HUB_ORIGIN=https://hub.example.com`，需要时设置 HUB_LISTEN；非本机公开origin必须HTTPS。`HUB_MAIL_FROM` 设置验证过的发件人，默认使用Resend测试发件人 `onboarding@resend.dev`（其投递范围受Resend限制）。不要求增加第三个首次必填输入。
 

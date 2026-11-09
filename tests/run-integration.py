@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
  try:
   with open(tmp+'/hub.log','w') as hlog,open(tmp+'/gotty.log','w') as glog:
    processes.append(subprocess.Popen(['node',str(root/'tests/asr-fixture.cjs'),str(asrport)],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True))
-   processes.append(subprocess.Popen([hub_binary],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True))
+   processes.append(subprocess.Popen([hub_binary,'serve'],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True))
    wait(hub+'/healthz')
    processes.append(subprocess.Popen([binary,'--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','--hub-enabled','--hub-allow-http','--hub-state-file',env['GOTTY_TEST_STATE'],'bash'],cwd=tmp,env=env,stdout=glog,stderr=glog,start_new_session=True))
    wait(gotty)
@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
    with sqlite3.connect(tmp+'/backup.db') as backup,sqlite3.connect(tmp+'/hub.db') as restored:
     backup.backup(restored)
    print('PASS SQLite consistent backup, integrity check and restore',flush=True)
-   processes.append(subprocess.Popen([hub_binary],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True));wait(hub+'/healthz')
+   processes.append(subprocess.Popen([hub_binary,'serve'],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True));wait(hub+'/healthz')
    stage('online');stage('unbind')
  except Exception:
   for name in ['hub.log','gotty.log']:

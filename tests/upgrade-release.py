@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix='hub-real-upgrade-') as tmp:
  env={**os.environ,'HUB_HOME':str(home),'HUB_DEV':'1','HUB_LISTEN':f'127.0.0.1:{port}','HUB_ORIGIN':origin,'RESEND_API_KEY':'test-key','HUB_ADMIN_EMAIL':'admin@example.test'}
  for key in ['HUB_DATABASE','HUB_ASSETS','HUB_DEV_MAIL_DIR']:env.pop(key,None)
  with open(directory/'process.log','w') as log:
-  process=subprocess.Popen([str(binary)],env=env,cwd=tmp,stdout=log,stderr=log)
+  process=subprocess.Popen([str(binary),'serve'],env=env,cwd=tmp,stdout=log,stderr=log)
   try:
    for _ in range(150):
     try:urllib.request.urlopen(origin+'/readyz',timeout=1);break

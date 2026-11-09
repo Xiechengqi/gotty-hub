@@ -21,4 +21,4 @@ USER hub
 ENV HUB_LISTEN=0.0.0.0:8088 HUB_HOME=/data
 EXPOSE 8088
 VOLUME ["/data"]
-CMD ["gotty-hub"]
+CMD ["gotty-hub", "serve"]

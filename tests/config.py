@@ -13,7 +13,7 @@ def read_until(fd,word):
  raise AssertionError('missing interactive prompt '+word)
 with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
  env={k:v for k,v in os.environ.items() if k not in ['RESEND_API_KEY','HUB_ADMIN_EMAIL','HUB_ORIGIN','HUB_DATABASE','HUB_ASSETS']};env['HUB_HOME']=tmp+'/home'
- result=subprocess.run([binary],env=env,stdin=subprocess.DEVNULL,capture_output=True);assert result.returncode!=0 and b'is required' in result.stderr
+ result=subprocess.run([binary],env={**env,'RESEND_API_KEY':'ignored-on-first-noargs','HUB_ADMIN_EMAIL':'ignored@example.test'},stdin=subprocess.DEVNULL,capture_output=True);assert result.returncode!=0 and b'is required' in result.stderr
  subprocess.run([binary,'config','--resend-api-key','file-key','--admin-email','ADMIN@example.test'],env=env,check=True,capture_output=True)
  config=pathlib.Path(env['HUB_HOME'],'config');assert json.loads(config.read_text())=={'resend_api_key':'file-key','admin_email':'admin@example.test'};assert config.stat().st_mode&0o777==0o600
  result=subprocess.run([binary,'config','--resend-api-key','cli-key','--admin-email','cli@example.test'],env={**env,'RESEND_API_KEY':'env-key','HUB_ADMIN_EMAIL':'env@example.test'},check=True,capture_output=True);assert json.loads(config.read_text())['resend_api_key']=='cli-key'
