@@ -75,8 +75,8 @@ impl Shutdown {
                 false
             }
         }) {
-            tracing::info!("Hub restart requested");
             self.start();
+            tracing::info!("Hub restart requested");
         }
     }
     pub fn exit(&self) {
@@ -121,14 +121,10 @@ impl Shutdown {
             };
             match receiver.recv_timeout(TOTAL_LIMIT.saturating_sub(started.elapsed())) {
                 Ok(Deadline::Finished) | Err(mpsc::RecvTimeoutError::Disconnected) => (),
-                Ok(Deadline::Force) => {
-                    eprintln!("Second shutdown signal received; exiting immediately");
-                    std::process::exit(130);
-                }
-                _ => {
-                    eprintln!("Hub shutdown exceeded 5 seconds; exiting");
-                    std::process::exit(124);
-                }
+                // Do not write to stdout/stderr here: a full pipe must not
+                // prevent the independent process deadline from taking effect.
+                Ok(Deadline::Force) => std::process::exit(130),
+                _ => std::process::exit(124),
             }
         });
         DeadlineGuard(sender)
