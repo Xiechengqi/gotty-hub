@@ -45,6 +45,16 @@ jobs:
         with:
           name: frontend-dist
           path: frontend/dist
+      - uses: actions/setup-node@v4
+        if: matrix.arch == 'amd64'
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install process test dependencies
+        if: matrix.arch == 'amd64'
+        run: npm ci --ignore-scripts
+        working-directory: frontend
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
