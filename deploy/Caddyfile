@@ -1,5 +1,7 @@
 hub.example.com {
     reverse_proxy 127.0.0.1:8088 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {hostport}
         flush_interval -1
         stream_timeout 24h
     }

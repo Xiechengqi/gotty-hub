@@ -4,7 +4,7 @@
 
 管理员用户名固定为 `admin`，不可通过Web注册或CLI改名。首次完全不带参数启动 `gotty-hub` 会在终端隐藏输入管理员密码；空白密码重新询问，只需输入一次，无确认步骤。首次无参数启动始终执行引导；自动化环境使用 `serve` 或显式参数。
 
-服务默认监听 `0.0.0.0:8088`，`HUB_LISTEN` 可覆盖。默认按 HTTP 请求 Host 做同源校验，可直接用服务器 IP 或域名登录；`HUB_ORIGIN` 可显式固定 HTTP(S) 根地址，HTTPS 反向代理设为实际外部地址。来源不匹配会提示访问地址与配置不一致，不再显示通用权限错误。
+服务默认监听 `0.0.0.0:8088`，`HUB_LISTEN` 可覆盖。默认支持直接 HTTP 和可信代理后的 HTTPS；根据真实 socket 对端决定是否采信单值 `X-Forwarded-Proto` / `X-Forwarded-Host`，不使用 X-Forwarded-For 判断信任。默认仅信任回环地址，其他代理需配置 IP/CIDR；完整示例见 [OPERATIONS.md](OPERATIONS.md)。
 
 ```sh
 ./gotty-hub
@@ -22,6 +22,18 @@ config按要求保存原始admin密码：
 ```json
 {"password":"YOUR_ADMIN_PASSWORD"}
 ```
+
+可选网络设置也保存于同一 config，不增加首次密码引导项：
+
+```json
+{
+  "password": "YOUR_ADMIN_PASSWORD",
+  "origin": "https://hub.example.com",
+  "trusted_proxies": ["127.0.0.1/32", "::1/128"]
+}
+```
+
+`origin` 优先级为 `--origin` > `HUB_ORIGIN` > config > 自动识别，`--origin auto` 清除固定地址。可信代理优先级为 `--trusted-proxies`（逗号分隔）> `HUB_TRUSTED_PROXIES` > config 的 `trusted_proxies` 数组 > 回环默认值；`none` 或空数组禁用转发头。启动覆盖只对本次进程生效，`config` 子命令保存生效的参数；`check` 同时校验网络设置。Web 修改管理员密码保留这些字段。
 
 config权限0600、目录0700。数据库保存Argon2id哈希。Web修改admin密码同时保存config；下次启动如仍有CLI或环境覆盖，以覆盖值为准。通过stdin启动也支持后台exec重启，不会重复读取已耗尽的管道。
 
@@ -57,7 +69,7 @@ admin登录后从右上角齿轮进入“管理后台”。普通用户API访问
 - 升级/重启：固定GitHub仓库的最新Release、进度和互斥操作；继续保留系统操作确认。
 - 日志：当前日志末尾最多128KiB，3秒刷新，保留最近7个日志文件；不记录密码、Cookie、设备秘密或终端负载。
 
-重启使用Unix exec，保留PID、启动参数及环境，给现有连接3秒退出。PTY在GoTTY侧运行，设备重新连接后浏览器恢复访问。
+重启使用Unix exec，保留PID、启动参数及环境；`--password-stdin` 的有效密码通过环境带入，避免重复读取已耗尽管道。Ctrl-C / SIGTERM 和后台重启共用取消流程，主动结束 SSE、WebSocket、清理任务及未完成升级。连接排空最多3秒，数据库关闭、日志刷新及运行时清理合计总上限5秒；达到总期限强制退出码124，第二次退出信号立即强制退出码130。正常退出码0。退出信号覆盖待执行的重启；不撤销设备身份或用户会话，GoTTY侧PTY继续运行。
 
 升级仅下载 `Xiechengqi/gotty-hub` 的发布资产，最大256MiB，验证SHA256及 `--version`，拒绝低于当前程序版本的资产。替换前保存SQLite一致性备份及旧程序，再原子替换并重启。GitHub API受限时回退公开Release页面。容器通常使用镜像升级；程序目录不可写时在线替换会失败并保留原程序。
 
@@ -70,7 +82,7 @@ admin登录后从右上角齿轮进入“管理后台”。普通用户API访问
 `.github/workflows/build-release.yml` 参考miao的前端→双架构构建→发布流程：
 
 1. 推送main、推送v*标签或手动dispatch触发。
-2. 前端构建、浏览器UI回归；Rust格式/Clippy/单测/配置引导测试。
+2. 前端构建、浏览器UI回归；Rust格式/Clippy/单测/配置引导测试；独立进程的HTTPS反代、WSS/SSE、信号退出及exec重启回归。
 3. Zig交叉编译Linux amd64/arm64静态musl单文件。
 4. 输出两个binary及各自SHA256文件，GitHub Actions内置GITHUB_TOKEN发布Release。
 5. 所有触发方式统一发布名为 `latest`、标签为 `latest` 的 Release；校验产物后将标签更新到当前提交，重复发布覆盖同名 binary 和 SHA256 文件。工作流串行执行，发布说明记录实际 commit，并提供下载到 `/usr/local/bin` 后执行 `chmod +x` 的安装命令。

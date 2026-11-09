@@ -1,7 +1,7 @@
-use crate::{security::*, App};
+use crate::{origin::PublicOrigin, security::*, App};
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
     http::HeaderMap,
@@ -49,6 +49,12 @@ pub async fn device_upgrade(
     h: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse> {
+    if app.shutdown.is_stopping() {
+        return Err(Error(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "server_shutting_down",
+        ));
+    }
     let id = h
         .get("x-instance-id")
         .and_then(|v| v.to_str().ok())
@@ -79,14 +85,22 @@ pub async fn device_upgrade(
         .execute(&app.db)
         .await?;
     }
+    let tracked = app.shutdown.tasks().token();
     Ok(ws
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| device(app, id, socket)))
+        .on_upgrade(move |socket| async move {
+            let _tracked = tracked;
+            device(app, id, socket).await;
+        }))
 }
 async fn device(app: App, id: String, mut socket: WebSocket) {
-    let hello = tokio::time::timeout(Duration::from_secs(5), socket.recv()).await;
-    let Ok(Some(Ok(Message::Text(text)))) = hello else {
+    let hello = app
+        .shutdown
+        .until_stopped(tokio::time::timeout(Duration::from_secs(5), socket.recv()))
+        .await;
+    let Some(Ok(Some(Ok(Message::Text(text))))) = hello else {
+        close_socket(&app, &mut socket).await;
         return;
     };
     let Ok(frame) = serde_json::from_str::<Frame>(&text) else {
@@ -117,6 +131,7 @@ async fn device(app: App, id: String, mut socket: WebSocket) {
     let (mut sink, mut source) = socket.split();
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
     let mut last = tokio::time::Instant::now();
+    app.shutdown.until_stopped(async {
     loop {
         tokio::select! {
          message=rx.recv()=>{let Some(f)=message else{break};let stop=f.kind=="revoked"||f.kind=="superseded";if tokio::time::timeout(Duration::from_secs(10),sink.send(Message::Text(serde_json::to_string(&f).unwrap()))).await.map(|v|v.is_err()).unwrap_or(true)||stop{break}},
@@ -150,6 +165,8 @@ async fn device(app: App, id: String, mut socket: WebSocket) {
          }
         }
     }
+    }).await;
+    close_socket(&app, &mut sink).await;
     let mut devices = app.devices.lock().await;
     if devices.get(&id).map(|d| d.generation.as_str()) == Some(&generation) {
         devices.remove(&id);
@@ -161,20 +178,34 @@ pub async fn browser_upgrade(
     State(app): State<App>,
     Path(id): Path<String>,
     h: HeaderMap,
+    origin: PublicOrigin,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse> {
-    check_origin(&app, &h, true)?;
+    if app.shutdown.is_stopping() {
+        return Err(Error(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "server_shutting_down",
+        ));
+    }
+    origin.check(&h, true)?;
     let s = session(&app, &h).await?;
     limit(&app, format!("upgrade:{}", s.key), 120).await?;
+    let tracked = app.shutdown.tasks().token();
     Ok(ws
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| browser(app, id, s, socket)))
+        .on_upgrade(move |socket| async move {
+            let _tracked = tracked;
+            browser(app, id, s, socket).await;
+        }))
 }
 async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
-    let Ok(Some(Ok(Message::Text(t)))) =
-        tokio::time::timeout(Duration::from_secs(5), socket.recv()).await
-    else {
+    let hello = app
+        .shutdown
+        .until_stopped(tokio::time::timeout(Duration::from_secs(5), socket.recv()))
+        .await;
+    let Some(Ok(Some(Ok(Message::Text(t))))) = hello else {
+        close_socket(&app, &mut socket).await;
         return;
     };
     let Ok(auth) = serde_json::from_str::<Value>(&t) else {
@@ -183,17 +214,16 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
     let Some(raw) = auth["ticket"].as_str() else {
         return;
     };
+    let setup = app.shutdown.until_stopped(async {
     let row=sqlx::query("DELETE FROM tickets WHERE token=? AND session=? AND instance=? AND expires>? RETURNING version").bind(hash(raw)).bind(&s.key).bind(&id).bind(now()).fetch_optional(&app.db).await.ok().flatten();
-    let Some(row) = row else { return };
+    let row = row?;
     let version: i64 = row.get("version");
-    let Some((role, _)) = access(&app, &s, &id, version).await else {
-        return;
-    };
+    let (role, _) = access(&app, &s, &id, version).await?;
     let device = app.devices.lock().await.get(&id).cloned();
-    let Some(device) = device else { return };
+    let device = device?;
     let channel = auth["channel"].as_str().unwrap_or("terminal");
     if !["terminal", "asr"].contains(&channel) {
-        return;
+        return None;
     }
     let asr = channel == "asr";
     if asr
@@ -201,8 +231,14 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
             || device.capabilities["asr"] != true
             || device.capabilities["write"] != true)
     {
-        return;
+        return None;
     }
+    Some((version, role, device, asr, channel))
+    }).await.flatten();
+    let Some((version, role, device, asr, channel)) = setup else {
+        close_socket(&app, &mut socket).await;
+        return;
+    };
     let stream = token();
     let (tx, mut rx) = mpsc::channel::<Message>(QUEUE);
     {
@@ -217,6 +253,7 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
     let mut check = tokio::time::interval(Duration::from_millis(500));
     let started = tokio::time::Instant::now();
     let mut audio_bytes = 0usize;
+    app.shutdown.until_stopped(async {
     loop {
         tokio::select! {
              _=check.tick()=>{
@@ -260,9 +297,21 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
              }
             }
     }
+    }).await;
     device.streams.lock().await.remove(&stream);
-    let _ = device.tx.try_send(Frame::new("close", &stream, json!({})));
-    let _ = sink.send(Message::Close(None)).await;
+    if !app.shutdown.is_stopping() {
+        let _ = device.tx.try_send(Frame::new("close", &stream, json!({})));
+    }
+    close_socket(&app, &mut sink).await;
+}
+// A peer that stops reading must never hold the shutdown drain open.
+async fn close_socket<S: futures_util::Sink<Message> + Unpin>(app: &App, sink: &mut S) {
+    let frame = app.shutdown.is_stopping().then(|| CloseFrame {
+        code: app.shutdown.close_code(),
+        reason: "Hub stopping".into(),
+    });
+    let _ =
+        tokio::time::timeout(Duration::from_millis(200), sink.send(Message::Close(frame))).await;
 }
 fn valid_control(role: &str, control: &Value) -> bool {
     role == "owner"

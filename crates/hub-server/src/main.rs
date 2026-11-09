@@ -3,28 +3,29 @@ mod api;
 mod assets;
 mod config;
 mod gateway;
+mod origin;
 mod security;
+mod shutdown;
 use axum::{
     middleware,
     routing::{delete, get, post, put},
     Router,
 };
 use sqlx::sqlite::SqlitePoolOptions;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::IntoFuture, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tower_http::services::{ServeDir, ServeFile};
 #[derive(Clone)]
 pub struct App {
     pub admin: Arc<admin::Admin>,
     pub db: sqlx::SqlitePool,
-    pub origin: Option<String>,
-    pub secure: bool,
+    pub addresses: origin::Policy,
+    pub shutdown: shutdown::Shutdown,
     pub devices: Arc<Mutex<HashMap<String, gateway::Device>>>,
     pub rates: Arc<Mutex<HashMap<String, (u64, u32)>>>,
     pub http: reqwest::Client,
 }
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let Some(runtime) = config::load()? else {
         return Ok(());
     };
@@ -35,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         .filename_prefix("hub.log")
         .max_log_files(7)
         .build(&log_dir)?;
-    let (writer, _log_guard) = tracing_appender::non_blocking(log);
+    let (writer, log_guard) = tracing_appender::non_blocking(log);
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new("gotty_hub=info"))
@@ -46,11 +47,41 @@ async fn main() -> anyhow::Result<()> {
                 .with_writer(writer),
         )
         .init();
-    let origin = std::env::var("HUB_ORIGIN")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| config::parse_origin(&value))
-        .transpose()?;
+    let shutdown = shutdown::Shutdown::new();
+    let deadline = shutdown.install_deadline();
+    let executor = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let result = executor.block_on(async {
+        let _signals = shutdown::listen(shutdown.clone())?;
+        serve(runtime, shutdown.clone()).await
+    });
+    if shutdown.is_stopping() {
+        tracing::info!(phase=?shutdown.phase(), "Hub cleanup complete");
+    }
+    // Keep the signal task alive while flushing logs. The process watchdog also
+    // bounds this destructor and runtime shutdown, including blocking workers.
+    drop(log_guard);
+    executor.shutdown_timeout(
+        shutdown
+            .remaining(shutdown::TOTAL_LIMIT)
+            .min(Duration::from_millis(250)),
+    );
+    let restarting = shutdown.phase() == shutdown::Phase::Restart;
+    drop(deadline);
+    if let Some((executable, password)) = result? {
+        if restarting {
+            return admin::exec_restart(&executable, &password);
+        }
+    }
+    Ok(())
+}
+
+async fn serve(
+    runtime: config::Runtime,
+    shutdown: shutdown::Shutdown,
+) -> anyhow::Result<Option<(std::path::PathBuf, String)>> {
+    let addresses = origin::Policy::new(&runtime.config)?;
     let url = std::env::var("HUB_DATABASE").unwrap_or_else(|_| {
         format!(
             "sqlite://{}?mode=rwc",
@@ -84,10 +115,8 @@ async fn main() -> anyhow::Result<()> {
     let app = App {
         admin: Arc::new(admin::Admin::new(runtime)),
         db,
-        secure: origin
-            .as_deref()
-            .is_some_and(|value| value.starts_with("https://")),
-        origin,
+        addresses,
+        shutdown: shutdown.clone(),
         devices: Default::default(),
         rates: Default::default(),
         http: reqwest::Client::builder()
@@ -99,9 +128,9 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Password reset failed: {}", e.1))?;
         println!("Password reset: {username}");
-        return Ok(());
+        return Ok(None);
     }
-    tokio::spawn(api::cleanup_worker(app.clone()));
+    shutdown.tasks().spawn(api::cleanup_worker(app.clone()));
     let routes = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(api::ready))
@@ -160,61 +189,55 @@ async fn main() -> anyhow::Result<()> {
     } else {
         routes.fallback(assets::embedded)
     };
-    let secure = app.secure;
-    let routes=routes.layer(axum::middleware::from_fn(move|request:axum::extract::Request,next:axum::middleware::Next|async move{
-      let mut response=next.run(request).await;
-      let headers=response.headers_mut();
-      headers.insert("content-security-policy","default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
-      headers.insert("x-content-type-options","nosniff".parse().unwrap());
-      headers.insert("referrer-policy","no-referrer".parse().unwrap());
-      headers.insert("permissions-policy","microphone=(self)".parse().unwrap());
-      if secure{headers.insert("strict-transport-security","max-age=31536000".parse().unwrap());}
-      response
-    }));
+    let routes = routes.layer(middleware::from_fn_with_state(app.clone(), origin::headers));
     let listener = tokio::net::TcpListener::bind(
         std::env::var("HUB_LISTEN").unwrap_or_else(|_| "0.0.0.0:8088".into()),
     )
     .await?;
     tracing::info!(address=%listener.local_addr()?,"Hub listening");
-    let restarting = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let flag = restarting.clone();
-    let admin = app.admin.clone();
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        #[cfg(unix)]
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("SIGTERM handler");
-        #[cfg(unix)]
-        let terminated = async {
-            terminate.recv().await;
-        };
-        #[cfg(not(unix))]
-        let terminated = std::future::pending::<()>();
-        tokio::select! {_ = tokio::signal::ctrl_c()=>{},_ = terminated=>{},_ = admin.restart.notified()=>{flag.store(true,std::sync::atomic::Ordering::SeqCst);}}
-        let _ = stop_tx.send(());
-    });
+    let stop = shutdown.clone();
     let server = axum::serve(
         listener,
         routes.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        let _ = stop_rx.await;
+    .with_graceful_shutdown(async move {
+        stop.cancelled().await;
     });
-    let admin = app.admin.clone();
-    let shutdown = async {
-        while !restarting.load(std::sync::atomic::Ordering::SeqCst) {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let mut server = Box::pin(server.into_future());
+    let mut failure = None;
+    let completed = tokio::select! {
+        result = &mut server => { failure = result.err(); if !shutdown.is_stopping() { shutdown.exit(); } true }
+        _ = shutdown.cancelled() => false,
     };
-    tokio::select! {result=server=>{result?;},_ = shutdown=>{}}
-    if restarting.load(std::sync::atomic::Ordering::SeqCst) {
-        app.db.close().await;
-        tracing::info!("Restarting Hub");
-        drop(_log_guard);
-        return admin::exec_restart(&app.admin.executable, &app.admin.runtime.config.password);
+    shutdown.tasks().close();
+    let drain = async {
+        if !completed {
+            failure = server.await.err();
+        }
+        shutdown.tasks().wait().await;
+    };
+    if tokio::time::timeout(shutdown.remaining(shutdown::DRAIN_LIMIT), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!("Connection drain exceeded 3 seconds; remaining tasks will be cancelled");
     }
-    let _ = admin;
-    Ok(())
+    // Reserve time for the bounded logger flush and runtime teardown as well.
+    let cleanup_budget = shutdown
+        .remaining(shutdown::TOTAL_LIMIT)
+        .saturating_sub(Duration::from_millis(1500));
+    let cleanup = async {
+        app.devices.lock().await.clear();
+        app.db.close().await;
+    };
+    if tokio::time::timeout(cleanup_budget, cleanup).await.is_err() {
+        tracing::warn!("Database cleanup reached its shutdown deadline");
+    }
+    if let Some(error) = failure {
+        return Err(error.into());
+    }
+    Ok(Some((
+        app.admin.executable.clone(),
+        app.admin.runtime.config.password.clone(),
+    )))
 }

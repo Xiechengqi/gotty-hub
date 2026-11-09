@@ -10,11 +10,34 @@ docker compose --env-file /private/hub.env config
 docker compose --env-file /private/hub.env up -d --build
 ```
 
-Hub binary 默认监听 `0.0.0.0:8088`，未设置 `HUB_ORIGIN` 时按请求 Host 校验 HTTP 同源，可直接使用 `http://SERVER_IP:8088` 登录。`HUB_ORIGIN` 可显式固定地址；HTTPS 反向代理需设为实际外部地址。`deploy/Caddyfile` 提供宿主机反向代理示例，替换域名并配置 DNS；采用该方案时可设置 `HUB_LISTEN=127.0.0.1:8088`，Compose 也仅向宿主机回环发布8088。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要把终端请求缓存或记录请求体。Hub 不信任任意 X-Forwarded-For，代理后的公共认证限流按代理地址聚合，扩大规模前需单独设计可信代理策略。
+Hub binary 默认监听 `0.0.0.0:8088`，直接 HTTP 访问根据 Host 校验同源；可信代理后的 HTTPS 则根据代理覆盖的 `X-Forwarded-Proto` / `X-Forwarded-Host` 识别外部地址，登录、`hub_address`、Secure Cookie、HSTS 及浏览器 WS 校验共用同一结果。
+
+默认可信代理为 `127.0.0.0/8`、`::1/128`，信任依据是实际 socket 对端 IP（包含IPv4映射IPv6的规范化），不依据 X-Forwarded-For。容器网桥/远程代理应填写实际代理 IP 或最小 CIDR，例如 `--trusted-proxies 172.20.0.2/32`；这会替换默认信任列表，需要同时信任回环时将它一起列出。不要对公网配置 `0.0.0.0/0`。
+
+只支持单值 X-Forwarded-Proto（http/https）和 X-Forwarded-Host。最后一跳可信代理必须覆盖客户端的同名头，不能追加逗号链；重复/逗号链返回400 `invalid_proxy_headers`。不可信对端的转发头完全忽略；不解析 RFC Forwarded。多层代理需由最后一跳输出确定的公共地址，或用 `--origin` / `HUB_ORIGIN` 固定外部根地址，固定值优先于推断。`--origin auto` 清除旧的固定值。
+
+`deploy/Caddyfile` 已显式覆盖这两个头，替换域名并配置 DNS 即可用于本机 HTTPS 反代；binary 可设置 `HUB_LISTEN=127.0.0.1:8088`。Compose 的宿主机端口仅向回环发布，但容器内实际对端通常为网桥IP；模板继续要求显式 HUB_ORIGIN，以免依赖容器网段猜测。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要缓存终端请求或记录请求体。认证限流继续按实际连接IP聚合。
+
+Nginx 的 `http` 段添加 `map $http_upgrade $connection_upgrade { default upgrade; '' close; }`，在已配置 TLS 证书的 server 中使用：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8088;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;
+    proxy_read_timeout 24h;
+}
+```
 
 | 配置 | 用途 |
 |---|---|
-| HUB_ORIGIN | 可选固定外部 HTTP(S) origin，不带路径；默认按请求 Host 校验 HTTP 同源 |
+| HUB_ORIGIN | 可选固定外部 HTTP(S) origin，不带路径；低于 --origin，高于 config；auto 清除固定值 |
+| HUB_TRUSTED_PROXIES | 可信代理 IP/CIDR，逗号分隔；低于 --trusted-proxies，高于 config；默认回环，none 禁用 |
 | HUB_LISTEN | 默认 0.0.0.0:8088，可显式设为 127.0.0.1:8088 |
 | HUB_DATABASE | SQLite URL，默认 ~/.gotty-hub/hub.db |
 | HUB_ASSETS | 可选外部静态资源目录；默认使用 binary 内嵌资源 |
@@ -28,10 +51,16 @@ GoTTY 需对应 Connector 版本，Hub 功能默认开启，可用 `--hub-disabl
 - `/healthz`：进程存活。`/readyz`：数据库查询。
 - `/api/v1/diagnostics`：需要 Cookie 会话的汇总信息，不包含终端负载或凭据。
 - 实例离线：检查 GoTTY 到 Hub 的 DNS/TLS/防火墙及 WSS。设备每15秒心跳，45秒失联；自动退避重连。Hub 重启时先显示离线，认证重连后恢复。
-- 浏览器401/403：`origin_mismatch` 表示访问地址与显式 HUB_ORIGIN 不一致或跨域请求；其他情况检查 Cookie、CSRF、会话到期及实例授权。
+- 浏览器401/403：`origin_mismatch` 表示浏览器 Origin 与解析出的外部地址不同。先检查旧的 CLI/环境/config 固定值，再检查代理真实对端是否在可信列表、代理是否覆盖上述两个头。日志只记录规范化的预期/实际 origin，不记录密码或会话。`invalid_proxy_headers` 表示可信代理发送了无效或含歧义的头；密码错误为401 `invalid_credentials`。
 - 文件：服务器安装 rz/sz；单文件64MiB，观察者禁用。取消后终端应可继续输入。
 - ASR：仅使用 GoTTY 配置的 ASRBackend；HTTPS 下授予麦克风权限；每流120秒/16MiB。不开放通用上游 URL。
 - 磁盘满/数据库错误：停止接入写入、释放空间，检查 SQLite 完整性；错误不会授予新权限。部署监控应包含磁盘剩余、进程内存、WS 断开率。
+
+## 停止与重启
+
+Ctrl-C（SIGINT）、SIGTERM 和后台重启共用退出流程：停止接入新请求（503 `server_shutting_down`）、结束 SSE 的响应体，主动关闭设备和浏览器 WS（普通退出1001，重启1012），取消清理任务/下载任务。连接排空预算3秒；数据库、日志及 Tokio 运行时清理也受5秒总期限约束。独立看门线程覆盖异步任务和日志析构；超限退出码124，再次发送退出信号立即退出码130。正常排空退出码0。退出信号优先于待执行重启，防止 Ctrl-C 后重新拉起。
+
+Hub退出只关闭传输，不发送解绑/替换消息，不删除实例凭据、授权或用户会话；远端 GoTTY PTY 保持运行。GoTTY及浏览器使用既有退避策略重连。升级下载取消会清理暂存文件并终止版本探测子进程；已完成原子替换时不自动回退新版程序。强制退出后，下次启动将未完成升级标记为 interrupted。
 
 ## 一致性备份和恢复
 

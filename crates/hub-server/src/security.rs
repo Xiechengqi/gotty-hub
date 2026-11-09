@@ -1,4 +1,4 @@
-use crate::App;
+use crate::{origin::PublicOrigin, App};
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
@@ -116,34 +116,10 @@ pub async fn session(app: &App, headers: &HeaderMap) -> Result<Session> {
         csrf: row.get("csrf"),
     })
 }
-pub fn request_origin(app: &App, headers: &HeaderMap) -> Result<String> {
-    if let Some(origin) = &app.origin {
-        return Ok(origin.clone());
-    }
-    let host = headers
-        .get("host")
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(bad)?;
-    let authority: axum::http::uri::Authority = host.parse().map_err(|_| bad())?;
-    // The built-in listener serves HTTP. TLS proxies can pin their HTTPS origin
-    // with HUB_ORIGIN; untrusted forwarding headers do not change this policy.
-    crate::config::parse_origin(&format!("http://{authority}")).map_err(|_| bad())
-}
-pub fn check_origin(app: &App, headers: &HeaderMap, required: bool) -> Result<()> {
-    let mismatch = || Error(StatusCode::FORBIDDEN, "origin_mismatch");
-    match headers.get("origin") {
-        Some(origin) => {
-            let expected = request_origin(app, headers).map_err(|_| mismatch())?;
-            if origin.to_str().ok() != Some(expected.as_str()) {
-                return Err(mismatch());
-            }
-        }
-        None if required => return Err(mismatch()),
-        None => {}
-    }
-    Ok(())
-}
 pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Response {
+    if app.shutdown.is_stopping() {
+        return Error(StatusCode::SERVICE_UNAVAILABLE, "server_shutting_down").into_response();
+    }
     let method = request.method().clone();
     let path = request.uri().path();
     let public = matches!(
@@ -163,7 +139,19 @@ pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Resp
             return e.into_response();
         }
     }
-    if let Err(error) = check_origin(&app, request.headers(), false) {
+    let public_origin = request
+        .extensions()
+        .get::<PublicOrigin>()
+        .cloned()
+        .map(Ok)
+        .unwrap_or_else(|| {
+            let peer = request
+                .extensions()
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|v| v.0);
+            app.addresses.resolve(request.headers(), peer)
+        });
+    if let Err(error) = public_origin.and_then(|origin| origin.check(request.headers(), false)) {
         return error.into_response();
     }
     if method != axum::http::Method::GET && method != axum::http::Method::HEAD {
@@ -206,9 +194,9 @@ pub async fn login_checked(
     app: &App,
     user_id: &str,
     expected_password: &str,
-    request_headers: &HeaderMap,
+    public_origin: &PublicOrigin,
 ) -> Result<(HeaderMap, Json<Value>)> {
-    let origin = request_origin(app, request_headers)?;
+    let origin = &public_origin.0;
     let raw = token();
     let csrf = token();
     let inserted=sqlx::query("INSERT INTO sessions(token,user_id,csrf,expires) SELECT ?,id,?,? FROM users WHERE id=? AND password_hash=?")
@@ -242,7 +230,7 @@ pub async fn login_checked(
         .parse()
         .unwrap(),
     );
-    Ok((headers, Json(account(&s, &origin))))
+    Ok((headers, Json(account(&s, origin))))
 }
 pub async fn sync_admin(db: &sqlx::SqlitePool, password: &str) -> anyhow::Result<()> {
     let existing: Option<(String, String)> =
@@ -282,6 +270,9 @@ pub async fn sync_admin(db: &sqlx::SqlitePool, password: &str) -> anyhow::Result
     Ok(())
 }
 static PASSWORD_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+// Independent test runtimes share the production concurrency limiter.
+#[cfg(test)]
+pub(crate) static PASSWORD_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub async fn password_hash(password: String) -> Result<String> {
     if !crate::config::valid_admin_password(&password) {
         return Err(Error(StatusCode::BAD_REQUEST, "password_length"));
@@ -337,6 +328,7 @@ mod tests {
     }
     #[tokio::test]
     async fn password_roundtrip() {
+        let _serial = PASSWORD_TEST_LOCK.lock().await;
         let h = password_hash("a strong test password".into())
             .await
             .unwrap();

@@ -2,11 +2,8 @@ use crate::{security::*, App};
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-use tokio::sync::{Mutex, Notify};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::Mutex;
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Update {
     pub active: bool,
@@ -23,7 +20,6 @@ pub struct Admin {
     pub executable: std::path::PathBuf,
     pub started: std::time::Instant,
     pub operation: AtomicBool,
-    pub restart: Notify,
     pub update: Mutex<Update>,
     pub credentials: Mutex<()>,
 }
@@ -48,7 +44,6 @@ impl Admin {
             runtime,
             started: std::time::Instant::now(),
             operation: AtomicBool::new(false),
-            restart: Notify::new(),
             update: Mutex::new(previous),
             credentials: Mutex::new(()),
         }
@@ -111,17 +106,29 @@ pub async fn logs(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
 }
 pub async fn restart(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     let s = require(&app, &h).await?;
+    if app.shutdown.is_stopping() {
+        return Err(Error(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "server_shutting_down",
+        ));
+    }
     if app.admin.operation.swap(true, Ordering::SeqCst) {
         return Err(Error(axum::http::StatusCode::CONFLICT, "operation_active"));
     }
     crate::api::audit(&app, &s.username, "system_restart", "").await;
-    schedule_restart(app.admin.clone());
+    schedule_restart(&app);
     Ok(Json(json!({"ok":true})))
 }
-fn schedule_restart(admin: Arc<Admin>) {
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
-        admin.restart.notify_one();
+fn schedule_restart(app: &App) {
+    let shutdown = app.shutdown.clone();
+    app.shutdown.tasks().spawn(async move {
+        if shutdown
+            .until_stopped(tokio::time::sleep(std::time::Duration::from_millis(700)))
+            .await
+            .is_some()
+        {
+            shutdown.restart();
+        }
     });
 }
 const REPO: &str = "Xiechengqi/gotty-hub";
@@ -201,6 +208,12 @@ async fn set_update(app: &App, change: impl FnOnce(&mut Update)) {
 }
 pub async fn upgrade(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     let s = require(&app, &h).await?;
+    if app.shutdown.is_stopping() {
+        return Err(Error(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "server_shutting_down",
+        ));
+    }
     if app.admin.operation.swap(true, Ordering::SeqCst) {
         return Err(Error(axum::http::StatusCode::CONFLICT, "operation_active"));
     }
@@ -213,21 +226,32 @@ pub async fn upgrade(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>
     })
     .await;
     crate::api::audit(&app, &s.username, "system_upgrade", "").await;
-    tokio::spawn(async move {
-        match install(&app).await {
-            Ok(()) => {
-                set_update(&app, |s| s.stage = "restarting".into()).await;
-                schedule_restart(app.admin.clone())
-            }
-            Err(e) => {
-                tracing::warn!("Upgrade failed: {e}");
-                set_update(&app, |s| {
-                    s.active = false;
-                    s.stage = "failed".into();
-                    s.error = Some("Upgrade failed; inspect system logs".into())
-                })
-                .await;
-                app.admin.operation.store(false, Ordering::SeqCst);
+    app.shutdown.tasks().spawn({
+        let app = app.clone();
+        async move {
+            match app.shutdown.until_stopped(install(&app)).await {
+                Some(Ok(())) => {
+                    set_update(&app, |s| s.stage = "restarting".into()).await;
+                    schedule_restart(&app)
+                }
+                None => {
+                    set_update(&app, |s| {
+                        s.active = false;
+                        s.stage = "interrupted".into();
+                    })
+                    .await;
+                    app.admin.operation.store(false, Ordering::SeqCst);
+                }
+                Some(Err(e)) => {
+                    tracing::warn!("Upgrade failed: {e}");
+                    set_update(&app, |s| {
+                        s.active = false;
+                        s.stage = "failed".into();
+                        s.error = Some("Upgrade failed; inspect system logs".into())
+                    })
+                    .await;
+                    app.admin.operation.store(false, Ordering::SeqCst);
+                }
             }
         }
     });
@@ -288,7 +312,7 @@ async fn install(app: &App) -> anyhow::Result<()> {
     crate::config::private_dir(&directory)?;
     let current = app.admin.executable.clone();
     let staging = current.with_file_name(format!(".gotty-hub-{}", token()));
-    let result = async {
+    async {
         let response = app
             .http
             .get(binary_url)
@@ -305,11 +329,15 @@ async fn install(app: &App) -> anyhow::Result<()> {
             s.total = total
         })
         .await;
-        let mut options = tokio::fs::OpenOptions::new();
+        let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
-        options.mode(0o700);
-        let mut file = options.open(&staging).await?;
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o700);
+        }
+        let mut file = tokio::fs::File::from_std(options.open(&staging)?);
+        let _staging_guard = StagingFile(staging.clone());
         let mut stream = response.bytes_stream();
         let mut digest = Sha256::new();
         let mut count = 0u64;
@@ -332,6 +360,7 @@ async fn install(app: &App) -> anyhow::Result<()> {
             std::time::Duration::from_secs(10),
             tokio::process::Command::new(&staging)
                 .arg("--version")
+                .kill_on_drop(true)
                 .output(),
         )
         .await??;
@@ -362,14 +391,21 @@ async fn install(app: &App) -> anyhow::Result<()> {
             tokio::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).await?;
             tokio::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o600)).await?;
         }
-        tokio::fs::rename(&staging, &current).await?;
+        anyhow::ensure!(
+            !app.shutdown.is_stopping(),
+            "upgrade interrupted by shutdown"
+        );
+        // No await between the final cancellation check and atomic replacement.
+        std::fs::rename(&staging, &current)?;
         Ok::<_, anyhow::Error>(())
     }
-    .await;
-    if result.is_err() {
-        let _ = tokio::fs::remove_file(&staging).await;
+    .await
+}
+struct StagingFile(std::path::PathBuf);
+impl Drop for StagingFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
-    result
 }
 fn supported_release(output: &str) -> anyhow::Result<()> {
     fn version(value: &str) -> Option<(u64, u64, u64)> {

@@ -19,13 +19,21 @@ def login(origin,password,request_origin=None):
   with urllib.request.urlopen(request) as response:return response.status,json.load(response),response.headers.get('Set-Cookie').split(';')[0]
  except urllib.error.HTTPError as error:return error.code,json.load(error),''
 with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
- env={k:v for k,v in os.environ.items() if k not in ['HUB_PASSWORD','HUB_ORIGIN','HUB_LISTEN','HUB_DEV','HUB_DATABASE','HUB_ASSETS']};env['HUB_HOME']=tmp+'/home'
+ env={k:v for k,v in os.environ.items() if k not in ['HUB_PASSWORD','HUB_ORIGIN','HUB_TRUSTED_PROXIES','HUB_LISTEN','HUB_DEV','HUB_DATABASE','HUB_ASSETS']};env['HUB_HOME']=tmp+'/home'
  result=subprocess.run([binary],env=env,stdin=subprocess.DEVNULL,capture_output=True);assert result.returncode!=0 and b'password is required' in result.stderr
  subprocess.run([binary,'config','--password','file password'],env=env,check=True,capture_output=True)
  config=pathlib.Path(env['HUB_HOME'],'config');assert json.loads(config.read_text())=={'password':'file password'};assert config.stat().st_mode&0o777==0o600
  subprocess.run([binary,'config','--password','cli password'],env={**env,'HUB_PASSWORD':'env password'},check=True,capture_output=True);assert json.loads(config.read_text())['password']=='cli password'
  subprocess.run([binary,'config','--password-stdin'],input=b'  spaced password  \n',env=env,check=True,capture_output=True);assert json.loads(config.read_text())['password']=='  spaced password  '
  result=subprocess.run([binary,'serve','--password',' '],env=env,stdin=subprocess.DEVNULL,capture_output=True);assert result.returncode!=0
+ # Optional network options use CLI > environment > file without another setup prompt.
+ network={**env,'HUB_HOME':tmp+'/network','HUB_ORIGIN':'https://env.example','HUB_TRUSTED_PROXIES':'192.0.2.0/24'}
+ subprocess.run([binary,'config','--password','network password','--origin','https://CLI.example:443/','--trusted-proxies','127.0.0.1,::1'],env=network,check=True,capture_output=True)
+ network_config=pathlib.Path(network['HUB_HOME'],'config');saved=json.loads(network_config.read_text())
+ assert saved['origin']=='https://cli.example' and saved['trusted_proxies']==['127.0.0.1/32','::1/128']
+ subprocess.run([binary,'config','--origin','auto','--trusted-proxies','none'],env=network,check=True,capture_output=True)
+ saved=json.loads(network_config.read_text());assert 'origin' not in saved and saved['trusted_proxies']==[]
+ assert subprocess.run([binary,'check','--trusted-proxies','invalid'],env=network,capture_output=True).returncode!=0
  fresh={**env,'HUB_PASSWORD':'ignored first launch password','HUB_HOME':tmp+'/interactive','HUB_LISTEN':'127.0.0.1:0'}
  pid,fd=pty.fork()
  if pid==0:os.execve(binary,[binary],fresh)

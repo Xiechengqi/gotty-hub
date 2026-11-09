@@ -1,4 +1,4 @@
-use crate::{gateway, security::*, App};
+use crate::{gateway, origin::PublicOrigin, security::*, App};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -16,7 +16,7 @@ fn field<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
 }
 pub async fn register(
     State(app): State<App>,
-    h: HeaderMap,
+    origin: PublicOrigin,
     Json(v): Json<Value>,
 ) -> Result<impl IntoResponse> {
     let name = username(field(&v, "username")?)?;
@@ -34,11 +34,11 @@ pub async fn register(
         return Err(Error(axum::http::StatusCode::CONFLICT, "username_taken"));
     }
     audit(&app, &name, "register", "").await;
-    login_checked(&app, &id, &encoded, &h).await
+    login_checked(&app, &id, &encoded, &origin).await
 }
 pub async fn password_login(
     State(app): State<App>,
-    h: HeaderMap,
+    origin: PublicOrigin,
     Json(v): Json<Value>,
 ) -> Result<impl IntoResponse> {
     let name = username(field(&v, "username")?)?;
@@ -56,11 +56,11 @@ pub async fn password_login(
             "invalid_credentials",
         ));
     }
-    login_checked(&app, &id, &encoded, &h).await
+    login_checked(&app, &id, &encoded, &origin).await
 }
-pub async fn me(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
+pub async fn me(State(app): State<App>, h: HeaderMap, origin: PublicOrigin) -> Result<Json<Value>> {
     let s = session(&app, &h).await?;
-    Ok(Json(account(&s, &request_origin(&app, &h)?)))
+    Ok(Json(account(&s, &origin.0)))
 }
 pub async fn logout(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     let s = session(&app, &h).await?;
@@ -134,9 +134,14 @@ async fn set_password(
                 "config_write_failed",
             )
         })?;
-        let config = crate::config::Config {
-            password: password.into(),
-        };
+        let mut config: crate::config::Config =
+            serde_json::from_slice(&previous).map_err(|_| {
+                Error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "config_write_failed",
+                )
+            })?;
+        config.password = password.into();
         crate::config::save(
             &config_path,
             &serde_json::to_vec_pretty(&config).map_err(|_| bad())?,
@@ -174,6 +179,7 @@ pub async fn reset_password_local(app: &App, name: &str, password: &str) -> Resu
 pub async fn change_password(
     State(app): State<App>,
     h: HeaderMap,
+    origin: PublicOrigin,
     Json(v): Json<Value>,
 ) -> Result<impl IntoResponse> {
     let s = session(&app, &h).await?;
@@ -185,7 +191,7 @@ pub async fn change_password(
         Some(&s.key),
     )
     .await?;
-    login_checked(&app, &s.user_id, &encoded, &h).await
+    login_checked(&app, &s.user_id, &encoded, &origin).await
 }
 pub async fn preferences(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     let s = session(&app, &h).await?;
@@ -497,36 +503,47 @@ pub(crate) async fn audit(app: &App, actor: &str, action: &str, id: &str) {
 pub async fn events(State(app): State<App>, h: HeaderMap) -> Result<impl IntoResponse> {
     let s = session(&app, &h).await?;
     let stream = futures_util::stream::unfold((app, s), |(app, s)| async move {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let valid: Option<i64> =
-            sqlx::query_scalar("SELECT expires FROM sessions WHERE token=? AND expires>?")
-                .bind(&s.key)
-                .bind(now())
-                .fetch_optional(&app.db)
-                .await
-                .ok()
-                .flatten();
-        valid?;
-        let v = instance_list(&app, &s.user_id).await.ok()?;
-        Some((
-            Ok::<_, std::convert::Infallible>(
-                Event::default().event("instances").data(v.to_string()),
-            ),
-            (app, s),
-        ))
+        let shutdown = app.shutdown.clone();
+        shutdown
+            .until_stopped(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let valid: Option<i64> =
+                    sqlx::query_scalar("SELECT expires FROM sessions WHERE token=? AND expires>?")
+                        .bind(&s.key)
+                        .bind(now())
+                        .fetch_optional(&app.db)
+                        .await
+                        .ok()
+                        .flatten();
+                valid?;
+                let v = instance_list(&app, &s.user_id).await.ok()?;
+                Some((
+                    Ok::<_, std::convert::Infallible>(
+                        Event::default().event("instances").data(v.to_string()),
+                    ),
+                    (app, s),
+                ))
+            })
+            .await
+            .flatten()
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 pub async fn cleanup_worker(app: App) {
-    loop {
-        for table in ["sessions", "tickets"] {
-            let _ = sqlx::query(&format!("DELETE FROM {table} WHERE expires<?"))
-                .bind(now())
-                .execute(&app.db)
-                .await;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-    }
+    while app
+        .shutdown
+        .until_stopped(async {
+            for table in ["sessions", "tickets"] {
+                let _ = sqlx::query(&format!("DELETE FROM {table} WHERE expires<?"))
+                    .bind(now())
+                    .execute(&app.db)
+                    .await;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        })
+        .await
+        .is_some()
+    {}
 }
 
 pub async fn ready(State(app): State<App>) -> Result<Json<Value>> {
@@ -568,12 +585,17 @@ mod tests {
                 home: std::env::temp_dir().join(token()),
                 config: crate::config::Config {
                     password: "test admin password".into(),
+                    ..Default::default()
                 },
                 reset_password: None,
             })),
             db,
-            origin: Some("https://hub.test".into()),
-            secure: true,
+            addresses: crate::origin::Policy::new(&crate::config::Config {
+                origin: Some("https://hub.test".into()),
+                ..Default::default()
+            })
+            .unwrap(),
+            shutdown: crate::shutdown::Shutdown::new(),
             devices: Default::default(),
             rates: Default::default(),
             http: reqwest::Client::new(),
@@ -599,7 +621,8 @@ mod tests {
             .route("/api/v1/me/preferences", put(save_preferences))
             .route("/api/v1/admin/dashboard", get(crate::admin::dashboard))
             .layer(middleware::from_fn_with_state(app.clone(), guard))
-            .with_state(app)
+            .with_state(app.clone())
+            .layer(middleware::from_fn_with_state(app, crate::origin::headers))
     }
 
     fn login_request(host: &str, origin: &str, password: &str) -> Request<Body> {
@@ -616,10 +639,159 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_can_login_at_server_ip_without_configuring_an_origin() {
+    async fn https_proxy_login_uses_the_real_peer_and_one_public_origin_for_cookie_account_and_hsts(
+    ) {
+        let _serial = PASSWORD_TEST_LOCK.lock().await;
         let mut app = app().await;
-        app.origin = None;
-        app.secure = false;
+        app.addresses.fixed = None;
+        let password = "proxy admin password";
+        sync_admin(&app.db, password).await.unwrap();
+        let routes = auth_routes(app.clone());
+        let forwarded = |peer: &str| {
+            let mut request = login_request("127.0.0.1:8088", "https://hub.example", password);
+            request
+                .headers_mut()
+                .insert("x-forwarded-proto", "https".parse().unwrap());
+            request
+                .headers_mut()
+                .insert("x-forwarded-host", "hub.example:443".parse().unwrap());
+            request.extensions_mut().insert(axum::extract::ConnectInfo(
+                peer.parse::<std::net::SocketAddr>().unwrap(),
+            ));
+            request
+        };
+        let response = routes
+            .clone()
+            .oneshot(forwarded("127.0.0.1:12345"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .contains("; Secure"));
+        assert_eq!(
+            response.headers()["strict-transport-security"],
+            "max-age=31536000"
+        );
+        let account: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(account["hub_address"], "https://hub.example");
+        // An untrusted socket cannot grant itself trust using X-Forwarded-For.
+        let mut spoofed = forwarded("192.0.2.2:12345");
+        spoofed
+            .headers_mut()
+            .insert("x-forwarded-for", "127.0.0.1".parse().unwrap());
+        assert_eq!(
+            routes.clone().oneshot(spoofed).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut chained = forwarded("127.0.0.1:12345");
+        chained
+            .headers_mut()
+            .append("x-forwarded-proto", "http".parse().unwrap());
+        assert_eq!(
+            routes.oneshot(chained).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_ends_pending_sse_and_cleanup_without_erasing_sessions_or_bindings() {
+        let app = app().await;
+        let owner = user(&app, "stream-owner").await;
+        let login = login_checked(
+            &app,
+            &owner,
+            "new-hash",
+            &PublicOrigin("https://hub.test".into()),
+        )
+        .await
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "cookie",
+            login.0["set-cookie"]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap(),
+        );
+        let registered = register_instance(State(app.clone()), Json(json!({"username":"stream-owner","name":"stream-device","request_id":token(),"claim":token()}))).await.unwrap().0;
+        let worker = tokio::spawn(cleanup_worker(app.clone()));
+        let response = events(State(app.clone()), headers)
+            .await
+            .unwrap()
+            .into_response();
+        app.shutdown.exit();
+        let bytes = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            to_bytes(response.into_body(), 65536),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(bytes.is_empty());
+        tokio::time::timeout(std::time::Duration::from_millis(300), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sessions")
+                .fetch_one(&app.db)
+                .await
+                .unwrap(),
+            1
+        );
+        let stored: String = sqlx::query_scalar("SELECT device FROM instances WHERE id=?")
+            .bind(registered["instance_id"].as_str().unwrap())
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(stored, hash(registered["credential"].as_str().unwrap()));
+        let response = auth_routes(app)
+            .oneshot(login_request("hub.test", "https://hub.test", "anything"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn admin_password_changes_preserve_persisted_network_configuration() {
+        let _serial = PASSWORD_TEST_LOCK.lock().await;
+        let app = app().await;
+        sync_admin(&app.db, "old password").await.unwrap();
+        let directory = &app.admin.runtime.home;
+        crate::config::private_dir(directory).unwrap();
+        let stored = crate::config::Config {
+            password: "old password".into(),
+            origin: Some("https://hub.example".into()),
+            trusted_proxies: Some(vec!["192.0.2.0/24".into()]),
+        };
+        crate::config::save(
+            &directory.join("config"),
+            &serde_json::to_vec(&stored).unwrap(),
+        )
+        .unwrap();
+        reset_password_local(&app, "admin", "new password")
+            .await
+            .unwrap();
+        let saved: crate::config::Config =
+            serde_json::from_slice(&std::fs::read(directory.join("config")).unwrap()).unwrap();
+        assert_eq!(saved.password, "new password");
+        assert_eq!(saved.origin, stored.origin);
+        assert_eq!(saved.trusted_proxies, stored.trusted_proxies);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn admin_can_login_at_server_ip_without_configuring_an_origin() {
+        let _serial = PASSWORD_TEST_LOCK.lock().await;
+        let mut app = app().await;
+        app.addresses.fixed = None;
         let password = "correct admin test password";
         sync_admin(&app.db, password).await.unwrap();
         let routes = auth_routes(app.clone());
@@ -705,8 +877,7 @@ mod tests {
                 .unwrap();
         assert_eq!(error["error"], "origin_mismatch");
 
-        app.origin = Some("https://hub.example".into());
-        app.secure = true;
+        app.addresses.fixed = Some("https://hub.example".into());
         let response = auth_routes(app)
             .oneshot(login_request(
                 "127.0.0.1:8088",
@@ -728,16 +899,21 @@ mod tests {
     #[tokio::test]
     async fn origin_policy_matches_the_http_host_and_keeps_configured_origins_strict() {
         let mut app = app().await;
-        app.origin = None;
+        app.addresses.fixed = None;
         for host in ["192.0.2.10:8088", "hub.example:8088", "[2001:db8::1]:8088"] {
             let mut headers = HeaderMap::new();
             headers.insert("host", host.parse().unwrap());
             headers.insert("origin", format!("http://{host}").parse().unwrap());
-            assert!(check_origin(&app, &headers, true).is_ok());
+            assert!(app
+                .addresses
+                .resolve(&headers, None)
+                .unwrap()
+                .check(&headers, true)
+                .is_ok());
             headers.insert("x-forwarded-host", "foreign.example".parse().unwrap());
             headers.insert("x-forwarded-proto", "https".parse().unwrap());
             assert_eq!(
-                request_origin(&app, &headers).unwrap(),
+                app.addresses.resolve(&headers, None).unwrap().0,
                 format!("http://{host}")
             );
             for foreign in [
@@ -747,25 +923,51 @@ mod tests {
                 "http://192.0.2.10:8089",
             ] {
                 headers.insert("origin", foreign.parse().unwrap());
-                assert!(check_origin(&app, &headers, true).is_err());
+                assert!(app
+                    .addresses
+                    .resolve(&headers, None)
+                    .unwrap()
+                    .check(&headers, true)
+                    .is_err());
             }
             headers.remove("origin");
-            assert!(check_origin(&app, &headers, false).is_ok());
-            assert!(check_origin(&app, &headers, true).is_err());
+            assert!(app
+                .addresses
+                .resolve(&headers, None)
+                .unwrap()
+                .check(&headers, false)
+                .is_ok());
+            assert!(app
+                .addresses
+                .resolve(&headers, None)
+                .unwrap()
+                .check(&headers, true)
+                .is_err());
         }
-        app.origin = Some("https://hub.example".into());
+        app.addresses.fixed = Some("https://hub.example".into());
         let mut headers = HeaderMap::new();
         headers.insert("host", "127.0.0.1:8088".parse().unwrap());
         headers.insert("origin", "http://127.0.0.1:8088".parse().unwrap());
-        assert!(check_origin(&app, &headers, true).is_err());
+        assert!(app
+            .addresses
+            .resolve(&headers, None)
+            .unwrap()
+            .check(&headers, true)
+            .is_err());
         headers.insert("origin", "https://hub.example".parse().unwrap());
-        assert!(check_origin(&app, &headers, true).is_ok());
+        assert!(app
+            .addresses
+            .resolve(&headers, None)
+            .unwrap()
+            .check(&headers, true)
+            .is_ok());
     }
 
     #[tokio::test]
     async fn public_registration_cannot_create_an_administrator() {
+        let _serial = PASSWORD_TEST_LOCK.lock().await;
         let app = app().await;
-        let result=register(State(app.clone()),HeaderMap::new(),Json(json!({"username":"normal-user","password":"a normal test password","is_admin":true}))).await.unwrap().into_response();
+        let result=register(State(app.clone()),PublicOrigin("https://hub.test".into()),Json(json!({"username":"normal-user","password":"a normal test password","is_admin":true}))).await.unwrap().into_response();
         assert_eq!(result.status(), axum::http::StatusCode::OK);
         let admin: bool =
             sqlx::query_scalar("SELECT is_admin FROM users WHERE username='normal-user'")
@@ -776,7 +978,7 @@ mod tests {
         assert!(matches!(
             register(
                 State(app),
-                HeaderMap::new(),
+                PublicOrigin("https://hub.test".into()),
                 Json(json!({"username":"ADMIN","password":"a normal test password"}))
             )
             .await,
@@ -787,22 +989,35 @@ mod tests {
     async fn login_requires_existing_user_and_current_hash() {
         let app = app().await;
         let id = user(&app, "owner").await;
-        assert!(login_checked(&app, &id, "old-hash", &HeaderMap::new())
-            .await
-            .is_err());
-        assert!(
-            login_checked(&app, "missing", "new-hash", &HeaderMap::new())
-                .await
-                .is_err()
-        );
+        assert!(login_checked(
+            &app,
+            &id,
+            "old-hash",
+            &PublicOrigin("https://hub.test".into())
+        )
+        .await
+        .is_err());
+        assert!(login_checked(
+            &app,
+            "missing",
+            "new-hash",
+            &PublicOrigin("https://hub.test".into())
+        )
+        .await
+        .is_err());
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(&app.db)
             .await
             .unwrap();
         assert_eq!(count, 0);
-        assert!(login_checked(&app, &id, "new-hash", &HeaderMap::new())
-            .await
-            .is_ok());
+        assert!(login_checked(
+            &app,
+            &id,
+            "new-hash",
+            &PublicOrigin("https://hub.test".into())
+        )
+        .await
+        .is_ok());
     }
     #[tokio::test]
     async fn device_registration_requires_registered_user() {

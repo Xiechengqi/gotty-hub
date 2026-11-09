@@ -59,6 +59,7 @@ jobs:
           cargo test --locked
           cargo build --locked
           python3 tests/config.py
+          node tests/proxy-shutdown.cjs
           python3 scripts/check-core.py
       - name: Build standalone binary
         env:

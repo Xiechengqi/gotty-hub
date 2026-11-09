@@ -15,6 +15,12 @@ pub struct Cli {
     pub password: Option<String>,
     #[arg(long, global = true)]
     pub password_stdin: bool,
+    /// Public HTTP(S) origin; use 'auto' to infer it from the request.
+    #[arg(long, global = true)]
+    pub origin: Option<String>,
+    /// Comma-separated proxy IPs/CIDRs; 'none' disables forwarding headers.
+    #[arg(long, global = true)]
+    pub trusted_proxies: Option<String>,
 }
 #[derive(Subcommand)]
 pub enum Command {
@@ -42,6 +48,10 @@ pub enum UserCommand {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub password: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_proxies: Option<Vec<String>>,
 }
 #[derive(Clone)]
 pub struct Runtime {
@@ -60,7 +70,7 @@ pub fn parse_origin(raw: &str) -> Result<String> {
             && url.path() == "/"
             && url.query().is_none()
             && url.fragment().is_none(),
-        "HUB_ORIGIN must be an HTTP(S) origin without credentials, path, query or fragment"
+        "origin must be an HTTP(S) origin without credentials, path, query or fragment"
     );
     Ok(url.origin().ascii_serialization())
 }
@@ -110,6 +120,38 @@ pub fn stdin_password() -> Result<String> {
 pub fn valid_admin_password(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 256
 }
+fn network_options(
+    stored: &Config,
+    cli_origin: Option<String>,
+    env_origin: Option<String>,
+    cli_proxies: Option<String>,
+    env_proxies: Option<String>,
+) -> Result<(Option<String>, Option<Vec<String>>)> {
+    let origin = cli_origin
+        .or(env_origin.filter(|v| !v.trim().is_empty()))
+        .or_else(|| stored.origin.clone());
+    let origin = origin
+        .filter(|v| v != "auto")
+        .map(|v| parse_origin(&v))
+        .transpose()?;
+    let proxies = cli_proxies
+        .or(env_proxies)
+        .map(|value| -> Result<Vec<String>> {
+            if value.trim().is_empty() || value.trim() == "none" {
+                return Ok(vec![]);
+            }
+            value
+                .split(',')
+                .map(|value| Ok(crate::origin::parse_network(value.trim())?.to_string()))
+                .collect()
+        })
+        .transpose()?
+        .or_else(|| stored.trusted_proxies.clone());
+    for proxy in proxies.iter().flatten() {
+        crate::origin::parse_network(proxy)?;
+    }
+    Ok((origin, proxies))
+}
 pub fn load() -> Result<Option<Runtime>> {
     let cli = Cli::parse();
     let home = std::env::var_os("HUB_HOME")
@@ -126,6 +168,13 @@ pub fn load() -> Result<Option<Runtime>> {
     } else {
         Config::default()
     };
+    let (origin, trusted_proxies) = network_options(
+        &stored,
+        cli.origin,
+        std::env::var("HUB_ORIGIN").ok(),
+        cli.trusted_proxies,
+        std::env::var("HUB_TRUSTED_PROXIES").ok(),
+    )?;
     let mut password = if cli.password_stdin {
         stdin_password()?
     } else {
@@ -151,7 +200,11 @@ pub fn load() -> Result<Option<Runtime>> {
         );
         password = rpassword::prompt_password("admin password: ")?;
     }
-    let config = Config { password };
+    let config = Config {
+        password,
+        origin,
+        trusted_proxies,
+    };
     if !existed || matches!(cli.command, Some(Command::Config)) {
         save(&path, &serde_json::to_vec_pretty(&config)?)?;
     }
@@ -230,5 +283,69 @@ mod tests {
         ] {
             assert!(parse_origin(origin).is_err(), "accepted {origin}");
         }
+    }
+
+    #[test]
+    fn network_settings_follow_cli_environment_and_file_precedence_without_new_prompts() {
+        let stored = Config {
+            password: "password".into(),
+            origin: Some("https://file.example".into()),
+            trusted_proxies: Some(vec!["10.0.0.0/24".into()]),
+        };
+        let effective = |cli: Option<&str>, env: Option<&str>, proxies: Option<&str>| {
+            network_options(
+                &stored,
+                cli.map(str::to_owned),
+                env.map(str::to_owned),
+                proxies.map(str::to_owned),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            effective(
+                Some("https://CLI.example:443/"),
+                Some("https://env.example"),
+                None
+            )
+            .0
+            .as_deref(),
+            Some("https://cli.example")
+        );
+        assert_eq!(
+            effective(None, Some("https://env.example"), None)
+                .0
+                .as_deref(),
+            Some("https://env.example")
+        );
+        assert_eq!(effective(None, None, None).0, stored.origin);
+        assert_eq!(effective(None, None, None).1, stored.trusted_proxies);
+        let with_env =
+            network_options(&stored, None, None, None, Some("192.0.2.1".into())).unwrap();
+        assert_eq!(with_env.1, Some(vec!["192.0.2.1/32".into()]));
+        let overridden = network_options(
+            &stored,
+            None,
+            None,
+            Some("none".into()),
+            Some("invalid".into()),
+        )
+        .unwrap();
+        assert_eq!(overridden.1, Some(vec![]));
+        assert!(network_options(&stored, None, None, Some("invalid".into()), None).is_err());
+        assert!(effective(Some("auto"), Some("https://env.example"), None)
+            .0
+            .is_none());
+        assert_eq!(effective(None, None, Some("none")).1, Some(vec![]));
+        assert_eq!(
+            effective(None, None, Some("192.0.2.1,::1")).1,
+            Some(vec!["192.0.2.1/32".into(), "::1/128".into()])
+        );
+        let legacy: Config = serde_json::from_str(r#"{"password":"existing"}"#).unwrap();
+        assert!(legacy.origin.is_none() && legacy.trusted_proxies.is_none());
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap(),
+            serde_json::json!({"password":"existing"})
+        );
     }
 }

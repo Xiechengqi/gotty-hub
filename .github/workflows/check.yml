@@ -17,6 +17,7 @@ jobs:
       - run: npm test
         working-directory: frontend
       - run: cargo test --locked && cargo build --locked && python3 tests/config.py
+      - run: node tests/proxy-shutdown.cjs
       - run: npx playwright install --with-deps chromium
         working-directory: frontend
       - run: npm run test:ui

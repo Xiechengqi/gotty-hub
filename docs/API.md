@@ -1,8 +1,8 @@
 # API 与传输契约 v1
 
-API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "invalid_request|forbidden|origin_mismatch|authentication_required|rate_limit|password_length|invalid_username|username_taken|user_not_found|instance_name_exists|registration_expired|rotation_pending|config_write_failed|database_error" }`，结合 HTTP 状态处理。未知字段不授予权限。OpenAPI 路径目录见 [openapi.json](openapi.json)，设备帧结构见 [connector-v1.schema.json](connector-v1.schema.json)。动态业务校验以服务端及端到端测试为准。
+API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "invalid_request|forbidden|origin_mismatch|invalid_proxy_headers|server_shutting_down|authentication_required|rate_limit|password_length|invalid_username|username_taken|user_not_found|instance_name_exists|registration_expired|rotation_pending|config_write_failed|database_error" }`，结合 HTTP 状态处理。未知字段不授予权限。OpenAPI 路径目录见 [openapi.json](openapi.json)，设备帧结构见 [connector-v1.schema.json](connector-v1.schema.json)。动态业务校验以服务端及端到端测试为准。
 
-未设置 HUB_ORIGIN 时，浏览器 Origin 必须与请求 Host 对应的 HTTP 根地址一致；显式设置时必须与该 HTTP(S) origin 一致。终端 WebSocket 使用相同规则且必须提供 Origin。来源错误返回403 `origin_mismatch`，密码错误返回401 `invalid_credentials`；登录成功及 `/me` 返回实际使用的 `hub_address`。
+外部地址优先取 --origin > HUB_ORIGIN > config.origin，否则按 Host 推断HTTP；实际socket对端在可信IP/CIDR内时，单值 X-Forwarded-Proto / X-Forwarded-Host 可覆盖scheme/host。默认仅信任回环代理，不采信X-Forwarded-For，不解析Forwarded，拒绝可信代理的重复或逗号链头（400 `invalid_proxy_headers`）。浏览器 Origin 必须与解析结果规范化后相同；终端 WS 必须提供 Origin。来源错误返回403 `origin_mismatch`，密码错误返回401 `invalid_credentials`；Cookie Secure、HSTS及登录和 `/me` 的 `hub_address` 共用该外部地址。详情见 [OPERATIONS.md](OPERATIONS.md)。
 
 ## 认证
 
@@ -43,3 +43,5 @@ GoTTY本机 `GET -/hub` 返回地址、用户名、显示名、实例ID、连接
 ## 管理接口
 
 `/me` 和登录响应包含 `is_admin`。所有 `/admin/*` 服务端复核数据库管理员标记；写操作继续要求CSRF与精确Origin。GET `/admin/dashboard` 统计平台元数据；GET `/admin/logs` 限定当前日志尾部128KiB；GET `/admin/version` 检查固定GitHub仓库最新Release；GET/POST `/admin/upgrade` 读取进度/提交升级；POST `/admin/restart` 确认重启。升级与重启互斥，冲突409 `operation_active`，发布不可达502 `release_unavailable`。
+
+服务退出期间拒绝新请求并返回503 `server_shutting_down`；已有SSE以EOF结束，WS普通退出关闭码1001、后台重启1012。连接排空最多3秒、进程退出总预算5秒。停止不会撤销会话/票据/绑定或终止GoTTY PTY。

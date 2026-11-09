@@ -32,11 +32,17 @@ wget https://github.com/Xiechengqi/gotty-hub/releases/download/latest/gotty-hub-
 
 优先级：`--password` / `--password-stdin` > `HUB_PASSWORD` > config。管理员从右上角账号齿轮进入统计、升级/重启、日志后台。普通用户在 Web 注册用户名和密码后即可登录。详见 [管理员与发布说明](docs/ADMINISTRATION.md)。当前 0.2 为全新账号结构，使用全新数据目录初始化。
 
-默认监听 `0.0.0.0:8088`，可通过 `HUB_LISTEN` 覆盖。未设置 `HUB_ORIGIN` 时，按当前 HTTP 请求的 Host 做同源校验，可直接通过 `http://服务器IP:8088` 登录。`HUB_ORIGIN` 可将访问地址固定为指定的 HTTP(S) 根地址；HTTPS 反向代理应设置为外部地址，例如：
+默认监听 `0.0.0.0:8088`，可通过 `HUB_LISTEN` 覆盖。可直接通过 `http://服务器IP:8088` 登录；本机 HTTPS 反代正确覆盖 `X-Forwarded-Proto` / `X-Forwarded-Host` 后，会自动识别外部 HTTPS 地址并设置 Secure Cookie，无需额外初始化参数。默认只信任回环代理；容器或跨机器代理需配置可信代理 IP/CIDR，也可显式固定地址：
 
 ```sh
-HUB_ORIGIN=https://hub.example.com ./gotty-hub
+./gotty-hub --origin https://hub.example.com
+# 将可选网络参数保存到已有的 config
+./gotty-hub config --origin https://hub.example.com --trusted-proxies 127.0.0.1,::1
 ```
+
+地址优先级：`--origin` > `HUB_ORIGIN` > config 的 `origin` > 自动识别；`--origin auto` 取消固定地址。代理配置同样遵循 CLI > `HUB_TRUSTED_PROXIES` > config；`--trusted-proxies none` 禁用转发头。代理示例和信任边界见 [部署与运维](docs/OPERATIONS.md)。
+
+前台 Ctrl-C / SIGTERM 和后台重启共用退出流程：主动结束 SSE/WebSocket，连接排空最多3秒，含数据库/日志/运行时清理的总退出上限5秒；再次发送退出信号立即强制结束。退出信号优先于待执行重启，保留设备绑定、用户会话和远程 PTY。
 
 ## 本地运行
 
@@ -95,6 +101,7 @@ HUB_LOAD_SECONDS=1800 GOTTY_BIN=/absolute/path/gotty python3 tests/run-load.py
 - [API 与协议契约](docs/API.md)
 - [部署、备份恢复和升级](docs/OPERATIONS.md)
 - [历史实施与发布记录](docs/IMPLEMENTATION_REVIEW.md)
+- [反代登录与进程退出 Review](docs/PROXY_AND_SHUTDOWN_REVIEW.md)
 
 单节点首版，一个实例对应 GoTTY 当前共享 PTY。标签关闭不停止远端命令。iOS/Android 真机、容器运行和公网 TLS 需在目标环境验收；本地浏览器模拟不代替实机验证。
 
