@@ -159,6 +159,10 @@
  * Figma. Direction inferred — confirm visually against Figma.
  * --------------------------------------------------------------------------- */
 :root {
+  /* Match GoTTY's floating terminal controls, independent of terminal theme. */
+  --color-terminal-control-background: rgb(0 0 0 / 0.7);
+  --color-terminal-control-hover: rgb(0 0 0 / 0.75);
+  --color-terminal-control-foreground: rgb(255 255 255 / 0.7);
   /* Foreground (icons + on-fill content) */
   --color-foreground-full:               var(--color-white);
   --color-foreground-icon-primary:       var(--color-neutral-950);

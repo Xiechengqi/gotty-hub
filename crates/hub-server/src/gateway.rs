@@ -136,6 +136,7 @@ async fn device(app: App, id: String, mut socket: WebSocket) {
               if revision>d.revision&&["red","gray","yellow","green"].contains(&color){d.revision=revision;d.color=color.into()}
              }},
              "asr_data"=>{let sender=streams.lock().await.get(&f.stream).cloned();if let Some(sender)=sender{let message=if f.data["binary"]==true{STANDARD.decode(f.data["payload"].as_str().unwrap_or("")).ok().map(Message::Binary)}else{f.data["payload"].as_str().map(|s|Message::Text(s.into()))};if let Some(message)=message{if sender.try_send(message).is_err(){streams.lock().await.remove(&f.stream);let _=tx.try_send(Frame::new("close",&f.stream,json!({})));}}}},
+             "control_result"=>{let sender=streams.lock().await.get(&f.stream).cloned();if let Some(sender)=sender{if sender.try_send(Message::Text(json!({"control_result":f.data}).to_string())).is_err(){streams.lock().await.remove(&f.stream);let _=tx.try_send(Frame::new("close",&f.stream,json!({})));}}},
              "data"=>{if let Some(data)=f.data.as_str(){let sender=streams.lock().await.get(&f.stream).cloned();if let Some(sender)=sender{if sender.try_send(Message::Text(data.into())).is_err(){streams.lock().await.remove(&f.stream);let _=tx.try_send(Frame::new("close",&f.stream,json!({"reason":"slow_consumer"})));}}}},
              "close"=>{streams.lock().await.remove(&f.stream);},
              "rotated"=>{let _=sqlx::query("UPDATE instances SET device=device_next,device_next=NULL WHERE id=? AND device_next=?").bind(&id).bind(f.data["fingerprint"].as_str().unwrap_or("")).execute(&app.db).await;},
@@ -224,11 +225,22 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
               if app.devices.lock().await.get(&id).map(|d|d.generation.clone())!=Some(device.generation.clone()){break}
               if device.tx.is_closed(){break}
              },
-             message=rx.recv()=>{let Some(message)=message else{break};if tokio::time::timeout(Duration::from_secs(10),sink.send(message)).await.map(|v|v.is_err()).unwrap_or(true){break}},
+             message=rx.recv()=>{let Some(message)=message else{break};
+              let control_result=matches!(&message,Message::Text(text) if text.starts_with("{\"control_result\":"));
+              if control_result&&access(&app,&s,&id,version).await.is_none(){break}
+              if tokio::time::timeout(Duration::from_secs(10),sink.send(message)).await.map(|v|v.is_err()).unwrap_or(true){break}},
              incoming=source.next()=>match incoming{
               Some(Ok(Message::Text(t)))=>{
                if access(&app,&s,&id,version).await.is_none(){break}
-               if let Ok(v)=serde_json::from_str::<Value>(&t){if v["viewing"].is_boolean(){let _=device.tx.try_send(Frame::new("view",&stream,json!({"viewing":v["viewing"]})));continue}}
+               if let Ok(v)=serde_json::from_str::<Value>(&t){
+                if v["viewing"].is_boolean(){let _=device.tx.try_send(Frame::new("view",&stream,json!({"viewing":v["viewing"]})));continue}
+                if let Some(control)=v.get("control"){
+                 if asr||device.capabilities["controls"]!=true||!valid_control(&role,control){break}
+                 if limit(&app,format!("control:{}",s.key),60).await.is_err(){break}
+                 if device.tx.try_send(Frame::new("control",&stream,control.clone())).is_err(){break}
+                 continue
+                }
+               }
                if asr{if t!="Done"{break}
         if device.tx.try_send(Frame::new("asr_data",&stream,json!({"binary":false,"payload":t}))).is_err(){break}continue}
                let kind=t.as_bytes().first().copied().unwrap_or(0);
@@ -252,6 +264,56 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
     let _ = device.tx.try_send(Frame::new("close", &stream, json!({})));
     let _ = sink.send(Message::Close(None)).await;
 }
+fn valid_control(role: &str, control: &Value) -> bool {
+    role == "owner"
+        && control.to_string().len() <= 16 * 1024
+        && control["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty() && id.len() <= 64)
+        && control["action"].as_str().is_some_and(|action| {
+            [
+                "restart",
+                "shares",
+                "share_create",
+                "share_stop",
+                "share_restart",
+                "share_delete",
+            ]
+            .contains(&action)
+        })
+        && control["payload"].is_object()
+}
+
 async fn access(app: &App, s: &Session, id: &str, version: i64) -> Option<(String, i64)> {
     sqlx::query("SELECT g.role,i.version FROM grants g JOIN instances i ON i.id=g.instance JOIN sessions s ON s.user_id=g.user_id WHERE s.token=? AND s.expires>? AND i.id=? AND i.version=?").bind(&s.key).bind(now()).bind(id).bind(version).fetch_optional(&app.db).await.ok().flatten().map(|r|(r.get("role"),r.get("version")))
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_management_is_owner_only_and_allowlisted() {
+        let control = json!({"id":"request-1","action":"restart","payload":{}});
+        assert!(valid_control("owner", &control));
+        for role in ["operator", "observer", "admin", ""] {
+            assert!(!valid_control(role, &control));
+        }
+        for action in ["http", "fetch", "exec", "hub", ""] {
+            let mut invalid = control.clone();
+            invalid["action"] = json!(action);
+            assert!(!valid_control("owner", &invalid));
+        }
+    }
+
+    #[test]
+    fn terminal_management_rejects_unbounded_or_unidentified_requests() {
+        for control in [
+            json!({"action":"shares","payload":{}}),
+            json!({"id":"1","action":"shares","payload":[]}),
+            json!({"id":"1","action":"share_create","payload":{"target":"x".repeat(16*1024)}}),
+        ] {
+            assert!(!valid_control("owner", &control));
+        }
+    }
 }

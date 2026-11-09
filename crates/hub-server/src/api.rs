@@ -380,7 +380,7 @@ pub async fn register_instance(
     let request_id = field(&v, "request_id")?;
     let claim = field(&v, "claim")?;
     let title = field(&v, "name")?.trim();
-    if !secret(request_id) || !secret(claim) || title.is_empty() || title.len() > 80 {
+    if !secret(request_id) || !secret(claim) || !valid_instance_name(title) {
         return Err(bad());
     }
     let instance = token();
@@ -396,7 +396,8 @@ pub async fn register_instance(
             .bind(&user_id)
             .bind(hash(&device))
             .execute(&mut *tx)
-            .await?;
+            .await
+            .map_err(instance_name_error)?;
         sqlx::query("INSERT INTO grants(instance,user_id,role) VALUES(?,?,'owner')")
             .bind(&instance)
             .bind(&user_id)
@@ -434,6 +435,55 @@ pub async fn register_instance(
     Ok(Json(
         json!({"instance_id":instance,"credential":hash(&format!("credential:{claim}:{instance}")),"protocol":1}),
     ))
+}
+fn valid_instance_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control)
+}
+fn instance_name_error(error: sqlx::Error) -> Error {
+    if error
+        .as_database_error()
+        .is_some_and(|value| value.is_unique_violation())
+    {
+        Error(axum::http::StatusCode::CONFLICT, "instance_name_exists")
+    } else {
+        error.into()
+    }
+}
+
+// Device-scoped rename: browser cookies never grant access to this endpoint.
+pub async fn rename_device(
+    State(app): State<App>,
+    h: HeaderMap,
+    Json(v): Json<Value>,
+) -> Result<Json<Value>> {
+    let id = h
+        .get("x-instance-id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(denied)?;
+    let credential = h
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(denied)?;
+    let title = field(&v, "name")?.trim();
+    if !valid_instance_name(title) {
+        return Err(bad());
+    }
+    let changed =
+        sqlx::query("UPDATE instances SET name=? WHERE id=? AND (device=? OR device_next=?)")
+            .bind(title)
+            .bind(id)
+            .bind(hash(credential))
+            .bind(hash(credential))
+            .execute(&app.db)
+            .await
+            .map_err(instance_name_error)?
+            .rows_affected();
+    if changed != 1 {
+        return Err(denied());
+    }
+    audit(&app, "device", "device_renamed", id).await;
+    Ok(Json(json!({"name":title})))
 }
 pub(crate) async fn audit(app: &App, actor: &str, action: &str, id: &str) {
     let _ = sqlx::query("INSERT INTO audit(at,actor,action,instance) VALUES(?,?,?,?)")
@@ -837,5 +887,113 @@ mod tests {
                 .1,
             "registration_expired"
         );
+    }
+    #[tokio::test]
+    async fn duplicate_names_are_atomic_scoped_to_owner_and_allow_idempotent_retries() {
+        let app = app().await;
+        user(&app, "owner").await;
+        user(&app, "other").await;
+        let payload = |username: &str, name: &str| json!({"username":username,"name":name,"request_id":token(),"claim":token()});
+        let (a, b) = tokio::join!(
+            register_instance(State(app.clone()), Json(payload("owner", "production"))),
+            register_instance(State(app.clone()), Json(payload("owner", "production")))
+        );
+        assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+        assert_eq!(
+            a.err().or_else(|| b.err()).unwrap().1,
+            "instance_name_exists"
+        );
+        assert_eq!(
+            register_instance(State(app.clone()), Json(payload("owner", " Production ")))
+                .await
+                .unwrap_err()
+                .1,
+            "instance_name_exists"
+        );
+        assert!(
+            register_instance(State(app.clone()), Json(payload("other", "production")))
+                .await
+                .is_ok()
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM registrations")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+    #[tokio::test]
+    async fn device_rename_requires_its_own_secret_and_rejects_name_collisions() {
+        let app = app().await;
+        user(&app, "owner").await;
+        let payload = |name: &str| json!({"username":"owner","name":name,"request_id":token(),"claim":token()});
+        let a = register_instance(State(app.clone()), Json(payload("one")))
+            .await
+            .unwrap()
+            .0;
+        let _ = register_instance(State(app.clone()), Json(payload("two")))
+            .await
+            .unwrap();
+        let headers = |credential: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(
+                "x-instance-id",
+                a["instance_id"].as_str().unwrap().parse().unwrap(),
+            );
+            h.insert(
+                "authorization",
+                format!("Bearer {credential}").parse().unwrap(),
+            );
+            h
+        };
+        assert_eq!(
+            rename_device(
+                State(app.clone()),
+                headers("wrong"),
+                Json(json!({"name":"fresh"}))
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let secret = a["credential"].as_str().unwrap();
+        assert_eq!(
+            rename_device(
+                State(app.clone()),
+                headers(secret),
+                Json(json!({"name":"two"}))
+            )
+            .await
+            .unwrap_err()
+            .1,
+            "instance_name_exists"
+        );
+        assert_eq!(
+            rename_device(
+                State(app.clone()),
+                headers(secret),
+                Json(json!({"name":" 新名字 "}))
+            )
+            .await
+            .unwrap()
+            .0["name"],
+            "新名字"
+        );
+        assert_eq!(
+            rename_device(
+                State(app.clone()),
+                headers(secret),
+                Json(json!({"name":"bad\nname"}))
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let id: String = sqlx::query_scalar("SELECT id FROM instances WHERE name='新名字'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(id, a["instance_id"].as_str().unwrap());
     }
 }

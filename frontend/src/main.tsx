@@ -16,7 +16,7 @@ import {errorText} from './errors';
 import {RealTerminal} from './terminal/Terminal';
 
 type Group = 'production' | 'development' | 'personal';
-type Instance = { status?: 'red'|'gray'|'yellow'|'green'; capabilities?: {write?:boolean;files?:boolean;asr?:boolean}; id: string; name: string; description: MessageKey; group: Group; online: boolean; role: 'owner' | 'operator' | 'observer'; host: string };
+type Instance = { status?: 'red'|'gray'|'yellow'|'green'; capabilities?: {write?:boolean;files?:boolean;asr?:boolean;controls?:boolean}; id: string; name: string; description: MessageKey; group: Group; online: boolean; role: 'owner' | 'operator' | 'observer'; host: string };
 type Panel = '' | 'login' | 'account' | 'detail' | 'connect';
 const demoInstances: Instance[] = [
   { id:'prod', name:'production-api', description:'prodDescription', group:'production', online:true, role:'owner', host:'ubuntu@api-01' },
@@ -168,7 +168,7 @@ function App() {
     {instances.map(i=><div className="instance-nav-row" key={i.id}><Button variant="ghost" className="nav-item terminal-nav registered-instance" data-active={opened.includes(i.id)&&active===i.id} aria-current={opened.includes(i.id)&&active===i.id?'page':undefined} title={`${i.name} · ${t(i.online?'online':'offline')}`} onClick={()=>open(i)}><span className="session-label">{i.online?statusIcon(i.id):<span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>}<span className="instance-nav-name">{i.name}</span></span></Button><Button className="instance-manage quiet-button" variant="ghost" iconOnly leadingIcon={RiSettings3Line} aria-label={`${t('manage')} ${i.name}`} onClick={()=>manage(i.id)}/></div>)}
 
   </>;
-  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} visible={active===i.id||(effectiveSplit&&opened.find(id=>id!==active)===i.id)} locale={locale}/>;return <section className="terminal-panel dark" key={i.id}>
+  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onManage={()=>void manage(i.id)} visible={active===i.id||(effectiveSplit&&opened.find(id=>id!==active)===i.id)} locale={locale}/>;return <section className="terminal-panel dark" key={i.id}>
     <div className="terminal-heading text-caption-1-regular"><span className="terminal-host"><span className="status-dot"/>{i.host}</span><span>{t(i.role==='observer'?'readOnly':'writable')} · {t('demo')}</span></div>
     <div className="terminal-output" dir="ltr"><p className="text-text-tertiary">{t('connectedDemo')}</p><p className="text-text-tertiary">{t('terminalPreview')}</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span>gotty --version</p><p>GoTTY · web terminal</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span><span className="cursor"/></p></div>
     <div className="terminal-keys">{['Esc','Ctrl','Tab','↑','↓','←','→','⌨'].map(k=><Button key={k} variant="secondary" onClick={()=>setNotice('keyNotice')}>{k}</Button>)}</div>

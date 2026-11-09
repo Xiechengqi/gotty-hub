@@ -903,6 +903,28 @@
           }
         }
       }
+    },
+    "/connector/v1/name": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "post": {
+        "operationId": "rename_device",
+        "description": "Requires X-Instance-ID and device Bearer credential. JSON {name}; same-owner duplicate returns 409 instance_name_exists.",
+        "responses": {
+          "200": {
+            "description": "Instance renamed without replacing its identity"
+          },
+          "403": {
+            "description": "Device credential rejected"
+          },
+          "409": {
+            "description": "Instance name already exists under this owner"
+          }
+        }
+      }
     }
   }
 }

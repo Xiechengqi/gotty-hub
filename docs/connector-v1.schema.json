@@ -19,7 +19,9 @@
         "rotate",
         "rotated",
         "revoked",
-        "superseded"
+        "superseded",
+        "control",
+        "control_result"
       ]
     },
     "stream": {

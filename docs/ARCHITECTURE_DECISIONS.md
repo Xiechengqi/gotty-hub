@@ -8,15 +8,15 @@
 
 ## ADR-002：共享现有 webtty 与语音核心
 
-`gotty/js/packages/terminal-core` 是 GoTTY 原有 WebTTY 和 VoiceInput 的源代码归属；GoTTY 原路径仅重新导出。Hub 固定消费 `frontend/vendor/gotty-terminal-core-0.1.0.tgz`，npm lock 校验内容，独立检出不依赖相邻目录。该包仍是第一版开发制品，正式发布新内容必须提升版本，不能替换已经对外发布的同版本 tarball。
+`gotty/js/packages/terminal-core` 是 GoTTY 原有 WebTTY、VoiceInput 和显示偏好翻译/默认值的源代码归属；GoTTY 原路径仅重新导出。Hub 固定消费 `frontend/vendor/gotty-terminal-core-0.2.0.tgz`，npm lock 校验内容，独立检出不依赖相邻目录。该包仍是第一版开发制品，正式发布新内容必须提升版本，不能替换已经对外发布的同版本 tarball。
 
-Hub 使用 React xterm 适配器，未嵌入远程 GoTTY 网页。文件通过相同终端通道中的 ZMODEM，上传需远端运行 rz，下载需 sz；不会调用原有全局 HTTP/JSON 文件上传接口。语音录音、采样与转写合并逻辑复用 GoTTY VoiceInput，增加初始化/传输注入接口。
+Hub 使用 React xterm 适配器，未嵌入远程 GoTTY 网页。文件支持原有WebTTY `7`消息的原生上传（包括拖放），也支持同一终端通道中的ZMODEM，后者上传需rz、下载需sz；文件权限继续由Hub角色及GoTTY PermitWrite双重校验。语音录音、采样与转写合并逻辑复用 GoTTY VoiceInput，增加初始化/传输注入接口。
 
 ## ADR-003：用户名账号与一次设备注册
 
 Hub公开用户名/密码注册；用户ID是内部关联身份，规范用户名用于登录和授权输入。普通用户密码使用Argon2id。保留admin名称，本机启动在监听前创建管理员；admin密码按要求保存于0600 config，CLI优先覆盖，登录仍使用数据库哈希。
 
-GoTTY接入只填写Hub URL及用户名；Hub必须先有该账号，不隐式创建。GoTTY本机生成256位request_id和claim并在请求前落盘。Hub在同一事务创建实例、owner授权、幂等记录，仅保存秘密摘要；响应丢失或最终保存失败可持有相同claim恢复结果。轮换/解绑后原申请不可恢复设备凭据。
+GoTTY接入填写Hub URL及用户名，可选显示名字；同一owner下名称唯一，注册和改名均由数据库约束，重复返回409。Hub必须先有该账号，不隐式创建。GoTTY本机生成256位request_id和claim并在请求前落盘。Hub在同一事务创建实例、owner授权、幂等记录，仅保存秘密摘要；响应丢失或最终保存失败可持有相同claim恢复结果。轮换/解绑后原申请不可恢复设备凭据。
 
 知道用户名可以将自己控制的新GoTTY注册给该账号；这不授予账号会话或其他实例权限。Connector使用独立设备凭据。GoTTY主站管理沿用原访问权限，有密码时复用登录态，无密码且启用Hub时允许主站访问者配置；所有分享页面禁止Hub管理。
 
@@ -42,22 +42,24 @@ Cookie 会话、一次性30秒终端票据和设备凭据互相独立。票据�
 
 | 方向 | kind | 数据 |
 |---|---|---|
-| 设备→Hub | hello | protocol=1，write/replay/files/asr 能力 |
+| 设备→Hub | hello | protocol=1，write/replay/files/asr/controls 能力 |
 | Hub→设备 | hello_ack | protocol=1，随机连接 generation |
 | 设备→Hub | status | color、递增 revision；generation 由认证连接绑定 |
 | Hub→设备 | open | stream、role、writable、epoch、offset、channel=terminal/asr |
 | 双向 | data | 原有 webtty 字符串 |
 | 双向 | asr_data | binary 布尔值、payload（文本或 base64） |
+| Hub→设备 | control | 已认证终端stream、请求id、白名单action、payload；仅owner |
+| 设备→Hub | control_result | 请求id、value或error |
 | Hub→设备 | view | viewing 布尔值 |
 | 双向 | close | 释放对应流 |
 | Hub→设备 | rotate | 新凭据，只在已认证设备连接发送 |
 | 设备→Hub | rotated | 已持久化凭据的 fingerprint |
 | Hub→设备 | revoked/superseded | 解绑/连接被替换 |
 
-限制：单条帧最大1MiB；设备控制队列128条；每设备最多64流；GoTTY ASR 最多16流；ASR 单连接最多120秒和16MiB音频；文件单个64MiB；终端不接受 restart 消息。设备心跳15秒、45秒失联；初始 hello/浏览器认证超时5秒；发送超时10秒。
+限制：单条帧最大1MiB；设备控制队列128条；每设备最多64流；GoTTY ASR 最多16流；ASR 单连接最多120秒和16MiB音频；文件单个64MiB；原有终端字符串不接受restart消息；服务重启和分享管理仅经controls能力协商的owner命名操作通道，单请求16KiB、每设备同时一个操作。设备心跳15秒、45秒失联；初始 hello/浏览器认证超时5秒；发送超时10秒。
 
 初期状态 SSE 使用每秒快照，断线重连重新鉴权/读取授权，不依赖 Last-Event-ID 缓存。适合首版单节点规模；后续事件增量优化必须保留权限过滤和重同步能力。
 
 ## 兼容与受控降级
 
-GoTTY 默认开启 Hub；使用 `--hub-disabled` 时不创建设备管理入口或状态文件，原独立访问/分享保持现有行为。Hub 不提供 iframe 兼容入口，不兼容设备协议必须升级，不能降级成无鉴权任意代理。ASR 未配置时没有语音按钮；文件依赖远端 rz/sz，缺少命令时由真实终端提示。
+GoTTY 默认开启 Hub；使用 `--hub-disabled` 时不创建设备管理入口或状态文件，原独立访问/分享保持现有行为。Hub 不提供 iframe 兼容入口，不兼容设备协议必须升级，不能降级成无鉴权任意代理。ASR 未配置时没有语音按钮；原生上传不依赖rz，ZMODEM依赖远端rz/sz。旧Connector不声明controls时隐藏管理按钮；完整显示目录和改名需两端更新。

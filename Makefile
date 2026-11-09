@@ -6,7 +6,7 @@ web:
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets -- -D warnings
-	test -f frontend/vendor/gotty-terminal-core-0.1.0.tgz
+	test -f frontend/vendor/gotty-terminal-core-0.2.0.tgz
 test:
 	cargo build --locked
 	cargo test --locked

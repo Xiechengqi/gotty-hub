@@ -149,6 +149,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/events", get(api::events))
         .route("/api/v1/instances/register", post(api::register_instance))
         .route("/connector/v1/connect", get(gateway::device_upgrade))
+        .route("/connector/v1/name", post(api::rename_device))
         .layer(middleware::from_fn_with_state(app.clone(), security::guard))
         .with_state(app.clone());
     let routes = if let Ok(assets) = std::env::var("HUB_ASSETS") {

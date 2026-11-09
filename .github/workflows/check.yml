@@ -14,6 +14,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: make build check
+      - run: npm test
+        working-directory: frontend
       - run: cargo test --locked && cargo build --locked && python3 tests/config.py
       - run: npx playwright install --with-deps chromium
         working-directory: frontend

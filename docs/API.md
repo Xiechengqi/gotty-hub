@@ -1,6 +1,6 @@
 # API 与传输契约 v1
 
-API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "invalid_request|forbidden|origin_mismatch|authentication_required|rate_limit|password_length|invalid_username|username_taken|user_not_found|registration_expired|rotation_pending|config_write_failed|database_error" }`，结合 HTTP 状态处理。未知字段不授予权限。OpenAPI 路径目录见 [openapi.json](openapi.json)，设备帧结构见 [connector-v1.schema.json](connector-v1.schema.json)。动态业务校验以服务端及端到端测试为准。
+API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "invalid_request|forbidden|origin_mismatch|authentication_required|rate_limit|password_length|invalid_username|username_taken|user_not_found|instance_name_exists|registration_expired|rotation_pending|config_write_failed|database_error" }`，结合 HTTP 状态处理。未知字段不授予权限。OpenAPI 路径目录见 [openapi.json](openapi.json)，设备帧结构见 [connector-v1.schema.json](connector-v1.schema.json)。动态业务校验以服务端及端到端测试为准。
 
 未设置 HUB_ORIGIN 时，浏览器 Origin 必须与请求 Host 对应的 HTTP 根地址一致；显式设置时必须与该 HTTP(S) origin 一致。终端 WebSocket 使用相同规则且必须提供 Origin。来源错误返回403 `origin_mismatch`，密码错误返回401 `invalid_credentials`；登录成功及 `/me` 返回实际使用的 `hub_address`。
 
@@ -18,11 +18,11 @@ API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "inval
 
 所有者通过 `GET /instances/{id}/grants` 读取授权，`PUT` 同路径 `{username,role:"operator"|"observer"}` 更新，`DELETE /instances/{id}/grants/{username}` 撤销。所有者不能移除自己；授权变更增加版本，使旧票据/流失效。`DELETE /instances/{id}/binding` 解绑；`POST /instances/{id}/credentials/rotate` 在线两阶段轮换。
 
-`POST /instances/register`：`{username,name,request_id,claim}` → `{instance_id,credential,protocol:1}`。公开且限流的设备注册接口，必须提供已存在用户名，否则404 `user_not_found`，不隐式创建用户。实例名由GoTTY自动生成，request_id/claim由本机生成并在请求前私有落盘，均为256位随机hex，用户无需输入或验证。
+`POST /instances/register`：`{username,name,request_id,claim}` → `{instance_id,credential,protocol:1}`。公开且限流的设备注册接口，必须提供已存在用户名，否则404 `user_not_found`，不隐式创建用户。实例名可由用户指定，留空由GoTTY自动生成；同一owner下名称去除首尾空白、ASCII大小写不敏感，重名返回409 `instance_name_exists`，最多80个Unicode字符且不能含控制字符。request_id/claim由本机生成并在请求前私有落盘，均为256位随机hex，用户无需输入或验证。
 
 事务原子创建实例、owner授权和幂等记录。相同请求ID、用户和claim恢复相同结果；不同持有秘密或用户拒绝。解绑或轮换后不可通过旧注册请求恢复凭据，返回409 `registration_expired`。Hub只保存claim与设备凭据摘要；GoTTY后端私有保存设备秘密，不返回页面。知道用户名可将新设备注册给该用户，不能登录用户或访问其已有实例。
 
-GoTTY本机 `GET -/hub` 返回地址、用户名、实例ID与连接状态；`POST -/hub` 仅接收 `{URL,Username}`。主站使用既有GoTTY权限；无密码且显式启用Hub时允许主站管理，分享页面一律拒绝。错误 `{error,message}`，未知用户保留404与错误码，前端提供Hub注册链接。
+GoTTY本机 `GET -/hub` 返回地址、用户名、显示名、实例ID、连接状态和paused状态；`POST -/hub` 接收 `{URL,Username,Name?,Action?:"connect"|"reconnect"|"disconnect"}`，缺省为connect。disconnect仅需Action，保存暂停状态并关闭隧道；reconnect复用已有设备身份；相同Hub和用户名下编辑显示名更新原实例。改变目标失败保留原绑定，暂存的注册claim在私有.pending文件中支持幂等重试。主站使用既有GoTTY权限；无密码且启用Hub时允许主站管理，分享页面一律拒绝。错误 `{error,message}`，未知用户保留404与错误码，前端提供Hub注册链接。
 
 ## 浏览器 WS
 
@@ -32,9 +32,13 @@ GoTTY本机 `GET -/hub` 返回地址、用户名、实例ID与连接状态；`PO
 
 ## 设备 WS
 
-`/connector/v1/connect` 用 Authorization Bearer 设备凭据和 `X-Instance-ID` 实例身份请求头鉴权。首帧 hello 协商 protocol=1，Hub 返回 hello_ack 及 generation。帧 `{kind,stream?,data}`；种类、限额、时序、替换与轮换参见 [架构决策](ARCHITECTURE_DECISIONS.md)。JSON data 是 WebTTY 原始字符串，避免重新解释终端内容；ASR 二进制按 base64 包装。
+`/connector/v1/connect` 用 Authorization Bearer 设备凭据和 `X-Instance-ID` 实例身份请求头鉴权。首帧 hello 协商 protocol=1，Hub 返回 hello_ack 及 generation。帧 `{kind,stream?,data}`；种类、限额、时序、替换与轮换参见 [架构决策](ARCHITECTURE_DECISIONS.md)。data 帧的 JSON data 是 WebTTY 原始字符串，避免重新解释终端内容；ASR 二进制按 base64 包装。
 
 双方必须释放 close 对应流，未知流不能创建目标。64流/设备，128帧队列，1MiB/帧，10秒发送超时。浏览器与设备身份分离；不提供任意地址代理或本机管理 API 透传。
+
+设备改名：`POST /connector/v1/name`（不带 `/api/v1` 前缀），`X-Instance-ID` + `Authorization: Bearer 设备凭据`，JSON `{name}`；同名409，错误设备身份403，不接受Cookie替代设备凭据。
+
+终端初始化的WebTTY `4`消息包括字号、字体、光标、回滚行数和 `hub-config`（内置themes、mobile_keys、ASR热键/延迟、restart_mode、share_enabled），先于回放输出发送。设备声明 `controls:true` 后，已鉴权终端WS接受 `{control:{id,action,payload:{...}}}`，action仅允许 `restart/shares/share_create/share_stop/share_restart/share_delete`，限实例owner。Hub转发control帧，GoTTY按open帧角色再次校验，control_result帧在浏览器映射为 `{control_result:{id,value?,error?}}`，不进入WebTTY解析器。每请求最大16KiB、每设备同时一个操作、浏览器60秒超时，断线清理请求。此功能不透传任意HTTP端点。
 
 ## 管理接口
 

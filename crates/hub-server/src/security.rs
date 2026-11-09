@@ -148,7 +148,10 @@ pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Resp
     let path = request.uri().path();
     let public = matches!(
         path,
-        "/api/v1/auth/register" | "/api/v1/auth/password/login" | "/api/v1/instances/register"
+        "/api/v1/auth/register"
+            | "/api/v1/auth/password/login"
+            | "/api/v1/instances/register"
+            | "/connector/v1/name"
     );
     if public {
         let ip = request
