@@ -6,7 +6,7 @@ services:
       - "127.0.0.1:8088:8088"
     environment:
       HUB_PASSWORD: ${HUB_PASSWORD:?Set the admin password}
-      HUB_ORIGIN: ${HUB_ORIGIN:?Set the public HTTPS origin}
+      HUB_ORIGIN: ${HUB_ORIGIN:?Set the public HTTP(S) origin}
     volumes:
       - hub-data:/data
     security_opt:

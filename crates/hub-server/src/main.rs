@@ -19,7 +19,6 @@ pub struct App {
     pub db: sqlx::SqlitePool,
     pub origin: String,
     pub secure: bool,
-    pub dev: bool,
     pub devices: Arc<Mutex<HashMap<String, gateway::Device>>>,
     pub rates: Arc<Mutex<HashMap<String, (u64, u32)>>>,
     pub http: reqwest::Client,
@@ -47,31 +46,9 @@ async fn main() -> anyhow::Result<()> {
                 .with_writer(writer),
         )
         .init();
-    let origin = std::env::var("HUB_ORIGIN")
-        .unwrap_or_else(|_| "http://127.0.0.1:8088".into())
-        .trim_end_matches('/')
-        .to_string();
-    let dev = std::env::var("HUB_DEV").as_deref() == Ok("1");
-    let origin_url = reqwest::Url::parse(&origin)?;
-    anyhow::ensure!(
-        ["http", "https"].contains(&origin_url.scheme())
-            && origin_url.host_str().is_some()
-            && origin_url.username().is_empty()
-            && origin_url.password().is_none()
-            && origin_url.path() == "/"
-            && origin_url.query().is_none()
-            && origin_url.fragment().is_none(),
-        "HUB_ORIGIN must be an HTTP(S) origin without credentials, path, query or fragment"
-    );
-    anyhow::ensure!(
-        origin.starts_with("https://")
-            || dev
-            || matches!(
-                origin_url.host_str(),
-                Some("localhost" | "127.0.0.1" | "[::1]")
-            ),
-        "HTTPS required; HUB_DEV=1 is local development only"
-    );
+    let origin = config::parse_origin(
+        &std::env::var("HUB_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:8088".into()),
+    )?;
     let url = std::env::var("HUB_DATABASE").unwrap_or_else(|_| {
         format!(
             "sqlite://{}?mode=rwc",
@@ -107,7 +84,6 @@ async fn main() -> anyhow::Result<()> {
         db,
         secure: origin.starts_with("https://"),
         origin,
-        dev,
         devices: Default::default(),
         rates: Default::default(),
         http: reqwest::Client::builder()
@@ -191,7 +167,7 @@ async fn main() -> anyhow::Result<()> {
       response
     }));
     let listener = tokio::net::TcpListener::bind(
-        std::env::var("HUB_LISTEN").unwrap_or_else(|_| "127.0.0.1:8088".into()),
+        std::env::var("HUB_LISTEN").unwrap_or_else(|_| "0.0.0.0:8088".into()),
     )
     .await?;
     tracing::info!(address=%listener.local_addr()?,"Hub listening");

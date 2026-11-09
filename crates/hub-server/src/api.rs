@@ -511,7 +511,6 @@ mod tests {
             db,
             origin: "https://hub.test".into(),
             secure: true,
-            dev: true,
             devices: Default::default(),
             rates: Default::default(),
             http: reqwest::Client::new(),

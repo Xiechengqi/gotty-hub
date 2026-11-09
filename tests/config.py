@@ -11,13 +11,15 @@ def read_until(fd,word):
    except OSError:break
    if word.encode() in output:return output
  raise AssertionError('missing interactive prompt '+word)
-def login(origin,password):
- request=urllib.request.Request(origin+'/api/v1/auth/password/login',data=json.dumps({'username':'admin','password':password}).encode(),headers={'Content-Type':'application/json'})
+def login(origin,password,request_origin=None):
+ headers={'Content-Type':'application/json'}
+ if request_origin is not None:headers['Origin']=request_origin
+ request=urllib.request.Request(origin+'/api/v1/auth/password/login',data=json.dumps({'username':'admin','password':password}).encode(),headers=headers)
  try:
   with urllib.request.urlopen(request) as response:return response.status,json.load(response),response.headers.get('Set-Cookie').split(';')[0]
  except urllib.error.HTTPError as error:return error.code,json.load(error),''
 with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
- env={k:v for k,v in os.environ.items() if k not in ['HUB_PASSWORD','HUB_ORIGIN','HUB_DATABASE','HUB_ASSETS']};env['HUB_HOME']=tmp+'/home'
+ env={k:v for k,v in os.environ.items() if k not in ['HUB_PASSWORD','HUB_ORIGIN','HUB_LISTEN','HUB_DEV','HUB_DATABASE','HUB_ASSETS']};env['HUB_HOME']=tmp+'/home'
  result=subprocess.run([binary],env=env,stdin=subprocess.DEVNULL,capture_output=True);assert result.returncode!=0 and b'password is required' in result.stderr
  subprocess.run([binary,'config','--password','file password'],env=env,check=True,capture_output=True)
  config=pathlib.Path(env['HUB_HOME'],'config');assert json.loads(config.read_text())=={'password':'file password'};assert config.stat().st_mode&0o777==0o600
@@ -33,8 +35,8 @@ with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
  finally:os.kill(pid,signal.SIGTERM);os.waitpid(pid,0);os.close(fd)
  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
  origin=f'http://127.0.0.1:{port}'
- def start(args,input_data=None):
-  process=subprocess.Popen([binary,*args],env={**env,'HUB_PASSWORD':'env password','HUB_LISTEN':f'127.0.0.1:{port}','HUB_ORIGIN':origin},cwd=tmp,stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+ def start(args,input_data=None,public_origin=origin):
+  process=subprocess.Popen([binary,*args],env={**env,'HUB_PASSWORD':'env password','HUB_LISTEN':f'127.0.0.1:{port}','HUB_ORIGIN':public_origin},cwd=tmp,stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
   if input_data is not None:process.stdin.write(input_data);process.stdin.close()
   for _ in range(100):
    try:
@@ -44,6 +46,13 @@ with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
     if process.poll() is not None:raise AssertionError(process.stderr.read().decode())
     time.sleep(.1)
   process.terminate();process.wait();raise AssertionError('standalone launch failed')
+ # HTTP origins work without a development flag; the exact Origin guard still applies.
+ public_origin='http://hub.example:8088'
+ process=start(['serve'],public_origin=public_origin)
+ try:
+  status,user,cookie=login(origin,'env password',public_origin);assert status==200 and user['hub_address']==public_origin
+  assert login(origin,'env password','http://other.example:8088')[0]==403
+ finally:process.terminate();process.wait(timeout=10)
  # Admin requires a nonempty password, without the ordinary user's 12-byte minimum.
  process=start(['serve','--password','x'])
  try:
@@ -70,4 +79,4 @@ with tempfile.TemporaryDirectory(prefix='hub-config-test-') as tmp:
   assert process.poll() is None and login(origin,'stdin startup override')[0]==200
   assert b'--password-stdin' not in pathlib.Path(f'/proc/{process.pid}/cmdline').read_bytes()
  finally:process.terminate();process.wait(timeout=10)
-print('PASS single hidden admin prompt, fixed identity, private config, stdin/spaces, CLI > env > config, admin Web password persistence and startup override')
+print('PASS HTTP origin without development flags, exact Origin guard, single hidden admin prompt, fixed identity, private config, stdin/spaces, CLI > env > config, admin Web password persistence and startup override')

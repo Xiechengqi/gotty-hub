@@ -14,4 +14,4 @@ test:
 	cd frontend && npm run test:ui
 	python3 tests/run-integration.py
 dev:
-	HUB_DEV=1 HUB_ORIGIN=http://localhost:5178 cargo run
+	HUB_ORIGIN=http://localhost:5178 cargo run

@@ -49,6 +49,21 @@ pub struct Runtime {
     pub config: Config,
     pub reset_password: Option<(String, String)>,
 }
+pub fn parse_origin(raw: &str) -> Result<String> {
+    let origin = raw.trim_end_matches('/').to_string();
+    let url = reqwest::Url::parse(&origin)?;
+    anyhow::ensure!(
+        ["http", "https"].contains(&url.scheme())
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "HUB_ORIGIN must be an HTTP(S) origin without credentials, path, query or fragment"
+    );
+    Ok(origin)
+}
 pub fn private_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -180,4 +195,40 @@ pub fn load() -> Result<Option<Runtime>> {
         config,
         reset_password,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_and_https_origins_need_no_development_flag() {
+        for origin in [
+            "http://hub.example:8088",
+            "http://192.0.2.1:8088",
+            "http://[2001:db8::1]:8088",
+            "http://127.0.0.1:8088",
+            "https://hub.example",
+        ] {
+            assert_eq!(parse_origin(origin).unwrap(), origin);
+        }
+        assert_eq!(
+            parse_origin("http://hub.example:8088/").unwrap(),
+            "http://hub.example:8088"
+        );
+    }
+
+    #[test]
+    fn origins_still_reject_credentials_paths_and_other_schemes() {
+        for origin in [
+            "hub.example:8088",
+            "ftp://hub.example",
+            "http://owner:secret@hub.example",
+            "http://hub.example/path",
+            "http://hub.example?query=1",
+            "http://hub.example#fragment",
+        ] {
+            assert!(parse_origin(origin).is_err(), "accepted {origin}");
+        }
+    }
 }

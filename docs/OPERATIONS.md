@@ -2,7 +2,7 @@
 
 ## 生产部署
 
-构建 `Dockerfile` 或 `make build`。镜像包含静态资源，以 UID 10001 运行，持久卷 `/data`。部署模板在 `deploy/compose.yaml`；复制 `deploy/hub.env.example` 到私有配置，填写真实 HTTPS origin 和 HUB_PASSWORD。不要开启 HUB_DEV。
+构建 `Dockerfile` 或 `make build`。镜像包含静态资源，以 UID 10001 运行，持久卷 `/data`。部署模板在 `deploy/compose.yaml`；复制 `deploy/hub.env.example` 到私有配置，填写实际 HTTP(S) origin 和 HUB_PASSWORD。
 
 ```sh
 cd deploy
@@ -10,17 +10,16 @@ docker compose --env-file /private/hub.env config
 docker compose --env-file /private/hub.env up -d --build
 ```
 
-`deploy/Caddyfile` 提供宿主机反向代理示例，替换域名并配置 DNS。8088 仅绑定回环；对外通过 Caddy HTTPS。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要把终端请求缓存或记录请求体。Hub 不信任任意 X-Forwarded-For，代理后的公共认证限流按代理地址聚合，扩大规模前需单独设计可信代理策略。
+Hub binary 默认监听 `0.0.0.0:8088`，直接访问时将 `HUB_ORIGIN` 设置为浏览器实际使用的地址，例如 `http://SERVER_IP:8088`。`deploy/Caddyfile` 提供宿主机反向代理示例，替换域名并配置 DNS；采用该方案时可设置 `HUB_LISTEN=127.0.0.1:8088`，Compose 也仅向宿主机回环发布8088。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要把终端请求缓存或记录请求体。Hub 不信任任意 X-Forwarded-For，代理后的公共认证限流按代理地址聚合，扩大规模前需单独设计可信代理策略。
 
 | 配置 | 用途 |
 |---|---|
-| HUB_ORIGIN | 唯一外部 HTTP(S) origin；生产必须 HTTPS，不带路径 |
-| HUB_LISTEN | 默认 127.0.0.1:8088，容器内 0.0.0.0:8088 |
+| HUB_ORIGIN | 唯一外部 HTTP(S) origin，默认 http://127.0.0.1:8088，不带路径 |
+| HUB_LISTEN | 默认 0.0.0.0:8088，可显式设为 127.0.0.1:8088 |
 | HUB_DATABASE | SQLite URL，默认 ~/.gotty-hub/hub.db |
 | HUB_ASSETS | 可选外部静态资源目录；默认使用 binary 内嵌资源 |
 | HUB_PASSWORD | admin启动密码覆盖，低于CLI、高于config |
 | HUB_HOME | 默认 ~/.gotty-hub，容器 /data |
-| HUB_DEV | 仅本地开发，允许非生产HTTP origin |
 
 GoTTY 需对应 Connector 版本，开启 `--hub-enabled`。凭据默认 `~/.gotty/hub.json`，原子写入 0600；父目录 0700。不要复制同一身份同时运行两个实例。轮换需要在线设备完成落盘确认；离线设备应解绑后重新注册。解绑会关闭浏览器流，旧设备不能再连接。
 

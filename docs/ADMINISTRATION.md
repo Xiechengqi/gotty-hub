@@ -4,6 +4,8 @@
 
 管理员用户名固定为 `admin`，不可通过Web注册或CLI改名。首次完全不带参数启动 `gotty-hub` 会在终端隐藏输入管理员密码；空白密码重新询问，只需输入一次，无确认步骤。首次无参数启动始终执行引导；自动化环境使用 `serve` 或显式参数。
 
+服务默认监听 `0.0.0.0:8088`，`HUB_LISTEN` 可覆盖。`HUB_ORIGIN` 默认 `http://127.0.0.1:8088`，通过服务器 IP 或域名访问时设为实际 HTTP(S) 根地址；HTTP 无需开发模式开关。
+
 ```sh
 ./gotty-hub
 ./gotty-hub --password 'YOUR_ADMIN_PASSWORD'

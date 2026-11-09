@@ -32,6 +32,12 @@ wget https://github.com/Xiechengqi/gotty-hub/releases/download/latest/gotty-hub-
 
 优先级：`--password` / `--password-stdin` > `HUB_PASSWORD` > config。管理员从右上角账号齿轮进入统计、升级/重启、日志后台。普通用户在 Web 注册用户名和密码后即可登录。详见 [管理员与发布说明](docs/ADMINISTRATION.md)。当前 0.2 为全新账号结构，使用全新数据目录初始化。
 
+默认监听 `0.0.0.0:8088`，可通过 `HUB_LISTEN` 覆盖。`HUB_ORIGIN` 支持 HTTP 和 HTTPS，应设置为浏览器实际访问的根地址；默认 `http://127.0.0.1:8088`。例如通过服务器 IP 访问：
+
+```sh
+HUB_ORIGIN=http://SERVER_IP:8088 ./gotty-hub
+```
+
 ## 本地运行
 
 需要 Rust（见 Cargo.lock）、Node.js 24、GoTTY 对应版本；浏览器测试需要 Chromium，文件测试需要 rz/sz。
@@ -41,7 +47,7 @@ cd frontend
 npm ci
 npm run build
 cd ..
-HUB_DEV=1 HUB_ORIGIN=http://localhost:5178 cargo run --locked
+HUB_ORIGIN=http://localhost:5178 cargo run --locked
 ```
 
 另一个终端启动前端：
@@ -56,10 +62,10 @@ npm run dev -- --port 5178
 GoTTY 启动示例：
 
 ```sh
-gotty --permit-write --hub-enabled --hub-allow-http bash
+gotty --permit-write --hub-enabled bash
 ```
 
-在 GoTTY 页面点击右上角 Hub 图标，只填写 Hub 地址和已注册的用户名，一次提交完成接入；实例名称自动生成。用户名不存在时会提示先前往 Hub Web 注册并提供链接。已有 GoTTY 密码时复用登录态；无密码且启用 Hub 时，主站访问者可管理绑定，所有分享页面均无权管理。生产去掉 `--hub-allow-http`，使用 HTTPS Hub。
+在 GoTTY 页面点击右上角 Hub 图标，只填写 Hub 地址和已注册的用户名，一次提交完成接入；实例名称自动生成。HTTP 和 HTTPS 默认均可使用，无需额外开关；可通过 `--hub-allow-http=false` 仅允许 HTTPS。用户名不存在时会提示先前往 Hub Web 注册并提供链接。已有 GoTTY 密码时复用登录态；无密码且启用 Hub 时，主站访问者可管理绑定，所有分享页面均无权管理。
 
 ## 构建与验证
 
