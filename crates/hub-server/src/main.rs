@@ -17,7 +17,7 @@ use tower_http::services::{ServeDir, ServeFile};
 pub struct App {
     pub admin: Arc<admin::Admin>,
     pub db: sqlx::SqlitePool,
-    pub origin: String,
+    pub origin: Option<String>,
     pub secure: bool,
     pub devices: Arc<Mutex<HashMap<String, gateway::Device>>>,
     pub rates: Arc<Mutex<HashMap<String, (u64, u32)>>>,
@@ -46,9 +46,11 @@ async fn main() -> anyhow::Result<()> {
                 .with_writer(writer),
         )
         .init();
-    let origin = config::parse_origin(
-        &std::env::var("HUB_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:8088".into()),
-    )?;
+    let origin = std::env::var("HUB_ORIGIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| config::parse_origin(&value))
+        .transpose()?;
     let url = std::env::var("HUB_DATABASE").unwrap_or_else(|_| {
         format!(
             "sqlite://{}?mode=rwc",
@@ -82,7 +84,9 @@ async fn main() -> anyhow::Result<()> {
     let app = App {
         admin: Arc::new(admin::Admin::new(runtime)),
         db,
-        secure: origin.starts_with("https://"),
+        secure: origin
+            .as_deref()
+            .is_some_and(|value| value.starts_with("https://")),
         origin,
         devices: Default::default(),
         rates: Default::default(),

@@ -62,7 +62,7 @@ pub fn parse_origin(raw: &str) -> Result<String> {
             && url.fragment().is_none(),
         "HUB_ORIGIN must be an HTTP(S) origin without credentials, path, query or fragment"
     );
-    Ok(origin)
+    Ok(url.origin().ascii_serialization())
 }
 pub fn private_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;

@@ -162,9 +162,7 @@ pub async fn browser_upgrade(
     h: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse> {
-    if h.get("origin").and_then(|v| v.to_str().ok()) != Some(&app.origin) {
-        return Err(denied());
-    }
+    check_origin(&app, &h, true)?;
     let s = session(&app, &h).await?;
     limit(&app, format!("upgrade:{}", s.key), 120).await?;
     Ok(ws

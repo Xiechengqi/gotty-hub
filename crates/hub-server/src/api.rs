@@ -14,7 +14,11 @@ use sqlx::Row;
 fn field<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().filter(|s| s.len() <= 1024).ok_or(bad())
 }
-pub async fn register(State(app): State<App>, Json(v): Json<Value>) -> Result<impl IntoResponse> {
+pub async fn register(
+    State(app): State<App>,
+    h: HeaderMap,
+    Json(v): Json<Value>,
+) -> Result<impl IntoResponse> {
     let name = username(field(&v, "username")?)?;
     if name == "admin" {
         return Err(Error(axum::http::StatusCode::CONFLICT, "username_taken"));
@@ -30,10 +34,11 @@ pub async fn register(State(app): State<App>, Json(v): Json<Value>) -> Result<im
         return Err(Error(axum::http::StatusCode::CONFLICT, "username_taken"));
     }
     audit(&app, &name, "register", "").await;
-    login_checked(&app, &id, &encoded).await
+    login_checked(&app, &id, &encoded, &h).await
 }
 pub async fn password_login(
     State(app): State<App>,
+    h: HeaderMap,
     Json(v): Json<Value>,
 ) -> Result<impl IntoResponse> {
     let name = username(field(&v, "username")?)?;
@@ -51,11 +56,11 @@ pub async fn password_login(
             "invalid_credentials",
         ));
     }
-    login_checked(&app, &id, &encoded).await
+    login_checked(&app, &id, &encoded, &h).await
 }
 pub async fn me(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     let s = session(&app, &h).await?;
-    Ok(Json(account(&app, &s)))
+    Ok(Json(account(&s, &request_origin(&app, &h)?)))
 }
 pub async fn logout(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     let s = session(&app, &h).await?;
@@ -180,7 +185,7 @@ pub async fn change_password(
         Some(&s.key),
     )
     .await?;
-    login_checked(&app, &s.user_id, &encoded).await
+    login_checked(&app, &s.user_id, &encoded, &h).await
 }
 pub async fn preferences(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     let s = session(&app, &h).await?;
@@ -493,6 +498,14 @@ pub async fn diagnostics(State(app): State<App>, h: HeaderMap) -> Result<Json<Va
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+        middleware,
+        routing::{get, post, put},
+        Router,
+    };
+    use tower::ServiceExt;
     async fn app() -> App {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -509,7 +522,7 @@ mod tests {
                 reset_password: None,
             })),
             db,
-            origin: "https://hub.test".into(),
+            origin: Some("https://hub.test".into()),
             secure: true,
             devices: Default::default(),
             rates: Default::default(),
@@ -528,10 +541,181 @@ mod tests {
             .unwrap();
         id
     }
+
+    fn auth_routes(app: App) -> Router {
+        Router::new()
+            .route("/api/v1/auth/password/login", post(password_login))
+            .route("/api/v1/me", get(me))
+            .route("/api/v1/me/preferences", put(save_preferences))
+            .route("/api/v1/admin/dashboard", get(crate::admin::dashboard))
+            .layer(middleware::from_fn_with_state(app.clone(), guard))
+            .with_state(app)
+    }
+
+    fn login_request(host: &str, origin: &str, password: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/password/login")
+            .header("host", host)
+            .header("origin", origin)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"username":"admin","password":password}).to_string(),
+            ))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn admin_can_login_at_server_ip_without_configuring_an_origin() {
+        let mut app = app().await;
+        app.origin = None;
+        app.secure = false;
+        let password = "correct admin test password";
+        sync_admin(&app.db, password).await.unwrap();
+        let routes = auth_routes(app.clone());
+        let host = "192.0.2.10:8088";
+        let origin = "http://192.0.2.10:8088";
+        let response = routes
+            .clone()
+            .oneshot(login_request(host, origin, password))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let set_cookie = response.headers()["set-cookie"].to_str().unwrap();
+        assert!(set_cookie.contains("HttpOnly; SameSite=Strict"));
+        assert!(!set_cookie.contains("; Secure"));
+        let cookie = set_cookie.split(';').next().unwrap().to_string();
+        let account: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(account["username"], "admin");
+        assert_eq!(account["is_admin"], true);
+        assert_eq!(account["hub_address"], origin);
+
+        for path in ["/api/v1/me", "/api/v1/admin/dashboard"] {
+            let response = routes
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("host", host)
+                        .header("cookie", &cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            if path == "/api/v1/me" {
+                let restored: Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap())
+                        .unwrap();
+                assert_eq!(restored["hub_address"], origin);
+            }
+        }
+
+        for with_csrf in [false, true] {
+            let mut request = Request::builder()
+                .method("PUT")
+                .uri("/api/v1/me/preferences")
+                .header("host", host)
+                .header("origin", origin)
+                .header("cookie", &cookie)
+                .header("content-type", "application/json");
+            if with_csrf {
+                request = request.header("x-csrf-token", account["csrf"].as_str().unwrap());
+            }
+            let response = routes
+                .clone()
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if with_csrf {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
+        }
+
+        let wrong_password = routes
+            .clone()
+            .oneshot(login_request(host, origin, "incorrect password"))
+            .await
+            .unwrap();
+        assert_eq!(wrong_password.status(), StatusCode::UNAUTHORIZED);
+        let foreign_origin = routes
+            .oneshot(login_request(host, "http://foreign.example:8088", password))
+            .await
+            .unwrap();
+        assert_eq!(foreign_origin.status(), StatusCode::FORBIDDEN);
+        let error: Value =
+            serde_json::from_slice(&to_bytes(foreign_origin.into_body(), 65536).await.unwrap())
+                .unwrap();
+        assert_eq!(error["error"], "origin_mismatch");
+
+        app.origin = Some("https://hub.example".into());
+        app.secure = true;
+        let response = auth_routes(app)
+            .oneshot(login_request(
+                "127.0.0.1:8088",
+                "https://hub.example",
+                password,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .contains("; Secure"));
+        let account: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(account["hub_address"], "https://hub.example");
+    }
+
+    #[tokio::test]
+    async fn origin_policy_matches_the_http_host_and_keeps_configured_origins_strict() {
+        let mut app = app().await;
+        app.origin = None;
+        for host in ["192.0.2.10:8088", "hub.example:8088", "[2001:db8::1]:8088"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("host", host.parse().unwrap());
+            headers.insert("origin", format!("http://{host}").parse().unwrap());
+            assert!(check_origin(&app, &headers, true).is_ok());
+            headers.insert("x-forwarded-host", "foreign.example".parse().unwrap());
+            headers.insert("x-forwarded-proto", "https".parse().unwrap());
+            assert_eq!(
+                request_origin(&app, &headers).unwrap(),
+                format!("http://{host}")
+            );
+            for foreign in [
+                "null",
+                "http://foreign.example:8088",
+                "https://192.0.2.10:8088",
+                "http://192.0.2.10:8089",
+            ] {
+                headers.insert("origin", foreign.parse().unwrap());
+                assert!(check_origin(&app, &headers, true).is_err());
+            }
+            headers.remove("origin");
+            assert!(check_origin(&app, &headers, false).is_ok());
+            assert!(check_origin(&app, &headers, true).is_err());
+        }
+        app.origin = Some("https://hub.example".into());
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "127.0.0.1:8088".parse().unwrap());
+        headers.insert("origin", "http://127.0.0.1:8088".parse().unwrap());
+        assert!(check_origin(&app, &headers, true).is_err());
+        headers.insert("origin", "https://hub.example".parse().unwrap());
+        assert!(check_origin(&app, &headers, true).is_ok());
+    }
+
     #[tokio::test]
     async fn public_registration_cannot_create_an_administrator() {
         let app = app().await;
-        let result=register(State(app.clone()),Json(json!({"username":"normal-user","password":"a normal test password","is_admin":true}))).await.unwrap().into_response();
+        let result=register(State(app.clone()),HeaderMap::new(),Json(json!({"username":"normal-user","password":"a normal test password","is_admin":true}))).await.unwrap().into_response();
         assert_eq!(result.status(), axum::http::StatusCode::OK);
         let admin: bool =
             sqlx::query_scalar("SELECT is_admin FROM users WHERE username='normal-user'")
@@ -542,6 +726,7 @@ mod tests {
         assert!(matches!(
             register(
                 State(app),
+                HeaderMap::new(),
                 Json(json!({"username":"ADMIN","password":"a normal test password"}))
             )
             .await,
@@ -552,14 +737,22 @@ mod tests {
     async fn login_requires_existing_user_and_current_hash() {
         let app = app().await;
         let id = user(&app, "owner").await;
-        assert!(login_checked(&app, &id, "old-hash").await.is_err());
-        assert!(login_checked(&app, "missing", "new-hash").await.is_err());
+        assert!(login_checked(&app, &id, "old-hash", &HeaderMap::new())
+            .await
+            .is_err());
+        assert!(
+            login_checked(&app, "missing", "new-hash", &HeaderMap::new())
+                .await
+                .is_err()
+        );
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(&app.db)
             .await
             .unwrap();
         assert_eq!(count, 0);
-        assert!(login_checked(&app, &id, "new-hash").await.is_ok());
+        assert!(login_checked(&app, &id, "new-hash", &HeaderMap::new())
+            .await
+            .is_ok());
     }
     #[tokio::test]
     async fn device_registration_requires_registered_user() {

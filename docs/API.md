@@ -1,6 +1,8 @@
 # API 与传输契约 v1
 
-API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "invalid_request|forbidden|authentication_required|rate_limit|password_length|invalid_username|username_taken|user_not_found|registration_expired|rotation_pending|config_write_failed|database_error" }`，结合 HTTP 状态处理。未知字段不授予权限。OpenAPI 路径目录见 [openapi.json](openapi.json)，设备帧结构见 [connector-v1.schema.json](connector-v1.schema.json)。动态业务校验以服务端及端到端测试为准。
+API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "invalid_request|forbidden|origin_mismatch|authentication_required|rate_limit|password_length|invalid_username|username_taken|user_not_found|registration_expired|rotation_pending|config_write_failed|database_error" }`，结合 HTTP 状态处理。未知字段不授予权限。OpenAPI 路径目录见 [openapi.json](openapi.json)，设备帧结构见 [connector-v1.schema.json](connector-v1.schema.json)。动态业务校验以服务端及端到端测试为准。
+
+未设置 HUB_ORIGIN 时，浏览器 Origin 必须与请求 Host 对应的 HTTP 根地址一致；显式设置时必须与该 HTTP(S) origin 一致。终端 WebSocket 使用相同规则且必须提供 Origin。来源错误返回403 `origin_mismatch`，密码错误返回401 `invalid_credentials`；登录成功及 `/me` 返回实际使用的 `hub_address`。
 
 ## 认证
 
@@ -8,7 +10,7 @@ API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "inval
 
 `POST /auth/password/login`：`{username,password}`；错误凭据返回401 `invalid_credentials`。管理员固定用户名 `admin`，首次监听前创建，密码取本次有效CLI/环境/config，非空且不超过256字节。`GET /me` 返回 `id,username,csrf,hub_address,is_admin`。
 
-后续写操作带 `X-CSRF-Token` 和 `Content-Type: application/json`；浏览器 Origin 精确匹配 HUB_ORIGIN。会话使用HttpOnly SameSite Cookie，生产Secure。`PUT /me/password`：`{password}` 撤销旧会话并返回新会话，admin同时更新私有config；启动参数仍具有最高优先级。`POST /auth/logout`退出当前；`DELETE /me/sessions`退出全部；`GET /me/sessions`列出到期时间。权限和会话每500ms复查。忘记密码使用服务器本机 `users reset-password --username USER` 命令。
+后续写操作带 `X-CSRF-Token` 和 `Content-Type: application/json`；浏览器 Origin 按上述同源规则校验。会话使用HttpOnly SameSite Cookie，HTTPS时设置Secure。`PUT /me/password`：`{password}` 撤销旧会话并返回新会话，admin同时更新私有config；启动参数仍具有最高优先级。`POST /auth/logout`退出当前；`DELETE /me/sessions`退出全部；`GET /me/sessions`列出到期时间。权限和会话每500ms复查。忘记密码使用服务器本机 `users reset-password --username USER` 命令。
 
 ## 工作台与授权
 

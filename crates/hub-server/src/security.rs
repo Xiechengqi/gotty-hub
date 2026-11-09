@@ -116,6 +116,33 @@ pub async fn session(app: &App, headers: &HeaderMap) -> Result<Session> {
         csrf: row.get("csrf"),
     })
 }
+pub fn request_origin(app: &App, headers: &HeaderMap) -> Result<String> {
+    if let Some(origin) = &app.origin {
+        return Ok(origin.clone());
+    }
+    let host = headers
+        .get("host")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(bad)?;
+    let authority: axum::http::uri::Authority = host.parse().map_err(|_| bad())?;
+    // The built-in listener serves HTTP. TLS proxies can pin their HTTPS origin
+    // with HUB_ORIGIN; untrusted forwarding headers do not change this policy.
+    crate::config::parse_origin(&format!("http://{authority}")).map_err(|_| bad())
+}
+pub fn check_origin(app: &App, headers: &HeaderMap, required: bool) -> Result<()> {
+    let mismatch = || Error(StatusCode::FORBIDDEN, "origin_mismatch");
+    match headers.get("origin") {
+        Some(origin) => {
+            let expected = request_origin(app, headers).map_err(|_| mismatch())?;
+            if origin.to_str().ok() != Some(expected.as_str()) {
+                return Err(mismatch());
+            }
+        }
+        None if required => return Err(mismatch()),
+        None => {}
+    }
+    Ok(())
+}
 pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let path = request.uri().path();
@@ -133,10 +160,8 @@ pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Resp
             return e.into_response();
         }
     }
-    if let Some(origin) = request.headers().get("origin") {
-        if origin.to_str().ok() != Some(app.origin.as_str()) {
-            return denied().into_response();
-        }
+    if let Err(error) = check_origin(&app, request.headers(), false) {
+        return error.into_response();
     }
     if method != axum::http::Method::GET && method != axum::http::Method::HEAD {
         if request
@@ -171,14 +196,16 @@ pub async fn guard(State(app): State<App>, request: Request, next: Next) -> Resp
     h.insert("referrer-policy", "no-referrer".parse().unwrap());
     response
 }
-pub fn account(app: &App, s: &Session) -> Value {
-    json!({"id":s.user_id,"username":s.username,"csrf":s.csrf,"hub_address":app.origin,"is_admin":s.is_admin})
+pub fn account(s: &Session, origin: &str) -> Value {
+    json!({"id":s.user_id,"username":s.username,"csrf":s.csrf,"hub_address":origin,"is_admin":s.is_admin})
 }
 pub async fn login_checked(
     app: &App,
     user_id: &str,
     expected_password: &str,
+    request_headers: &HeaderMap,
 ) -> Result<(HeaderMap, Json<Value>)> {
+    let origin = request_origin(app, request_headers)?;
     let raw = token();
     let csrf = token();
     let inserted=sqlx::query("INSERT INTO sessions(token,user_id,csrf,expires) SELECT ?,id,?,? FROM users WHERE id=? AND password_hash=?")
@@ -203,12 +230,16 @@ pub async fn login_checked(
         "set-cookie",
         format!(
             "hub_session={raw}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800{}",
-            if app.secure { "; Secure" } else { "" }
+            if origin.starts_with("https://") {
+                "; Secure"
+            } else {
+                ""
+            }
         )
         .parse()
         .unwrap(),
     );
-    Ok((headers, Json(account(app, &s))))
+    Ok((headers, Json(account(&s, &origin))))
 }
 pub async fn sync_admin(db: &sqlx::SqlitePool, password: &str) -> anyhow::Result<()> {
     let existing: Option<(String, String)> =

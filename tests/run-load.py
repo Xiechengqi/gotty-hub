@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-load-') as tmp:
    for i in range(50):
     key=os.urandom(32).hex();identity=f'load-{i}';conn.execute('INSERT INTO instances(id,name,owner_id,device) VALUES(?,?,?,?)',(identity,identity,'load-user',digest(key)));conn.execute('INSERT INTO grants VALUES(?,?,?)',(identity,'load-user','owner'))
     directory=pathlib.Path(tmp,f'device-{i}');directory.mkdir(mode=0o700);state=directory/'hub.json';state.write_text(json.dumps({'url':url,'instance_id':identity,'credential':key}));state.chmod(0o600)
-    process=subprocess.Popen([os.environ.get('GOTTY_BIN','/tmp/gotty-hub-tools/gotty'),'--address','127.0.0.1','--port',str(free()),'--permit-write','--hub-enabled','--hub-allow-http','--hub-state-file',str(state),'bash'],cwd=tmp,env=env,stdout=log,stderr=log,start_new_session=True);processes.append(process)
+    process=subprocess.Popen([os.environ.get('GOTTY_BIN','/tmp/gotty-hub-tools/gotty'),'--address','127.0.0.1','--port',str(free()),'--permit-write','--hub-state-file',str(state),'bash'],cwd=tmp,env=env,stdout=log,stderr=log,start_new_session=True);processes.append(process)
    conn.commit();conn.close();time.sleep(5)
    fixture=pathlib.Path(tmp,'fixture.json');fixture.write_text(json.dumps({'url':url,'session':session,'csrf':csrf}));fixture.chmod(0o600)
    client=subprocess.Popen(['node',str(root/'tests/load.cjs'),str(fixture),str(report)],cwd=root,env=env,start_new_session=True);processes.append(client)

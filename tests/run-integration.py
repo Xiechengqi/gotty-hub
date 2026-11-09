@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
    processes.append(subprocess.Popen(['node',str(root/'tests/asr-fixture.cjs'),str(asrport)],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True))
    processes.append(subprocess.Popen([hub_binary,'serve'],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True))
    wait(hub+'/healthz')
-   processes.append(subprocess.Popen([binary,'--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','--hub-enabled','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
+   processes.append(subprocess.Popen([binary,'--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
    wait(gotty)
    subprocess.run(['node',str(root/'tests/smoke.cjs')],cwd=root,env=env,check=True,timeout=120)
    subprocess.run(['node',str(root/'tests/security.cjs')],cwd=root,env=env,check=True,timeout=120)
@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
    stage('rotate')
    subprocess.run(['node',str(root/'tests/admin.cjs')],cwd=root,env=env,check=True,timeout=90)
    observer=watch();os.killpg(processes[2].pid,signal.SIGTERM);processes[2].wait(timeout=5);assert observer.wait(timeout=15)==0
-   processes.append(subprocess.Popen([binary,'--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','--hub-enabled','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
+   processes.append(subprocess.Popen([binary,'--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
    stage('online')
    observer=watch();os.killpg(processes[1].pid,signal.SIGTERM);processes[1].wait(timeout=5);assert observer.wait(timeout=15)==0
    # Restore an online-backup snapshot after the stopped Hub's WAL is checkpointed.

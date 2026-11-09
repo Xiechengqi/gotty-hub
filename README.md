@@ -32,10 +32,10 @@ wget https://github.com/Xiechengqi/gotty-hub/releases/download/latest/gotty-hub-
 
 优先级：`--password` / `--password-stdin` > `HUB_PASSWORD` > config。管理员从右上角账号齿轮进入统计、升级/重启、日志后台。普通用户在 Web 注册用户名和密码后即可登录。详见 [管理员与发布说明](docs/ADMINISTRATION.md)。当前 0.2 为全新账号结构，使用全新数据目录初始化。
 
-默认监听 `0.0.0.0:8088`，可通过 `HUB_LISTEN` 覆盖。`HUB_ORIGIN` 支持 HTTP 和 HTTPS，应设置为浏览器实际访问的根地址；默认 `http://127.0.0.1:8088`。例如通过服务器 IP 访问：
+默认监听 `0.0.0.0:8088`，可通过 `HUB_LISTEN` 覆盖。未设置 `HUB_ORIGIN` 时，按当前 HTTP 请求的 Host 做同源校验，可直接通过 `http://服务器IP:8088` 登录。`HUB_ORIGIN` 可将访问地址固定为指定的 HTTP(S) 根地址；HTTPS 反向代理应设置为外部地址，例如：
 
 ```sh
-HUB_ORIGIN=http://SERVER_IP:8088 ./gotty-hub
+HUB_ORIGIN=https://hub.example.com ./gotty-hub
 ```
 
 ## 本地运行
@@ -57,15 +57,15 @@ cd frontend
 npm run dev -- --port 5178
 ```
 
-打开 http://localhost:5178。Vite 将 API/Connector 转发到 8088。首次设置 admin 密码，然后在 Web 注册普通账号。直接访问后端时将 HUB_ORIGIN 设置为浏览器实际使用的 origin，例如 `http://127.0.0.1:8088`。不同主机名/端口不能混用。
+打开 http://localhost:5178。Vite 将 API/Connector 转发到 8088。首次设置 admin 密码，然后在 Web 注册普通账号。开发模式显式固定的 HUB_ORIGIN 应与浏览器访问地址一致；直接访问后端可不设置此变量，由请求 Host 自动确定 HTTP origin。
 
 GoTTY 启动示例：
 
 ```sh
-gotty --permit-write --hub-enabled bash
+gotty --permit-write bash
 ```
 
-在 GoTTY 页面点击右上角 Hub 图标，只填写 Hub 地址和已注册的用户名，一次提交完成接入；实例名称自动生成。HTTP 和 HTTPS 默认均可使用，无需额外开关；可通过 `--hub-allow-http=false` 仅允许 HTTPS。用户名不存在时会提示先前往 Hub Web 注册并提供链接。已有 GoTTY 密码时复用登录态；无密码且启用 Hub 时，主站访问者可管理绑定，所有分享页面均无权管理。
+GoTTY 的 Hub 功能默认开启，可用 `--hub-disabled` 关闭。在 GoTTY 页面点击右上角 Hub 图标，只填写 Hub 地址和已注册的用户名，一次提交完成接入；实例名称自动生成。HTTP 和 HTTPS 默认均可使用，无需额外开关；可通过 `--hub-allow-http=false` 仅允许 HTTPS。用户名不存在时会提示先前往 Hub Web 注册并提供链接。已有 GoTTY 密码时复用登录态；无密码且启用 Hub 时，主站访问者可管理绑定，所有分享页面均无权管理。
 
 ## 构建与验证
 

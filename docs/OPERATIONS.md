@@ -10,25 +10,25 @@ docker compose --env-file /private/hub.env config
 docker compose --env-file /private/hub.env up -d --build
 ```
 
-Hub binary 默认监听 `0.0.0.0:8088`，直接访问时将 `HUB_ORIGIN` 设置为浏览器实际使用的地址，例如 `http://SERVER_IP:8088`。`deploy/Caddyfile` 提供宿主机反向代理示例，替换域名并配置 DNS；采用该方案时可设置 `HUB_LISTEN=127.0.0.1:8088`，Compose 也仅向宿主机回环发布8088。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要把终端请求缓存或记录请求体。Hub 不信任任意 X-Forwarded-For，代理后的公共认证限流按代理地址聚合，扩大规模前需单独设计可信代理策略。
+Hub binary 默认监听 `0.0.0.0:8088`，未设置 `HUB_ORIGIN` 时按请求 Host 校验 HTTP 同源，可直接使用 `http://SERVER_IP:8088` 登录。`HUB_ORIGIN` 可显式固定地址；HTTPS 反向代理需设为实际外部地址。`deploy/Caddyfile` 提供宿主机反向代理示例，替换域名并配置 DNS；采用该方案时可设置 `HUB_LISTEN=127.0.0.1:8088`，Compose 也仅向宿主机回环发布8088。代理需支持 WebSocket、SSE 不缓冲，空闲超时长于心跳；不要把终端请求缓存或记录请求体。Hub 不信任任意 X-Forwarded-For，代理后的公共认证限流按代理地址聚合，扩大规模前需单独设计可信代理策略。
 
 | 配置 | 用途 |
 |---|---|
-| HUB_ORIGIN | 唯一外部 HTTP(S) origin，默认 http://127.0.0.1:8088，不带路径 |
+| HUB_ORIGIN | 可选固定外部 HTTP(S) origin，不带路径；默认按请求 Host 校验 HTTP 同源 |
 | HUB_LISTEN | 默认 0.0.0.0:8088，可显式设为 127.0.0.1:8088 |
 | HUB_DATABASE | SQLite URL，默认 ~/.gotty-hub/hub.db |
 | HUB_ASSETS | 可选外部静态资源目录；默认使用 binary 内嵌资源 |
 | HUB_PASSWORD | admin启动密码覆盖，低于CLI、高于config |
 | HUB_HOME | 默认 ~/.gotty-hub，容器 /data |
 
-GoTTY 需对应 Connector 版本，开启 `--hub-enabled`。凭据默认 `~/.gotty/hub.json`，原子写入 0600；父目录 0700。不要复制同一身份同时运行两个实例。轮换需要在线设备完成落盘确认；离线设备应解绑后重新注册。解绑会关闭浏览器流，旧设备不能再连接。
+GoTTY 需对应 Connector 版本，Hub 功能默认开启，可用 `--hub-disabled` 关闭。凭据默认 `~/.gotty/hub.json`，原子写入 0600；父目录 0700。若 `~/.gotty` 是配置文件，则改用 `~/.gotty-hub.json`。不要复制同一身份同时运行两个实例。轮换需要在线设备完成落盘确认；离线设备应解绑后重新注册。解绑会关闭浏览器流，旧设备不能再连接。
 
 ## 监测与故障处理
 
 - `/healthz`：进程存活。`/readyz`：数据库查询。
 - `/api/v1/diagnostics`：需要 Cookie 会话的汇总信息，不包含终端负载或凭据。
 - 实例离线：检查 GoTTY 到 Hub 的 DNS/TLS/防火墙及 WSS。设备每15秒心跳，45秒失联；自动退避重连。Hub 重启时先显示离线，认证重连后恢复。
-- 浏览器401/403：检查精确 origin、Cookie、CSRF、会话到期及实例授权；重新登录，不能绕过鉴权重试输入。
+- 浏览器401/403：`origin_mismatch` 表示访问地址与显式 HUB_ORIGIN 不一致或跨域请求；其他情况检查 Cookie、CSRF、会话到期及实例授权。
 - 文件：服务器安装 rz/sz；单文件64MiB，观察者禁用。取消后终端应可继续输入。
 - ASR：仅使用 GoTTY 配置的 ASRBackend；HTTPS 下授予麦克风权限；每流120秒/16MiB。不开放通用上游 URL。
 - 磁盘满/数据库错误：停止接入写入、释放空间，检查 SQLite 完整性；错误不会授予新权限。部署监控应包含磁盘剩余、进程内存、WS 断开率。
