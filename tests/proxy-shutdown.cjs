@@ -386,7 +386,10 @@ async function productionUI(registration, legacy) {
         const matrix=new DOMMatrixReadOnly(element.style.transform);
         return key==='ArrowLeft'?-matrix.m41:matrix.m42;
       },direction),{message:'direction key must move the dragged instance before dropping'}).toBeGreaterThan(0);
-      await page.keyboard.press('Space');await expect(handle).toHaveAttribute('aria-pressed','false');
+      // A sortable handle is not a toggle button: dnd-kit removes this
+      // attribute when idle rather than rendering aria-pressed="false".
+      await page.keyboard.press('Space');await expect(handle).not.toHaveAttribute('aria-pressed');
+      await expect(row).not.toHaveAttribute('data-dragging');
     }
     // Pick the last actual ID so this check also works with a restored order.
     const draggedId=before[1];

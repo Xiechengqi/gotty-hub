@@ -54,3 +54,5 @@ CI 增加真实 binary 经 HTTPS 反代的生产页面检查：缓存和 CSP、�
 `MaxListenersExceededWarning` 来自测试代理在 HTTP agent 复用同一 socket 时重复添加生命周期监听器；跟踪函数现对同一 socket 只注册一次，关闭后移出集合，不提高监听器数量上限。
 
 本次本地通过前端 26 项测试、TypeScript 和生产构建、Node 语法及 diff 空白检查。未启动本地服务、代理或浏览器，未截图；修复后的完整生产页面检查由后续 Actions 执行，推送后不等待结果。
+
+后续 CI 已完成初始化及方向位移检查，在结束状态断言处失败：dnd-kit 的 `aria-pressed` 为拖动时 `true`、空闲时移除，原断言错误地等待字符串 `false`。已改为等待 `aria-pressed` 与 `data-dragging` 两个属性移除，并在两种初始顺序的内存 DOM 回归中同时检查这项生命周期契约，继续保留排序结果和持久化检查。

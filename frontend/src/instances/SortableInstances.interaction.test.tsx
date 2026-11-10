@@ -48,6 +48,8 @@ it.each([['one','two'],['two','one']])('moves instances from either surface with
   await key(handle('tabs'),'ArrowLeft');
   expect(handle('tabs').parentElement!.style.transform).toMatch(/translate3d\(-[\d.]+px,/);
   await key(handle('tabs'),'Space');
+  expect(handle('tabs').hasAttribute('aria-pressed')).toBe(false);
+  expect(handle('tabs').parentElement!.hasAttribute('data-dragging')).toBe(false);
   expect(reordered).toHaveBeenLastCalledWith([last,first]);
   expect(order('sidebar')).toEqual([last,first]);
   expect(order('tabs')).toEqual([last,first]);
@@ -56,6 +58,8 @@ it.each([['one','two'],['two','one']])('moves instances from either surface with
   await key(handle('sidebar'),'ArrowDown');
   expect(handle('sidebar').parentElement!.style.transform).toMatch(/translate3d\([^,]+, [\d.]+px,/);
   await key(handle('sidebar'),'Space');
+  expect(handle('sidebar').hasAttribute('aria-pressed')).toBe(false);
+  expect(handle('sidebar').parentElement!.hasAttribute('data-dragging')).toBe(false);
   expect(reordered).toHaveBeenLastCalledWith(initialOrder);
   expect(order('sidebar')).toEqual(initialOrder);
   expect(order('tabs')).toEqual(initialOrder);
