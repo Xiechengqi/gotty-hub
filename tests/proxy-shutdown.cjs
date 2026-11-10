@@ -104,6 +104,8 @@ function request(route, {body, session, method, origin = base, headers = {}} = {
         ...(session ? {cookie: session.cookie, 'x-csrf-token': session.csrf} : {}), ...headers,
       }}, response => {
       let text = '';
+      // Decode across chunk boundaries; bundles contain multi-byte UTF-8 text.
+      response.setEncoding('utf8');
       response.on('data', data => text += data);
       response.on('end', () => resolve({status: response.statusCode, headers: response.headers,
         text, data: text && (response.headers['content-type'] || '').includes('application/json') ? JSON.parse(text) : null}));
