@@ -34,3 +34,13 @@ GoTTY terminal-core 升为 0.2.1，将原版移动快捷键布局、编码和视
 已通过：Hub 前端 24 项单测、TypeScript 和 Vite 生产构建；Rust 33 项 server 单测及 1 项 protocol 单测、fmt、Clippy（warnings 视为错误）和 binary 构建；GoTTY 前端 78 项单测、TypeScript、webpack 生产构建及 Go 编译。共享包与 GoTTY 源逐文件一致，构建 HTML 的 bootstrap 字节及资源引用、Node/Python/workflow 语法、git diff 空白检查均通过。前端构建仍有大 bundle 提示，GoTTY 的 Bootstrap/Sass 弃用提示未阻止构建。
 
 CI 增加真实 binary 经 HTTPS 反代的生产页面检查：缓存和 CSP、旧资源保留、应用/xterm 样式、工具按钮位置、浮层行为、双向排序和持久化、连接数量、CSS/JS 失败/超时/恢复、375px 移动视口和 Ctrl+C 经设备隧道传输。该检查只在 CI 启动服务/浏览器，无截图；本地未执行，推送后也不等待其结果。真实移动设备的系统键盘仍可能存在浏览器平台差异，需要设备回归。
+
+## 2026-11-10：远程 Actions 失败复核
+
+同一提交 `0246485` 的 [check](https://github.com/Xiechengqi/gotty-hub/actions/runs/42663837395) 与 [Build and Release](https://github.com/Xiechengqi/gotty-hub/actions/runs/42663837285) 均在生产页面浏览器检查失败。前端单测、Vite 页面 UI 测试、Rust 检查、进程/代理测试与资源 HTTP 契约均已通过；arm64 发布编译也已通过。生产页面加载 xterm 图片插件时，SIXEL 解码器异步调用 `WebAssembly.instantiate()`，被 Hub 的 `script-src` 拒绝，产生未处理的页面错误。Vite 测试没有 Hub 的真实响应头，因此未覆盖这一差异。
+
+修复仅在 `script-src` 增加 `wasm-unsafe-eval`，保留 bootstrap 精确 hash、同源脚本限制及页面零错误断言，不开放 JavaScript `unsafe-eval` 或任意内联脚本。Rust 和生产 HTTP 检查均按精确 token 集合核对 CSP，并从实际 HTML 重算 bootstrap hash，防止弱字符串断言漏掉额外权限。
+
+`check.yml` 在所有分支 push 和 PR 上验证；发布流程在 main push、版本 tag 和手动触发时验证并发布。main push 上的有效检查已被发布流程覆盖，独立 check 存在重复；删除它不会解决本次失败，因为发布流程也执行同一生产页面检查。技术上可删除，但会失去 PR/其他分支的独立验证。建议保留 PR 检查、取消 main push 的重复检查；本次按分析范围保留工作流配置。
+
+本次本地复核通过 Rust 33 项 server 单测及 1 项 protocol 单测、fmt、Clippy（warnings 视为错误）、binary 编译、Node 脚本语法和 diff 空白检查。Review 确认其余 CSP 指令保持原有权限，生产页面零错误断言仍保留。未启动本地服务、反代或浏览器，未截图；修复后的生产浏览器结果由新一轮 Actions 验证，推送后不等待构建完成。

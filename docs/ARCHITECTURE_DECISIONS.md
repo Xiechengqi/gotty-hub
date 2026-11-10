@@ -75,7 +75,7 @@ SIGINT/SIGTERM/后台重启通过同一取消令牌和任务追踪器通知SSE�
 
 binary 内嵌资源与 HUB_ASSETS 都在启动时读为不可变快照；HTML 重新验证，带构建 hash 的资源长期 immutable，缺失资源不能回退为 HTML，错误响应 no-store。SHA256 ETag 支持 GET/HEAD/304。保留当前及前两代原始 hash 资源，内置升级在替换 binary 前检查归档完整性并落盘，不用新版文件冒充旧 URL。
 
-独立内联 bootstrap 在 React 挂载前验证应用与 xterm CSS；CSS/JS 超时或失败最多自动重试两次，之后显示手动重试和重新加载。字体短暂等待后允许降级，运行中的终端不会被资源恢复逻辑自动刷新。CSP 只为构建 HTML 中 bootstrap 的精确字节授权 SHA256，不开放 unsafe-inline 脚本或 eval。
+独立内联 bootstrap 在 React 挂载前验证应用与 xterm CSS；CSS/JS 超时或失败最多自动重试两次，之后显示手动重试和重新加载。字体短暂等待后允许降级，运行中的终端不会被资源恢复逻辑自动刷新。CSP 为构建 HTML 中 bootstrap 的精确字节授权 SHA256，另通过 `wasm-unsafe-eval` 允许 xterm 图片插件的 SIXEL WebAssembly 解码器；不开放 `unsafe-inline` 脚本或 JavaScript `unsafe-eval`。
 
 ## ADR-008：终端工具及统一实例顺序
 

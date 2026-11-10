@@ -66,6 +66,8 @@ HTML 及无 hash 文件使用 `no-cache, must-revalidate`；`assets/*-[hash].*` 
 
 页面独立加载层会验证应用 CSS 和 xterm helper 样式。CSS 等待 10 秒、应用 JS 等待 15 秒，各最多自动重试两次；失败后保持工作台隐藏，提供明确的重试/重新加载。字体最多额外等待 1.5 秒，不因字体服务失败卡住页面。已打开的终端不会因这套恢复机制自动刷新；致命 React 渲染错误提供用户主动重新加载。
 
+CSP 的 `script-src` 允许本站脚本、bootstrap 的精确 SHA256 和 `wasm-unsafe-eval`，后者用于 xterm 图片插件的 SIXEL WebAssembly 解码器；JavaScript `unsafe-eval` 和任意内联脚本仍被禁止。代理额外添加的 CSP 会与 Hub 的策略同时生效，也应允许此 WebAssembly 权限，否则浏览器会报告 `WebAssembly.instantiate()` 被 CSP 拒绝。
+
 响应携带 `X-Hub-Revision` 和 `X-Hub-Assets`，静态文件另有 `X-Hub-Asset-Generation`。`Static response` 日志包含路径、状态、耗时、字节数和 `body_complete`，不包含 query、密码、Cookie 或终端负载。`body_complete=true` 仅表示 HTTP server 消费了完整响应体，不能证明后续 TLS/CDN/代理已向浏览器完整交付。请求未到 Hub 的 DNS/TLS 故障需检查代理和浏览器网络日志；整页无样式不能仅凭 WS 1006 归因于终端连接。
 
 浏览器终端 WS 每 15 秒 Ping，45 秒无入站消息断开，发送等待最多 10 秒。代理需放行 Upgrade 和 Ping/Pong，超时应覆盖心跳间隔。断线诊断区分凭据/授权失效、实例离线与网络/握手失败；1006 本身不提供确定根因。服务端记录握手状态、关闭原因和持续时间，普通退出仍用 1001，后台重启用 1012。

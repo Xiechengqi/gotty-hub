@@ -10,7 +10,7 @@ const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
 const {spawn, execFileSync} = require('node:child_process');
-const {randomBytes} = require('node:crypto');
+const {createHash, randomBytes} = require('node:crypto');
 const WebSocket = require('../frontend/node_modules/ws');
 const binary = path.resolve(__dirname, '../target/debug/gotty-hub');
 const browserRegression = process.argv.includes('--ui');
@@ -289,8 +289,14 @@ async function resourceContracts(legacy) {
   assert.equal(html.status, 200);
   assert.match(html.headers['cache-control'], /no-cache.*must-revalidate/);
   assert.match(html.headers['content-type'], /text\/html/);
-  assert.match(html.headers['content-security-policy'], /script-src 'self' 'sha256-/);
-  assert(!html.headers['content-security-policy'].includes("script-src 'self' 'unsafe-inline'"));
+  const bootstrap = html.text.match(/<script id="hub-bootstrap">([\s\S]*?)<\/script>/);
+  assert(bootstrap, 'production HTML must contain the recovery bootstrap');
+  const scriptSources = html.headers['content-security-policy'].split(';').map(part => part.trim())
+    .find(part => part.startsWith('script-src ')).split(/\s+/).slice(1);
+  // Exact tokens: allow the SIXEL decoder's Wasm without granting JavaScript
+  // eval or arbitrary inline scripts, regardless of source ordering.
+  assert.deepEqual(new Set(scriptSources), new Set(["'self'", "'wasm-unsafe-eval'",
+    "'sha256-" + createHash('sha256').update(bootstrap[1]).digest('base64') + "'"]));
   assert.equal((await request('/', {headers:{'if-none-match':html.headers.etag}})).status, 304);
   assert.equal((await request('/workspace')).status, 200);
   for (const extension of ['css','js']) {

@@ -108,13 +108,14 @@ impl Store {
             file.generation.clone_from(&generation);
         }
         let html = std::str::from_utf8(&current["index.html"].data)?;
-        // Hash the exact inline bootstrap in the built HTML, without granting
-        // unsafe-inline script or eval permission.
+        // Hash the exact inline bootstrap in the built HTML. The SIXEL image
+        // decoder needs Wasm, but JavaScript eval and arbitrary inline scripts
+        // remain blocked.
         let bootstrap = html
             .split_once("<script id=\"hub-bootstrap\">")
             .and_then(|(_, rest)| rest.split_once("</script>"))
             .map(|(source, _)| format!(" 'sha256-{}'", STANDARD.encode(Sha256::digest(source))));
-        let csp = format!("default-src 'self'; script-src 'self'{}; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'", bootstrap.unwrap_or_default());
+        let csp = format!("default-src 'self'; script-src 'self'{} 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'", bootstrap.unwrap_or_default());
         Ok(Self {
             current,
             previous: BTreeMap::new(),
@@ -652,10 +653,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(embedded.generation, external.generation);
+        assert_eq!(embedded.csp, external.csp);
         let html = std::str::from_utf8(&embedded.current["index.html"].data).unwrap();
-        assert!(html.contains("<script id=\"hub-bootstrap\">"));
-        assert!(embedded.csp.contains("'sha256-"));
-        assert!(!embedded.csp.contains("script-src 'self' 'unsafe-inline'"));
+        let bootstrap = html
+            .split_once("<script id=\"hub-bootstrap\">")
+            .unwrap()
+            .1
+            .split_once("</script>")
+            .unwrap()
+            .0;
+        let bootstrap_hash = format!("'sha256-{}'", STANDARD.encode(Sha256::digest(bootstrap)));
+        let script_sources: std::collections::BTreeSet<_> = embedded
+            .csp
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("script-src "))
+            .unwrap()
+            .split_ascii_whitespace()
+            .skip(1)
+            .collect();
+        // Check exact tokens so source ordering cannot hide unsafe-eval or
+        // unsafe-inline, while still allowing the image decoder's Wasm.
+        assert_eq!(
+            script_sources,
+            std::collections::BTreeSet::from([
+                "'self'",
+                "'wasm-unsafe-eval'",
+                bootstrap_hash.as_str(),
+            ])
+        );
         std::fs::remove_dir_all(home).unwrap();
     }
 }
