@@ -44,3 +44,13 @@ CI 增加真实 binary 经 HTTPS 反代的生产页面检查：缓存和 CSP、�
 `check.yml` 原先在所有分支 push 和 PR 上验证，main push 上的有效检查已被发布流程覆盖。现按要求删除独立 `check.yml`，避免重复运行；`build-release.yml` 保留前端测试、Rust 检查、进程/代理及生产页面验证，在 main push、版本 tag 和手动触发时验证并发布。PR 和其他分支 push 不再触发独立检查。本次 CSP 失败通过上述代码修复解决，删除工作流本身不能修复该问题。
 
 本次本地复核通过 Rust 33 项 server 单测及 1 项 protocol 单测、fmt、Clippy（warnings 视为错误）、binary 编译、Node 脚本语法和 diff 空白检查。Review 确认其余 CSP 指令保持原有权限，生产页面零错误断言仍保留。未启动本地服务、反代或浏览器，未截图；修复后的生产浏览器结果由新一轮 Actions 验证，推送后不等待构建完成。
+
+## 2026-11-10：键盘排序检查时序及代理监听器
+
+[后续发布流程](https://github.com/Xiechengqi/gotty-hub/actions/runs/42733569995) 已通过 CSP 与终端工具检查，在首次排序后等待侧栏顺序变化时失败。原测试在 `aria-pressed=true` 后立即发送方向键；dnd-kit 的 KeyboardSensor 在延后定时器中安装键盘监听器，拖动状态先于监听器和碰撞几何就绪。内存 DOM 中复现了方向键过早发送后顺序保持不变，等待初始化后双向排序正常；在方向键之后固定等待 100ms 无法补回已丢失的事件。
+
+生产页面检查改为在开始拖动后跨过定时器和渲染帧、确认碰撞几何，再发送方向键；确认实例向预期方向发生实际位移后才结束拖动。目标从当前最后一个实例 ID 选择，兼容已恢复的初始顺序。保留侧栏/tab 双向顺序、preferences 持久化、刷新恢复及排序不重连的断言，未扩大断言超时或跳过检查。新增使用真实 KeyboardSensor 的内存 DOM 交互回归，覆盖两种初始顺序和两处排序同步。
+
+`MaxListenersExceededWarning` 来自测试代理在 HTTP agent 复用同一 socket 时重复添加生命周期监听器；跟踪函数现对同一 socket 只注册一次，关闭后移出集合，不提高监听器数量上限。
+
+本次本地通过前端 26 项测试、TypeScript 和生产构建、Node 语法及 diff 空白检查。未启动本地服务、代理或浏览器，未截图；修复后的完整生产页面检查由后续 Actions 执行，推送后不等待结果。

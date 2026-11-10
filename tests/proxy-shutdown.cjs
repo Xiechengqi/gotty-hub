@@ -43,9 +43,12 @@ async function bounded(promise, ms, message) {
   } finally { clearTimeout(timer); }
 }
 function track(socket) {
+  // The HTTP agent can reuse a socket for many requests. Track its lifetime
+  // once, rather than accumulating error/close listeners on every request.
+  if (sockets.has(socket)) return socket;
   sockets.add(socket);
   socket.on('error', () => {});
-  socket.on('close', () => sockets.delete(socket));
+  socket.once('close', () => sockets.delete(socket));
   return socket;
 }
 function forwarded(headers) {
@@ -363,16 +366,38 @@ async function productionUI(registration, legacy) {
     await expect(page.locator('.session-tab')).toHaveCount(2);
     const order=scope=>page.locator(scope+' [data-instance-id]').evaluateAll(nodes=>nodes.map(node=>node.dataset.instanceId));
     const before=await order('.sidebar');
+    assert.deepEqual(new Set(before),new Set([registration.instance_id,extra.data.instance_id]));
+    await expect.poll(()=>order('.session-tabs-scroll')).toEqual(before);
     const openCount=()=>connector.messages.concat(second.messages).filter(text=>JSON.parse(text).kind==='open').length;
     await until(()=>openCount()>=2,'second terminal did not connect');const opens=openCount();
-    const tabHandle=page.locator('.session-tab').filter({hasText:'ui-second'}).getByRole('button',{name:'拖动排序 ui-second'});
-    await tabHandle.focus();await page.keyboard.press('Space');await expect(tabHandle).toHaveAttribute('aria-pressed','true');await page.keyboard.press('ArrowLeft');await page.waitForTimeout(100);await page.keyboard.press('Space');
+    await expect(page.locator('.terminal-slot:not([hidden]) .terminal-connections')).toContainText('3');
+    async function keyboardMove(handle,direction) {
+      const row=handle.locator('..');
+      await handle.focus();await page.keyboard.press('Space');
+      await expect(handle).toHaveAttribute('aria-pressed','true');
+      // KeyboardSensor installs its document listener in a deferred timer;
+      // aria-pressed can become true before that listener and rects are ready.
+      // Yield through a timer and rendered frame before sending a direction.
+      await page.evaluate(()=>new Promise(resolve=>setTimeout(()=>requestAnimationFrame(()=>resolve()),0)));
+      await expect.poll(()=>row.evaluate(element=>element.style.transform),{message:'keyboard drag must initialize its collision geometry'}).not.toBe('');
+      await handle.focus();await expect(handle).toBeFocused();
+      await page.keyboard.press(direction);
+      await expect.poll(()=>row.evaluate((element,key)=>{
+        const matrix=new DOMMatrixReadOnly(element.style.transform);
+        return key==='ArrowLeft'?-matrix.m41:matrix.m42;
+      },direction),{message:'direction key must move the dragged instance before dropping'}).toBeGreaterThan(0);
+      await page.keyboard.press('Space');await expect(handle).toHaveAttribute('aria-pressed','false');
+    }
+    // Pick the last actual ID so this check also works with a restored order.
+    const draggedId=before[1];
+    const tabHandle=page.locator(`.session-tab[data-instance-id="${draggedId}"] .instance-sort-handle`);
+    await keyboardMove(tabHandle,'ArrowLeft');
     await expect.poll(()=>order('.sidebar')).toEqual([...before].reverse());
     await expect.poll(()=>order('.session-tabs-scroll')).toEqual([...before].reverse());
     const moved=await order('.sidebar');assert.notDeepEqual(moved,before);
     // Move the same item in the sidebar to verify the opposite direction.
-    const sideHandle=page.locator('.sidebar').getByRole('button',{name:'拖动排序 ui-second'});
-    await sideHandle.focus();await page.keyboard.press('Space');await expect(sideHandle).toHaveAttribute('aria-pressed','true');await page.keyboard.press('ArrowDown');await page.waitForTimeout(100);await page.keyboard.press('Space');
+    const sideHandle=page.locator(`.sidebar [data-instance-id="${draggedId}"] .instance-sort-handle`);
+    await keyboardMove(sideHandle,'ArrowDown');
     await expect.poll(()=>order('.sidebar')).toEqual(before);
     await expect.poll(()=>order('.session-tabs-scroll')).toEqual(before);
     await expect.poll(async()=>{const response=await context.request.get(base+'/api/v1/me/preferences',{headers:{'X-Hub-Origin':base}});return (await response.json()).instanceOrder;}).toEqual(before);
