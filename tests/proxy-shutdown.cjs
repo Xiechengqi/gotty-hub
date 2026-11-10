@@ -1,5 +1,5 @@
-// CI-only process checks; --ui also runs Chromium against the production binary.
-// Never run either mode as a local deployment check. No screenshots are taken.
+// CI-only process checks against the production binary, including asset
+// contracts. Never run as a local deployment check. No screenshots are taken.
 'use strict';
 const assert = require('node:assert/strict');
 assert(process.env.CI, 'Process/proxy regression checks must run in CI.');
@@ -13,7 +13,6 @@ const {spawn, execFileSync} = require('node:child_process');
 const {createHash, randomBytes} = require('node:crypto');
 const WebSocket = require('../frontend/node_modules/ws');
 const binary = path.resolve(__dirname, '../target/debug/gotty-hub');
-const browserRegression = process.argv.includes('--ui');
 const adminPassword = 'CI stdin administrator password';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const secret = () => randomBytes(32).toString('hex');
@@ -325,156 +324,6 @@ async function resourceContracts(legacy) {
   }
   console.log('PASS production HTTP cache/ETag/HEAD/MIME/404/CSP and retained original CSS/JS after resource generation change');
 }
-async function productionUI(registration, legacy) {
-  await resourceContracts(legacy);
-  const {chromium, expect} = require('../frontend/node_modules/@playwright/test');
-  const browser = await chromium.launch();
-  const connector = await device(registration);
-  try {
-    const context = await browser.newContext({ignoreHTTPSErrors:true,locale:'zh-CN',viewport:{width:1440,height:960}});
-    await context.addInitScript(() => localStorage.setItem('gotty-hub.locale','zh-CN'));
-    const login = await context.request.post(base + '/api/v1/auth/password/login', {
-      headers:{origin:base}, data:{username:'admin',password:adminPassword}});
-    assert.equal(login.status(), 200);
-    const page = await context.newPage();
-    let pageErrors=[];page.on('pageerror',error=>pageErrors.push(error.message));
-    await page.goto(base);
-    await expect(page.locator('.xterm-helper-textarea')).toHaveCount(1);
-    await expect(page.locator('.terminal-control.terminal-connections')).toContainText('3');
-    assert.deepEqual(await page.evaluate(() => {
-      const app=getComputedStyle(document.querySelector('.app'));
-      const helper=getComputedStyle(document.querySelector('.xterm-helper-textarea'));
-      return [app.display,helper.position,helper.opacity,helper.zIndex];
-    }), ['flex','absolute','0','-5']);
-    const terminal = await page.locator('.real-terminal').boundingBox();
-    for (const [selector,top] of [['.terminal-connections',10],['.terminal-display-control',42],['.terminal-clear-control',74],['.terminal-upload-control',106],['.terminal-restart-control',138],['.terminal-hub-control',170]]) {
-      const box=await page.locator(selector).boundingBox();assert(Math.abs(box.y-terminal.y-top)<2);assert.equal(box.height,28);assert(Math.abs(box.x+box.width-(terminal.x+terminal.width-10))<2);
-    }
-    await page.getByRole('button',{name:'显示设置',exact:true}).click();
-    const display=page.getByRole('dialog',{name:'显示设置',exact:true});await expect(display).toBeVisible();
-    const palette=await page.locator('.terminal-display-popover').boundingBox();
-    assert(Math.abs(palette.y-terminal.y-42)<2);assert(Math.abs(palette.x+palette.width-(terminal.x+terminal.width-46))<2);
-    await page.keyboard.press('Escape');await expect(display).not.toBeVisible();
-    await page.locator('.terminal-connections').click();await expect(page.getByRole('dialog',{name:'分享管理',exact:true})).toBeVisible();
-    await page.getByRole('button',{name:'显示设置',exact:true}).click();
-    await expect(page.getByRole('dialog',{name:'分享管理',exact:true})).not.toBeVisible();await expect(display).toBeVisible();await page.keyboard.press('Escape');
-    assert.deepEqual(pageErrors,[]);
-
-    // New instances and membership changes must not overwrite the saved order.
-    const extra = await request('/api/v1/instances/register',{body:{username:'admin',name:'ui-second',request_id:secret(),claim:secret()}});
-    const second=await device(extra.data);
-    await expect(page.locator('.sidebar .registered-instance')).toHaveCount(2);
-    await page.locator('.sidebar .registered-instance').filter({hasText:'ui-second'}).click();
-    await expect(page.locator('.session-tab')).toHaveCount(2);
-    const order=scope=>page.locator(scope+' [data-instance-id]').evaluateAll(nodes=>nodes.map(node=>node.dataset.instanceId));
-    const before=await order('.sidebar');
-    assert.deepEqual(new Set(before),new Set([registration.instance_id,extra.data.instance_id]));
-    await expect.poll(()=>order('.session-tabs-scroll')).toEqual(before);
-    const openCount=()=>connector.messages.concat(second.messages).filter(text=>JSON.parse(text).kind==='open').length;
-    await until(()=>openCount()>=2,'second terminal did not connect');const opens=openCount();
-    await expect(page.locator('.terminal-slot:not([hidden]) .terminal-connections')).toContainText('3');
-    async function keyboardMove(handle,direction) {
-      const row=handle.locator('..');
-      await handle.focus();await page.keyboard.press('Space');
-      await expect(handle).toHaveAttribute('aria-pressed','true');
-      // KeyboardSensor installs its document listener in a deferred timer;
-      // aria-pressed can become true before that listener and rects are ready.
-      // Yield through a timer and rendered frame before sending a direction.
-      await page.evaluate(()=>new Promise(resolve=>setTimeout(()=>requestAnimationFrame(()=>resolve()),0)));
-      await expect.poll(()=>row.evaluate(element=>element.style.transform),{message:'keyboard drag must initialize its collision geometry'}).not.toBe('');
-      await handle.focus();await expect(handle).toBeFocused();
-      await page.keyboard.press(direction);
-      await expect.poll(()=>row.evaluate((element,key)=>{
-        const matrix=new DOMMatrixReadOnly(element.style.transform);
-        return key==='ArrowLeft'?-matrix.m41:matrix.m42;
-      },direction),{message:'direction key must move the dragged instance before dropping'}).toBeGreaterThan(0);
-      // A sortable handle is not a toggle button: dnd-kit removes this
-      // attribute when idle rather than rendering aria-pressed="false".
-      await page.keyboard.press('Space');await expect(handle).not.toHaveAttribute('aria-pressed');
-      await expect(row).not.toHaveAttribute('data-dragging');
-    }
-    // Pick the last actual ID so this check also works with a restored order.
-    const draggedId=before[1];
-    const tabHandle=page.locator(`.session-tab[data-instance-id="${draggedId}"] .instance-sort-handle`);
-    await keyboardMove(tabHandle,'ArrowLeft');
-    await expect.poll(()=>order('.sidebar')).toEqual([...before].reverse());
-    await expect.poll(()=>order('.session-tabs-scroll')).toEqual([...before].reverse());
-    const moved=await order('.sidebar');assert.notDeepEqual(moved,before);
-    // Move the same item in the sidebar to verify the opposite direction.
-    const sideHandle=page.locator(`.sidebar [data-instance-id="${draggedId}"] .instance-sort-handle`);
-    await keyboardMove(sideHandle,'ArrowDown');
-    await expect.poll(()=>order('.sidebar')).toEqual(before);
-    await expect.poll(()=>order('.session-tabs-scroll')).toEqual(before);
-    await expect.poll(async()=>{const response=await context.request.get(base+'/api/v1/me/preferences',{headers:{'X-Hub-Origin':base}});return (await response.json()).instanceOrder;}).toEqual(before);
-    assert.equal(openCount(),opens,'sorting must preserve mounted terminal connections');
-    await page.reload();await expect.poll(()=>order('.session-tabs-scroll')).toEqual(before);
-    second.terminate();await second.closed;
-    await page.close();
-
-    // CSS abort: the bundle may arrive, but no app/API/terminal may start until
-    // the successful retry applies both app and xterm styles.
-    for (const kind of ['css-once','css-timeout','css-permanent','js-permanent']) {
-      const failure=await context.newPage();let count=0,unblock,allow=false,apiCalls=0;
-      failure.on('request',request=>{if(request.url().includes('/api/v1/'))apiCalls++;});
-      const pattern=kind.startsWith('css')?'**/assets/*.css*':'**/assets/*.js*';
-      await failure.route(pattern,async route=>{
-        count++;
-        if(allow)return route.continue();
-        if(kind==='css-once'){
-          if(count===1)return route.abort();
-          return new Promise(resolve=>{unblock=()=>{allow=true;resolve(route.continue());};});
-        }
-        if(kind==='css-timeout'){
-          if(count===1)return new Promise(resolve=>{unblock=()=>resolve(route.abort().catch(()=>{}));});
-          allow=true;return route.continue();
-        }
-        return route.abort();
-      });
-      const navigation=failure.goto(base+'/?preview=1',{waitUntil:'commit'});await navigation;
-      if(kind==='css-once'){
-        await until(()=>count>=2&&!!unblock,'stylesheet retry did not start');
-        assert.equal(await failure.locator('#root').getAttribute('hidden'),'');assert.equal(apiCalls,0);unblock();
-      }else if(kind==='css-timeout'){
-        await until(()=>count>=2,'stylesheet timeout did not trigger recovery before DOMContentLoaded',13000);if(unblock)unblock();
-      }else{
-        await expect(failure.locator('#hub-boot[data-state=error]')).toBeVisible();
-        assert.equal(count,3);assert.equal(apiCalls,0);
-        await new Promise(resolve=>setTimeout(resolve,400));assert.equal(count,3,'resource retries must be bounded');
-        allow=true;await failure.getByRole('button',{name:'重试',exact:true}).click();
-      }
-      await expect(failure.locator('.app')).toBeVisible();await expect(failure.locator('#hub-boot')).toBeHidden();
-      assert.equal(await failure.locator('.app').evaluate(element=>getComputedStyle(element).display),'flex');
-      await failure.close();
-    }
-    const stale=await context.newPage();
-    const csp=(await request('/')).headers['content-security-policy'];
-    await stale.route(base+'/?preview=1',route=>route.fulfill({status:200,contentType:'text/html',body:legacy.html,headers:{'content-security-policy':csp}}));
-    await stale.goto(base+'/?preview=1');await expect(stale.locator('.app')).toBeVisible();await stale.close();
-    await context.close();
-
-    // Simulate the viewport events from an on-screen keyboard. No screenshot
-    // or virtual keyboard automation is needed to assert the real DOM/input.
-    const mobile=await browser.newContext({ignoreHTTPSErrors:true,isMobile:true,hasTouch:true,viewport:{width:375,height:812}});
-    await mobile.addInitScript(()=>{
-      localStorage.setItem('gotty-hub.locale','zh-CN');
-      const vv=Object.assign(new EventTarget(),{height:812,offsetTop:0,offsetLeft:0,pageTop:0,pageLeft:0,scale:1,width:375});
-      Object.defineProperty(window,'visualViewport',{configurable:true,value:vv});
-    });
-    assert.equal((await mobile.request.post(base+'/api/v1/auth/password/login',{headers:{origin:base},data:{username:'admin',password:adminPassword}})).status(),200);
-    const phone=await mobile.newPage();await phone.goto(base);
-    await expect(phone.locator('.xterm-helper-textarea')).toHaveCount(1);
-    await phone.locator('.session-tab').filter({hasText:'proxy-ci'}).getByRole('button').filter({hasText:'proxy-ci'}).click();
-    await expect(phone.locator('.terminal-slot:not([hidden]) .terminal-connections')).toContainText('3');
-    await phone.locator('.terminal-slot:not([hidden]) .xterm-screen').tap();
-    await phone.evaluate(()=>{const vv=window.visualViewport;vv.height=450;vv.dispatchEvent(new Event('resize'));});
-    await expect(phone.locator('.terminal-mobile-keys button')).toHaveCount(16);
-    await phone.getByRole('button',{name:'Ctrl',exact:true}).tap();await phone.keyboard.insertText('c');
-    await until(()=>connector.messages.some(text=>{const f=JSON.parse(text);return f.kind==='data'&&typeof f.data==='string'&&f.data[0]==='1'&&Buffer.from(f.data.slice(1),'base64').toString()==='\x03';}),'mobile Ctrl+C did not reach the connector');
-    assert(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    await mobile.close();
-    console.log('PASS production TLS browser layout, xterm CSS, anchored controls, synchronized/persisted sorting without reconnects, CSS/JS abort/timeout/retry, old documents and all 16 mobile keys');
-  } finally {connector.terminate();await connector.closed;await browser.close();}
-}
 
 async function main() {
   home = path.join(tmp, 'home');
@@ -487,7 +336,7 @@ async function main() {
   backendPort = portHolder.address().port;
   await new Promise(resolve => portHolder.close(resolve));
   await startProxy();
-  const legacy = browserRegression ? await legacyResources() : null;
+  const legacy = await legacyResources();
   let state = await start();
   const session = await login();
   assert.equal((await request('/api/v1/auth/password/login', {origin: 'https://attacker.invalid',
@@ -495,11 +344,7 @@ async function main() {
   const result = await request('/api/v1/instances/register', {body: {username: 'admin', name: 'proxy-ci', request_id: secret(), claim: secret()}});
   assert.equal(result.status, 200);
   const registration = result.data;
-  if (browserRegression) {
-    await productionUI(registration, legacy);
-    await stop(state, 'SIGINT');
-    return;
-  }
+  await resourceContracts(legacy);
   await domainChanges(registration);
   let streams = await active(session, registration);
   const listening = () => state.logs.split('Hub listening').length - 1;

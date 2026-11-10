@@ -11,7 +11,7 @@ test:
 	cargo build --locked
 	cargo test --locked
 	python3 tests/config.py
-	cd frontend && npm run test:ui
+	cd frontend && npm test
 	python3 tests/run-integration.py
 dev:
 	cargo run

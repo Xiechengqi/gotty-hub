@@ -5,5 +5,3 @@ target
 .dev-mail
 *.db*
 .env*
-frontend/test-results
-frontend/playwright-report

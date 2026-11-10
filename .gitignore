@@ -3,8 +3,6 @@ frontend/dist/
 .env
 .env.*
 !.env.example
-frontend/test-results/
-frontend/playwright-report/
 /target/
 /hub.db*
 /data/
