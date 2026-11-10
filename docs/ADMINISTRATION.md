@@ -86,4 +86,4 @@ admin登录后从右上角齿轮进入“管理后台”。普通用户API访问
 4. 输出两个binary及各自SHA256文件，GitHub Actions内置GITHUB_TOKEN发布Release。
 5. 所有触发方式统一发布名为 `latest`、标签为 `latest` 的 Release；校验产物后将标签更新到当前提交，重复发布覆盖同名 binary 和 SHA256 文件。工作流串行执行，发布说明记录实际 commit，并提供下载到 `/usr/local/bin` 后执行 `chmod +x` 的安装命令。
 
-CI权限只在发布job提升contents:write；无个人令牌或外部邮件服务密钥。check工作流继续验证PR。本轮验证见 [USERNAME_AUTH_REVIEW.md](USERNAME_AUTH_REVIEW.md)，早期发布记录保留在历史review中。
+CI权限只在发布job提升contents:write；无个人令牌或外部邮件服务密钥。独立 `check.yml` 已删除，上述检查由发布工作流执行，不再为 PR 或其他分支 push 单独触发。本轮验证见 [USERNAME_AUTH_REVIEW.md](USERNAME_AUTH_REVIEW.md)，早期发布记录保留在历史review中。
