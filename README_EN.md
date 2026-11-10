@@ -46,7 +46,7 @@ Each instance represents GoTTY's current shared PTY. Multiple browsers can use t
 - Owner, operator, and observer roles; terminal input, files, and voice follow both Hub permissions and GoTTY configuration.
 - Native uploads, drag-and-drop uploads, ZMODEM transfers, and optional ASR voice input. ZMODEM requires `rz` / `sz` on the remote device.
 - Automatic reconnect and output replay, plus device-credential rotation, disconnect, and unbinding.
-- An administration panel for statistics, online upgrades, restarts, and logs.
+- A Settings menu at the top right: Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device.
 - Single-file Linux amd64 / arm64 releases, with data stored under `~/.gotty-hub` by default.
 
 ## Quick Start
@@ -163,9 +163,9 @@ Common environment variables:
 
 Trusted-proxy precedence is `--trusted-proxies` > `HUB_TRUSTED_PROXIES` > the config's `trusted_proxies` array > loopback defaults. See [administration and configuration](docs/ADMINISTRATION.md) (Chinese) for details.
 
-## Administration
+## Console
 
-Sign in as `admin`, open the gear button at the right of the navigation bar, and choose Administration:
+Sign in as `admin`, open Settings at the right of the navigation bar, and choose Console:
 
 - **Statistics**: users, registered / online / offline instances, active sessions, uptime, version, and commit.
 - **Upgrade / restart**: check this repository's `latest` Release, verify SHA256, back up the binary and database, then replace and restart.

@@ -12,6 +12,7 @@ import '@/styles/globals.css';
 import './app.css';
 import {api,useAccount,type Account} from './api';
 import {AdminPanel} from './Admin';
+import {SettingsMenu,type SettingsAction} from './SettingsMenu';
 import {errorText} from './errors';
 import {RealTerminal} from './terminal/Terminal';
 import {normalizeOrder} from './instances/order';
@@ -19,7 +20,7 @@ import {InstanceSortProvider,InstanceSortList,SortableInstance} from './instance
 
 type Group = 'production' | 'development' | 'personal';
 type Instance = { status?: 'red'|'gray'|'yellow'|'green'; capabilities?: {write?:boolean;files?:boolean;asr?:boolean;controls?:boolean}; id: string; name: string; description: MessageKey; group: Group; online: boolean; role: 'owner' | 'operator' | 'observer'; host: string };
-type Panel = '' | 'login' | 'account' | 'detail' | 'connect';
+type Panel = '' | 'login' | 'password' | 'logout' | 'detail' | 'connect';
 const demoInstances: Instance[] = [
   { id:'prod', name:'production-api', description:'prodDescription', group:'production', online:true, role:'owner', host:'ubuntu@api-01' },
   { id:'dev', name:'dev-workspace', description:'devDescription', group:'development', online:true, role:'operator', host:'developer@workspace' },
@@ -148,14 +149,20 @@ function App() {
   useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(null),4500);return()=>clearTimeout(timer)},[notice]);
   const detailInstance = instances.find(i=>i.id===detail)??{id:'',name:'',online:false,role:'observer' as const};
   function open(i:Instance){setApiError('');if(!i.online){setDetail(i.id);showPanel('detail');return}setOpened(a=>a.includes(i.id)?a:[...a,i.id]);setActive(i.id);setDrawer(false)}
-  function showPanel(value:Panel){if(value==='account'&&!preview&&account)api<{sessions:{expires:number}[]}>('/me/sessions').then(v=>setSessions(v.sessions)).catch(fail);setApiError('');setNotice(null);setDrawer(false);setPanel(value);setError(null);setPassword('');setConfirmation('');setShowPassword(false);setAuthMode('login')}
+  function showPanel(value:Panel){if(value==='logout'&&!preview&&account)api<{sessions:{expires:number}[]}>('/me/sessions').then(v=>setSessions(v.sessions)).catch(fail);setApiError('');setNotice(null);setDrawer(false);setPanel(value);setError(null);setPassword('');setConfirmation('');setShowPassword(false);setAuthMode('login')}
   function closePanel(){if(!preview&&!account)return;setPanel('');setPassword('');setConfirmation('');setError(null)}
   async function savePassword(){
     if(passwordBytes(password)<(account?.is_admin?1:12)||passwordBytes(password)>256||!password.trim()){setError('passwordMissing');return}
     if(password!==confirmation){setError('passwordMismatch');return}
-    if(preview){setError(null);setPassword('');setConfirmation('');setNotice('passwordSaved');return}
+    if(preview){closePanel();setNotice('passwordSaved');return}
     setBusy(true);setApiError('');try{acceptAccount(await api<Account>('/me/password',{password},'PUT'));setPassword('');setConfirmation('');closePanel()}catch(error){fail(error)}finally{setBusy(false)}
   }
+  async function signOut(path:string,method?:string){
+    if(preview){closePanel();setNotice('signOutPreview');return}
+    setBusy(true);setApiError('');
+    try{await api(path,{},method);acceptAccount(null);setInstances([]);setOpened([]);setAuthMode('login');setPanel('login')}catch(error){fail(error)}finally{setBusy(false)}
+  }
+  function settings(action:SettingsAction){if(action==='console'){setApiError('');setAdminOpen(true)}else showPanel(action)}
   async function submitAuth(){
     setError(null);setApiError('');
     if(!validUsername(username)){setError('invalidUsername');return}
@@ -187,21 +194,37 @@ function App() {
   return <DirectionProvider locale={locale}><InstanceSortProvider order={order} onReorder={setInstanceOrder} locale={locale}><div className={cx("app",maximized&&"workspace-maximized",sidebarCollapsed&&"sidebar-collapsed",navbarCollapsed&&"navbar-collapsed")}>
     <aside className="sidebar">{navigation('sidebar')}</aside>
     <main className="main">
-      <header className="topbar"><div className="breadcrumb"><Button className="mobile-menu quiet-button" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="topbar-actions">{preview&&<span className="prototype-label text-caption-1-regular">{t('prototype')}</span>}<Button className="quiet-button language-button" variant="ghost" leadingIcon={RiTranslate2} aria-label={t('language')} onClick={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}>{locale==='zh-CN'?'EN':'中文'}</Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={dark?RiSunLine:RiMoonLine} aria-label={t('theme')} onClick={()=>setDark(!dark)}/><span className="toolbar-divider"/>{(preview||!account)&&<Button className="login-button" variant="secondary" onClick={()=>showPanel('login')}>{t('login')}</Button>}<Button className="quiet-button account-settings-button" variant="ghost" iconOnly leadingIcon={RiSettings3Line} aria-label={t('account')} title={t('account')} onClick={()=>showPanel('account')}/></div></header>
+      <header className="topbar"><div className="breadcrumb"><Button className="mobile-menu quiet-button" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="topbar-actions">{preview&&<span className="prototype-label text-caption-1-regular">{t('prototype')}</span>}<Button className="quiet-button language-button" variant="ghost" leadingIcon={RiTranslate2} aria-label={t('language')} onClick={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}>{locale==='zh-CN'?'EN':'中文'}</Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={dark?RiSunLine:RiMoonLine} aria-label={t('theme')} onClick={()=>setDark(!dark)}/><span className="toolbar-divider"/>{(preview||!account)&&<Button className="login-button" variant="secondary" onClick={()=>showPanel('login')}>{t('login')}</Button>}{(preview||account)&&<SettingsMenu labels={{settings:t('settings'),console:t('console'),password:t('changePassword'),logout:t('logout')}} admin={!!account?.is_admin} onSelect={settings}/>}</div></header>
       <div className="workspace"><div className="terminal-tabs"><div className="chrome-controls"><Button className="quiet-button sidebar-toggle" variant="ghost" iconOnly leadingIcon={RiSideBarLine} aria-label={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} title={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} aria-expanded={!sidebarCollapsed} onClick={()=>setSidebarCollapsed(!sidebarCollapsed)}/><Button className="quiet-button mobile-menu" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="session-tabs-scroll"><InstanceSortList scope="tabs" ids={orderedOpened}>{orderedOpened.map(id=><SortableInstance key={id} scope="tabs" id={id} name={instances.find(i=>i.id===id)!.name} locale={locale} className={cx('session-tab',active===id&&'selected')}><Button className="quiet-button" variant="ghost" onClick={()=>setActive(id)}><span className="session-label">{statusIcon(id)}{instances.find(i=>i.id===id)!.name}</span></Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiCloseLine} aria-label={`${t('closeTab')} ${instances.find(i=>i.id===id)!.name}`} onClick={()=>{const next=opened.filter(v=>v!==id);setOpened(next);if(active===id){setActive(next[0]??'')}}}/></SortableInstance>)}</InstanceSortList><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div><div className="workspace-actions"><Button className="quiet-button navbar-toggle" variant="ghost" iconOnly leadingIcon={RiLayoutTopLine} aria-label={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} title={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} aria-expanded={!navbarCollapsed} onClick={()=>setNavbarCollapsed(!navbarCollapsed)}/><Button className="split-button quiet-button" variant="ghost" disabled={opened.length<2} onClick={()=>setSplit(!split)}>{t(split?'single':'split')}</Button><Button className="maximize-button quiet-button" variant="ghost" iconOnly leadingIcon={maximized?RiCollapseDiagonalLine:RiExpandDiagonalLine} aria-label={t(maximized?'restoreWorkspace':'maximizeWorkspace')} title={t(maximized?'restoreWorkspace':'maximizeWorkspace')} aria-pressed={maximized} onClick={()=>setMaximized(!maximized)}/></div></div><div className={cx('terminals',effectiveSplit&&'split')}>{orderedOpened.length?orderedOpened.map(id=>{const instance=instances.find(i=>i.id===id);return instance&&<div key={id} className="terminal-slot" hidden={id!==active&&!(effectiveSplit&&orderedOpened.find(v=>v!==active)===id)}>{instance.online?terminal(instance):<div className="terminal-empty">{t('offline')}</div>}</div>}):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}</div></div>
     </main>
     <Drawer isOpen={drawer} onOpenChange={setDrawer} placement="start"><DrawerHeader title={t('switchInstance')} closeLabel={t('close')}/><DrawerBody><div className="mobile-navigation">{navigation('drawer')}</div></DrawerBody></Drawer>
-    <Modal isOpen={panel==='login'||panel==='account'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay">
-      <ModalHeader title={t(panel==='account'?'account':authMode==='recover'?'resetTitle':authMode==='register'?'registerTitle':'loginTitle')} description={t(panel==='account'?'changeDescription':authMode==='recover'?'resetDescription':authMode==='register'?'registerDescription':'loginDescription')} closeLabel={t('close')}/>
-      <ModalBody>{panel==='login'&&authMode==='recover'?<div className="auth-form"><p className="text-body-regular text-text-secondary">{t('resetInstructions')}</p><Button variant="secondary" onClick={()=>{setAuthMode('login');setError(null);setApiError('')}}>{t('backLogin')}</Button></div>:<form className="auth-form" onSubmit={e=>{e.preventDefault();if(!busy){if(panel==='account')savePassword();else submitAuth()}}}>
-        {panel==='account'?<>{account?.is_admin&&<Button variant="secondary" onClick={()=>{closePanel();setAdminOpen(true)}}>{locale==='zh-CN'?'管理后台':'Administration'}</Button>}<div className="account-identity"><span className="avatar">{preview?'D':account?.username.slice(0,1).toUpperCase()}</span><p className="text-body-medium break-all">{preview?t('demoAccount'):account?.username}</p></div>{passwordFields}<p className="text-caption-1-regular text-text-secondary">{t('passwordHint')}</p>{errorMessage}<Button className="primary-action auth-submit" disabled={busy} type="submit">{t('setPassword')}</Button>{!preview&&<><p className="text-caption-1-regular">{t('activeSessions')}: {sessions.length}</p><Button variant="secondary" onClick={async()=>{try{await api('/me/sessions',{},'DELETE');acceptAccount(null);setInstances([]);setOpened([]);setAuthMode('login');setPanel('login')}catch(error){fail(error)}}}>{t('signOutAll')}</Button><Button variant="secondary" onClick={async()=>{try{await api('/auth/logout',{});acceptAccount(null);setInstances([]);setOpened([]);setAuthMode('login');setPanel('login')}catch(error){fail(error)}}}>{t('signOut')}</Button></>}</>:<>
+    <Modal isOpen={panel==='login'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay">
+      <ModalHeader title={t(authMode==='recover'?'resetTitle':authMode==='register'?'registerTitle':'loginTitle')} description={t(authMode==='recover'?'resetDescription':authMode==='register'?'registerDescription':'loginDescription')} closeLabel={t('close')}/>
+      <ModalBody>{authMode==='recover'?<div className="auth-form"><p className="text-body-regular text-text-secondary">{t('resetInstructions')}</p><Button variant="secondary" onClick={()=>{setAuthMode('login');setError(null);setApiError('')}}>{t('backLogin')}</Button></div>:<form className="auth-form" onSubmit={e=>{e.preventDefault();if(!busy)submitAuth()}}>
+        <>
           <Input label={t('username')} autoComplete="username" value={username} onChange={v=>{setUsername(v);setError(null)}} hint={authMode==='register'?t('usernameHint'):undefined} isRequired/>
           <div className="password-field"><Input label={t('password')} type={showPassword?'text':'password'} autoComplete={authMode==='register'?'new-password':'current-password'} value={password} onChange={v=>{setPassword(v);setError(null)}} isRequired/><Button className="password-toggle quiet-button" variant="ghost" iconOnly leadingIcon={showPassword?RiEyeOffLine:RiEyeLine} aria-label={t(showPassword?'hidePassword':'showPassword')} onClick={()=>setShowPassword(!showPassword)}/></div>
           {authMode==='register'&&<p className="text-caption-1-regular text-text-secondary">{t('registrationPasswordHint')}</p>}{errorMessage}<Button className="primary-action auth-submit" disabled={busy} type="submit" trailingIcon={RiArrowRightLine}>{t(authMode==='register'?'register':'login')}</Button>
           <div className="auth-links"><Button variant="ghost" className="quiet-button" onClick={()=>{setAuthMode(authMode==='register'?'login':'register');setError(null);setApiError('');setPassword('')}}>{t(authMode==='register'?'haveAccount':'createAccount')}</Button><Button variant="ghost" className="quiet-button" onClick={()=>{setAuthMode('recover');setError(null);setApiError('');setPassword('')}}>{t('forgot')}</Button></div>
-        </>}
+        </>
         {preview&&<p className="auth-footnote text-caption-1-regular">{t('demoAuth')}</p>}
       </form>}</ModalBody>
+    </Modal>
+    <Modal isOpen={panel==='password'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay">
+      <ModalHeader title={t('changePassword')} description={t('changePasswordDescription')} closeLabel={t('close')}/>
+      <ModalBody><form className="auth-form" onSubmit={e=>{e.preventDefault();if(!busy)void savePassword()}}>
+        <div className="account-identity"><span className="avatar">{preview?'D':account?.username.slice(0,1).toUpperCase()}</span><p className="text-body-medium break-all">{preview?t('demoAccount'):account?.username}</p></div>
+        {passwordFields}<p className="text-caption-1-regular text-text-secondary">{t('passwordHint')}</p>{errorMessage}
+        <Button className="primary-action auth-submit" disabled={busy} type="submit">{t('setPassword')}</Button>
+      </form></ModalBody>
+    </Modal>
+    <Modal isOpen={panel==='logout'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay">
+      <ModalHeader title={t('logout')} description={t('logoutDescription')} closeLabel={t('close')}/>
+      <ModalBody><div className="auth-form">
+        {!preview&&<p className="text-body-regular text-text-secondary">{t('activeSessions')}: {sessions.length}</p>}{errorMessage}
+        <Button className="auth-submit" variant="secondary" disabled={busy} onClick={()=>void signOut('/auth/logout')}>{t('signOutCurrent')}</Button>
+        <Button className="auth-submit" variant="danger" disabled={busy} onClick={()=>void signOut('/me/sessions','DELETE')}>{t('signOutAll')}</Button>
+      </div></ModalBody>
     </Modal>
     <Modal isOpen={panel==='connect'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay"><ModalHeader title={t('connectTitle')} closeLabel={t('close')}/><ModalBody><div className="panel-content"><p className="text-body-regular text-text-secondary">{t('connectDescription')}</p><ol className="connect-steps">{(['stepOne','stepTwo','stepThree'] as const).map((key,index)=><li key={key}><span className="step-number text-caption-1-regular">0{index+1}</span><span className="text-body-regular">{t(key)}</span></li>)}</ol><Input label={t('hubAddress')} value={account?.hub_address??location.origin} isReadOnly/><Input label={t('username')} value={preview?'owner':account?.username??''} isReadOnly/><p className="text-caption-1-regular text-text-secondary">{t(preview?'connectHint':'realConnectHint')}</p><Button className="primary-action" onClick={closePanel}>{t('done')}</Button></div></ModalBody></Modal>
     <Drawer isOpen={panel==='detail'} onOpenChange={v=>{if(!v)closePanel()}} placement="end" size="md"><DrawerHeader title={t(panel==='detail'?'instanceDetails':'connectTitle')} closeLabel={t('close')}/><DrawerBody><div className="panel-content">
