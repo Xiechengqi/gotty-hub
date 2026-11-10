@@ -41,6 +41,6 @@ CI 增加真实 binary 经 HTTPS 反代的生产页面检查：缓存和 CSP、�
 
 修复仅在 `script-src` 增加 `wasm-unsafe-eval`，保留 bootstrap 精确 hash、同源脚本限制及页面零错误断言，不开放 JavaScript `unsafe-eval` 或任意内联脚本。Rust 和生产 HTTP 检查均按精确 token 集合核对 CSP，并从实际 HTML 重算 bootstrap hash，防止弱字符串断言漏掉额外权限。
 
-`check.yml` 在所有分支 push 和 PR 上验证；发布流程在 main push、版本 tag 和手动触发时验证并发布。main push 上的有效检查已被发布流程覆盖，独立 check 存在重复；删除它不会解决本次失败，因为发布流程也执行同一生产页面检查。技术上可删除，但会失去 PR/其他分支的独立验证。建议保留 PR 检查、取消 main push 的重复检查；本次按分析范围保留工作流配置。
+`check.yml` 原先在所有分支 push 和 PR 上验证，main push 上的有效检查已被发布流程覆盖。现按要求删除独立 `check.yml`，避免重复运行；`build-release.yml` 保留前端测试、Rust 检查、进程/代理及生产页面验证，在 main push、版本 tag 和手动触发时验证并发布。PR 和其他分支 push 不再触发独立检查。本次 CSP 失败通过上述代码修复解决，删除工作流本身不能修复该问题。
 
 本次本地复核通过 Rust 33 项 server 单测及 1 项 protocol 单测、fmt、Clippy（warnings 视为错误）、binary 编译、Node 脚本语法和 diff 空白检查。Review 确认其余 CSP 指令保持原有权限，生产页面零错误断言仍保留。未启动本地服务、反代或浏览器，未截图；修复后的生产浏览器结果由新一轮 Actions 验证，推送后不等待构建完成。
