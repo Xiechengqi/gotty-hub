@@ -18,6 +18,10 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
  env.pop('HUB_DEV',None)
  gotty_env={**env,'HOME':tmp+'/gotty-home'}
  binary=os.environ.get('GOTTY_BIN','/tmp/gotty-hub-tools/gotty')
+ # Older GoTTY builds (Hub opt-in via --hub-enabled) read the ~/.gotty state
+ # directory as a config file and cannot restart once bound to a Hub.
+ if '--hub-disabled' not in subprocess.run([binary,'--help'],capture_output=True,text=True).stdout:
+  raise SystemExit(f'{binary} is an outdated GoTTY; build the current GoTTY and set GOTTY_BIN')
  processes=[]
  try:
   with open(tmp+'/hub.log','w') as hlog,open(tmp+'/gotty.log','w') as glog:
