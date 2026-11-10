@@ -13,6 +13,8 @@ pub struct Update {
     pub target_revision: String,
     pub downloaded: u64,
     pub total: u64,
+    #[serde(default)]
+    pub source: String,
     pub error: Option<String>,
 }
 pub struct Admin {
@@ -145,46 +147,50 @@ fn asset_name() -> anyhow::Result<String> {
     Ok(format!("gotty-hub-linux-{arch}"))
 }
 async fn release(app: &App) -> anyhow::Result<Value> {
-    let response = app
-        .http
-        .get(format!(
-            "https://api.github.com/repos/{REPO}/releases/latest"
-        ))
-        .header("User-Agent", "gotty-hub")
-        .send()
-        .await;
-    if let Ok(response) = response {
-        if response.status().is_success() {
-            anyhow::ensure!(
-                response.content_length().unwrap_or(0) < 2 * 1024 * 1024,
-                "release metadata too large"
-            );
-            return Ok(response.json().await?);
+    let api = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    // API JSON first, then the public redirect, each through the mirror chain.
+    let mut last = None;
+    for candidate in candidates(&api) {
+        match get(app, &candidate, PROBE).await {
+            Ok(response)
+                if response.status().is_success()
+                    && response.content_length().unwrap_or(0) < 2 * 1024 * 1024 =>
+            {
+                // A mirror can return 200 with a non-JSON error page; keep trying.
+                match response.json().await {
+                    Ok(value) => return Ok(value),
+                    Err(error) => last = Some(error.into()),
+                }
+            }
+            Ok(response) => last = Some(anyhow::anyhow!("HTTP {}", response.status())),
+            Err(error) => last = Some(error),
         }
     }
     // Public release redirects work even when an unauthenticated shared IP exhausts API quota.
-    let response = app
-        .http
-        .get(format!("https://github.com/{REPO}/releases/latest"))
-        .header("User-Agent", "gotty-hub")
-        .send()
-        .await?
-        .error_for_status()?;
-    let prefix = format!("/{REPO}/releases/tag/");
-    anyhow::ensure!(
-        response.url().scheme() == "https" && response.url().host_str() == Some("github.com"),
-        "invalid release redirect"
-    );
-    let tag = response
-        .url()
-        .path()
-        .strip_prefix(&prefix)
-        .filter(|v| !v.is_empty() && !v.contains('/'))
-        .ok_or_else(|| anyhow::anyhow!("missing latest release"))?;
-    let name = asset_name()?;
-    Ok(
-        json!({"tag_name":tag,"html_url":response.url().as_str(),"assets":[{"name":name,"browser_download_url":format!("https://github.com/{REPO}/releases/download/{tag}/{name}")},{"name":format!("{name}.sha256"),"browser_download_url":format!("https://github.com/{REPO}/releases/download/{tag}/{name}.sha256")}]}),
-    )
+    let latest = format!("https://github.com/{REPO}/releases/latest");
+    for candidate in candidates(&latest) {
+        let response = match get(app, &candidate, PROBE).await {
+            Ok(response) if response.status().is_success() => response,
+            Ok(response) => {
+                last = Some(anyhow::anyhow!("HTTP {}", response.status()));
+                continue;
+            }
+            Err(error) => {
+                last = Some(error);
+                continue;
+            }
+        };
+        let final_url = response.url().clone();
+        // Mirrors may keep the proxied URL in the path or redirect to github.com.
+        if let Some(tag) = release_tag(final_url.path()) {
+            let name = asset_name()?;
+            return Ok(
+                json!({"tag_name":tag,"html_url":final_url.as_str(),"assets":[{"name":name,"browser_download_url":format!("https://github.com/{REPO}/releases/download/{tag}/{name}")},{"name":format!("{name}.sha256"),"browser_download_url":format!("https://github.com/{REPO}/releases/download/{tag}/{name}.sha256")}]}),
+            );
+        }
+        last = Some(anyhow::anyhow!("missing release tag"));
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("release metadata unavailable")))
 }
 pub async fn version(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>> {
     require(&app, &h).await?;
@@ -257,19 +263,108 @@ pub async fn upgrade(State(app): State<App>, h: HeaderMap) -> Result<Json<Value>
     });
     Ok(Json(json!({"ok":true})))
 }
+// GitHub mirrors tried in order when the direct connection fails. Each is an
+// HTTPS URL prefix; the sha256 check still pins content to the release hash.
+const PROXIES: [&str; 2] = ["https://sina.dev/", "https://httptunnel.top/gh/"];
+// The shared client caps every request at 15s, which a release download outgrows,
+// so upgrade fetches use their own client and name the budget per request.
+const PROBE: std::time::Duration = std::time::Duration::from_secs(8);
+const DOWNLOAD: std::time::Duration = std::time::Duration::from_secs(300);
+fn mirrored(url: &str, proxy: &str) -> String {
+    format!("{proxy}{url}")
+}
+fn candidates(url: &str) -> impl Iterator<Item = String> + '_ {
+    std::iter::once(url.to_string()).chain(PROXIES.iter().map(|proxy| mirrored(url, proxy)))
+}
+fn source_label(url: &str) -> String {
+    if url.starts_with("https://github.com/") || url.starts_with("https://api.github.com/") {
+        return "github".into();
+    }
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_else(|| "mirror".into())
+}
+fn release_tag(path: &str) -> Option<&str> {
+    let prefix = format!("/{REPO}/releases/tag/");
+    path.rsplit("/releases/tag/")
+        .next()
+        .filter(|tag| !tag.is_empty() && !tag.contains('/'))
+        .or_else(|| path.strip_prefix(&prefix))
+        .filter(|tag| !tag.is_empty() && !tag.contains('/'))
+}
+// Asset URLs must be the canonical GitHub path, either directly or behind one
+// of the two mirrors. Mirrors prepend their own prefix and keep the rest.
 fn download_url(value: &str) -> anyhow::Result<reqwest::Url> {
     let url = reqwest::Url::parse(value)?;
     anyhow::ensure!(
-        url.scheme() == "https"
-            && url.host_str() == Some("github.com")
-            && url
-                .path()
-                .starts_with(&format!("/{REPO}/releases/download/"))
-            && url.username().is_empty()
-            && url.password().is_none(),
+        url.scheme() == "https" && url.username().is_empty() && url.password().is_none(),
         "invalid release asset URL"
     );
+    let host = url.host_str().unwrap_or("");
+    let canonical = format!("/{REPO}/releases/download/");
+    let path = match host {
+        "github.com" => url.path(),
+        "sina.dev" => url
+            .path()
+            .strip_prefix("/https://github.com")
+            .ok_or_else(|| anyhow::anyhow!("invalid release asset URL"))?,
+        "httptunnel.top" => url
+            .path()
+            .strip_prefix("/gh/https://github.com")
+            .ok_or_else(|| anyhow::anyhow!("invalid release asset URL"))?,
+        _ => anyhow::bail!("invalid release asset URL"),
+    };
+    anyhow::ensure!(path.starts_with(&canonical), "invalid release asset URL");
     Ok(url)
+}
+fn fetch_client(total: std::time::Duration) -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .connect_timeout(PROBE)
+        .timeout(total)
+        .build()?)
+}
+fn allowed_fetch(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    // Compare the raw path: Url::path() decodes %2F into '/', which would let a
+    // mirror prefix smuggle a different host past the check below.
+    let raw = url.path();
+    let (host, path) = if url.host_str() == Some("sina.dev") {
+        ("", raw.strip_prefix('/').unwrap_or(""))
+    } else if url.host_str() == Some("httptunnel.top") {
+        ("", raw.strip_prefix("/gh/").unwrap_or(""))
+    } else {
+        (url.host_str().unwrap_or(""), raw)
+    };
+    if host.is_empty() {
+        // A mirror only ever fronts one of the two GitHub hosts, verbatim.
+        return path.starts_with("https://") && allowed_fetch(path);
+    }
+    match host {
+        "api.github.com" => path == format!("/repos/{REPO}/releases/latest"),
+        "github.com" => path.starts_with(&format!("/{REPO}/releases/")),
+        _ => false,
+    }
+}
+async fn get(
+    app: &App,
+    url: &str,
+    total: std::time::Duration,
+) -> anyhow::Result<reqwest::Response> {
+    if app.shutdown.is_stopping() {
+        anyhow::bail!("upgrade interrupted by shutdown");
+    }
+    anyhow::ensure!(allowed_fetch(url), "invalid release asset URL");
+    Ok(fetch_client(total)?
+        .get(url)
+        .header("User-Agent", "gotty-hub")
+        .send()
+        .await?)
 }
 fn checksum(text: &str, name: &str) -> anyhow::Result<String> {
     let fields: Vec<_> = text.split_whitespace().collect();
@@ -282,80 +377,159 @@ fn checksum(text: &str, name: &str) -> anyhow::Result<String> {
     );
     Ok(fields[0].to_lowercase())
 }
-async fn install(app: &App) -> anyhow::Result<()> {
+// Small text fetch (checksums) with the three-level fallback: direct, then
+// each mirror. A bad body is that source's failure, not the end of the upgrade.
+async fn get_text(app: &App, url: &str, limit: u64) -> anyhow::Result<String> {
+    let mut last = None;
+    for candidate in candidates(url) {
+        let response = match get(app, &candidate, PROBE).await {
+            Ok(response) if response.status().is_success() => response,
+            Ok(response) => {
+                last = Some(anyhow::anyhow!("HTTP {}", response.status()));
+                continue;
+            }
+            Err(error) => {
+                last = Some(error);
+                continue;
+            }
+        };
+        if response.content_length().unwrap_or(0) > limit {
+            last = Some(anyhow::anyhow!("response too large"));
+            continue;
+        }
+        let body = match response.bytes().await {
+            Ok(body) if body.len() as u64 <= limit => body,
+            Ok(_) => {
+                last = Some(anyhow::anyhow!("response too large"));
+                continue;
+            }
+            Err(error) => {
+                last = Some(error.into());
+                continue;
+            }
+        };
+        match String::from_utf8(body.to_vec()) {
+            Ok(text) => return Ok(text.trim().to_string()),
+            Err(error) => last = Some(error.into()),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("unreachable")))
+}
+// Stream a release asset to `staging`, verifying size and sha256 as it goes.
+// Tries direct first, then each mirror; the last error wins.
+async fn get_binary(
+    app: &App,
+    url: &str,
+    staging: &std::path::Path,
+    expected: &str,
+) -> anyhow::Result<u64> {
     use futures_util::StreamExt;
     use sha2::{Digest, Sha256};
     use tokio::io::AsyncWriteExt;
-    let name = asset_name()?;
-    let release = release(app).await?;
-    let assets = release["assets"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing release assets"))?;
-    let find = |name: &str| -> anyhow::Result<reqwest::Url> {
-        download_url(
-            assets
-                .iter()
-                .find(|a| a["name"] == name)
-                .and_then(|a| a["browser_download_url"].as_str())
-                .ok_or_else(|| anyhow::anyhow!("release asset missing"))?,
-        )
-    };
-    let hash_url = find(&format!("{name}.sha256"))?;
-    let binary_url = find(&name)?;
-    let expected = app.http.get(hash_url).send().await?.error_for_status()?;
-    anyhow::ensure!(
-        expected.content_length().unwrap_or(0) < 4096,
-        "checksum too large"
-    );
-    let expected = checksum(&expected.text().await?, &name)?;
-    let directory = app.admin.runtime.home.join("updates");
-    crate::config::private_dir(&directory)?;
-    let current = app.admin.executable.clone();
-    let staging = current.with_file_name(format!(".gotty-hub-{}", token()));
-    async {
-        let response = app
-            .http
-            .get(binary_url)
-            .timeout(std::time::Duration::from_secs(300))
-            .send()
-            .await?
-            .error_for_status()?;
+    let mut last = None;
+    for candidate in candidates(url) {
+        let response = match get(app, &candidate, DOWNLOAD).await {
+            Ok(response) if response.status().is_success() => response,
+            Ok(response) => {
+                last = Some(anyhow::anyhow!("HTTP {}", response.status()));
+                continue;
+            }
+            Err(error) => {
+                last = Some(error);
+                continue;
+            }
+        };
         let total = response.content_length().unwrap_or(0);
-        anyhow::ensure!(total <= 256 * 1024 * 1024, "release binary too large");
+        if total > 256 * 1024 * 1024 {
+            last = Some(anyhow::anyhow!("release binary too large"));
+            continue;
+        }
+        let source = source_label(&candidate);
         set_update(app, |s| {
             s.stage = "downloading".into();
-            s.target = release["tag_name"].as_str().unwrap_or("").into();
-            s.target_revision = release["target_commitish"].as_str().unwrap_or("").into();
-            s.total = total
+            s.source = source;
+            s.total = total;
+            s.downloaded = 0;
         })
         .await;
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o700);
         }
-        let mut file = tokio::fs::File::from_std(options.open(&staging)?);
-        let _staging_guard = StagingFile(staging.clone());
+        let mut file = match options.open(staging) {
+            Ok(file) => tokio::fs::File::from_std(file),
+            Err(error) => {
+                last = Some(error.into());
+                continue;
+            }
+        };
         let mut stream = response.bytes_stream();
         let mut digest = Sha256::new();
         let mut count = 0u64;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            count += chunk.len() as u64;
-            anyhow::ensure!(count <= 256 * 1024 * 1024, "release binary too large");
-            digest.update(&chunk);
-            file.write_all(&chunk).await?;
-            let mut state = app.admin.update.lock().await;
-            state.downloaded = count;
+        let result: anyhow::Result<()> = async {
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                count += chunk.len() as u64;
+                anyhow::ensure!(count <= 256 * 1024 * 1024, "release binary too large");
+                digest.update(&chunk);
+                file.write_all(&chunk).await?;
+                let mut state = app.admin.update.lock().await;
+                state.downloaded = count;
+            }
+            file.sync_all().await?;
+            Ok(())
         }
-        file.sync_all().await?;
+        .await;
         drop(file);
-        anyhow::ensure!(
-            format!("{:x}", digest.finalize()) == expected,
-            "SHA256 verification failed"
-        );
+        match result {
+            Ok(()) if count > 0 && format!("{:x}", digest.finalize()) == expected => {
+                return Ok(total);
+            }
+            Ok(()) if count == 0 => last = Some(anyhow::anyhow!("empty response")),
+            Ok(()) => last = Some(anyhow::anyhow!("SHA256 verification failed")),
+            Err(error) => last = Some(error),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("unreachable")))
+}
+async fn install(app: &App) -> anyhow::Result<()> {
+    let name = asset_name()?;
+    let release = release(app).await?;
+    let assets = release["assets"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing release assets"))?;
+    let find = |name: &str| -> anyhow::Result<String> {
+        let raw = assets
+            .iter()
+            .find(|a| a["name"] == name)
+            .and_then(|a| a["browser_download_url"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("release asset missing"))?;
+        // Validate the direct URL now; mirrors are derived later.
+        download_url(raw)?;
+        Ok(raw.to_string())
+    };
+    let hash_url = find(&format!("{name}.sha256"))?;
+    let binary_url = find(&name)?;
+    // Try direct, then each mirror; an 8s probe bounds the direct attempt.
+    let expected = get_text(app, hash_url.as_str(), 4096).await?;
+    let expected = checksum(&expected, &name)?;
+    let directory = app.admin.runtime.home.join("updates");
+    crate::config::private_dir(&directory)?;
+    let current = app.admin.executable.clone();
+    let staging = current.with_file_name(format!(".gotty-hub-{}", token()));
+    async {
+        set_update(app, |s| {
+            s.stage = "downloading".into();
+            s.target = release["tag_name"].as_str().unwrap_or("").into();
+            s.target_revision = release["target_commitish"].as_str().unwrap_or("").into();
+        })
+        .await;
+        let _staging_guard = StagingFile(staging.clone());
+        let total = get_binary(app, binary_url.as_str(), &staging, &expected).await?;
+        set_update(app, |s| s.total = total).await;
         let probe = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             tokio::process::Command::new(&staging)
@@ -483,7 +657,75 @@ mod tests {
         .is_ok());
         assert!(download_url("https://evil.test/file").is_err());
         assert!(download_url("https://github.com/other/repo/releases/download/v1/file").is_err());
+        // Mirrors are allowed only as prefixes over the canonical GitHub asset path.
+        assert!(download_url(
+            "https://sina.dev/https://github.com/Xiechengqi/gotty-hub/releases/download/v1/gotty-hub-linux-amd64"
+        )
+        .is_ok());
+        assert!(download_url(
+            "https://httptunnel.top/gh/https://github.com/Xiechengqi/gotty-hub/releases/download/v1/gotty-hub-linux-amd64"
+        )
+        .is_ok());
+        assert!(download_url("https://sina.dev/https://evil.test/file").is_err());
+        assert!(download_url(
+            "https://attacker.test/gh/https://github.com/Xiechengqi/gotty-hub/releases/download/v1/f"
+        )
+        .is_err());
+        // A mirror must front GitHub itself, not an arbitrary host that happens
+        // to mention the repository path.
+        assert!(download_url(
+            "https://sina.dev/https://evil.test/Xiechengqi/gotty-hub/releases/download/v1/f"
+        )
+        .is_err());
+        assert!(download_url("https://sina.dev/https://github.com.evil.test/file").is_err());
+        assert_eq!(
+            release_tag("/Xiechengqi/gotty-hub/releases/tag/v1.2.3"),
+            Some("v1.2.3")
+        );
+        assert_eq!(
+            release_tag("/gh/https://github.com/Xiechengqi/gotty-hub/releases/tag/v1.2.3"),
+            Some("v1.2.3")
+        );
+        // The fallback parse still rejects a tag that carries its own path.
+        assert_eq!(
+            release_tag("/Xiechengqi/gotty-hub/releases/tag/v1/extra"),
+            None
+        );
+        assert_eq!(release_tag("/Xiechengqi/gotty-hub/releases/latest"), None);
+        let api = "https://api.github.com/repos/Xiechengqi/gotty-hub/releases/latest";
+        assert!(allowed_fetch(api));
+        assert!(allowed_fetch(&mirrored(api, PROXIES[0])));
+        assert!(allowed_fetch(&mirrored(api, PROXIES[1])));
+        assert!(!allowed_fetch(
+            "https://api.github.com/repos/Xiechengqi/gotty-hub/contents/main"
+        ));
+        assert!(!allowed_fetch("https://sina.dev/https://evil.test/file"));
+        // Percent-encoded slashes must not turn the mirror prefix into another host.
+        assert!(!allowed_fetch(
+            "https://sina.dev/https:%2F%2Fevil.test/Xiechengqi/gotty-hub/releases/latest"
+        ));
+        assert!(!allowed_fetch(
+            "https://httptunnel.top/gh/https:%2F%2Fevil.test/Xiechengqi/gotty-hub/releases/latest"
+        ));
         assert!(checksum(&format!("{}  app", "a".repeat(64)), "app").is_ok());
         assert!(checksum(&format!("{}  wrong", "a".repeat(64)), "app").is_err());
+        // Fallback order: direct, then the two mirrors in order.
+        let direct =
+            "https://github.com/Xiechengqi/gotty-hub/releases/download/v1/gotty-hub-linux-amd64";
+        let order: Vec<_> = std::iter::once(direct.to_string())
+            .chain(PROXIES.iter().map(|p| mirrored(direct, p)))
+            .collect();
+        assert_eq!(order[0], direct);
+        assert_eq!(
+            order[1],
+            "https://sina.dev/https://github.com/Xiechengqi/gotty-hub/releases/download/v1/gotty-hub-linux-amd64"
+        );
+        assert_eq!(
+            order[2],
+            "https://httptunnel.top/gh/https://github.com/Xiechengqi/gotty-hub/releases/download/v1/gotty-hub-linux-amd64"
+        );
+        assert_eq!(source_label(&order[0]), "github");
+        assert_eq!(source_label(&order[1]), "sina.dev");
+        assert_eq!(source_label(&order[2]), "httptunnel.top");
     }
 }
