@@ -8,7 +8,7 @@ import {WebglAddon} from '@xterm/addon-webgl';
 import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-core';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
 import {defaultDisplayOptions, displayOptions, NORD_THEME, type Appearance, type ThemeMap} from '@gotty/terminal-core/appearance';
-import {RiDeleteBinLine, RiRestartLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
+import {RiDeleteBinLine, RiRestartLine, RiRefreshLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
 import {Button} from '@/components/base/buttons/button';
 import {Input} from '@/components/base/input/input';
 import {Modal, ModalBody, ModalHeader} from '@/components/base/modal/modal';
@@ -22,13 +22,13 @@ import {HubConnection} from './connection';
 import {MobileKeys} from './MobileKeys';
 import '@xterm/xterm/css/xterm.css';
 
-type Controller = {term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
-type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void};
+type Controller = {term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; reconnect: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
+type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void};
 const FALLBACK_THEMES: ThemeMap = {nord: NORD_THEME};
 // Same palette glyph as GoTTY's own display settings button (theme-picker.ts).
 const DisplayIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 3.5h7M8 3.5v9M5.5 12.5h5M3 6h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>;
 
-export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage}: Props) {
+export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef(visible); view.current = visible;
   const controller = useRef<Controller>(undefined);
@@ -149,11 +149,12 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     void document.fonts?.ready.then(()=>{if(!disposed)measure();});
     document.fonts?.addEventListener('loadingdone',measure);
     const stop = wt.open(); installVoice();
-    const viewport = () => {if (view.current && window.visualViewport) {document.documentElement.style.setProperty('--hub-viewport-height', `${window.visualViewport.height}px`); measure();}};
+    const viewport = () => {if (view.current && window.visualViewport) {onViewport?.(window.visualViewport.height); measure();}};
     window.visualViewport?.addEventListener('resize', viewport); viewport();
     const report = () => connection?.reportView(); const interval = setInterval(report, 3000);
     document.addEventListener('visibilitychange', report); window.addEventListener('focus', report); window.addEventListener('blur', report); document.addEventListener('focusin', report);
     controller.current = {term, measure, send: data => {if (writable) input(data);}, view: report,
+      reconnect: () => {connection?.reconnect();},
       control: (action, payload) => connection?.request(action, payload) ?? Promise.reject(Error('Terminal is disconnected')),
       upload: async (file, signal) => {
         if (!writable || !files || !file.size || file.size > FILE_LIMIT) throw Error('Maximum file size: 64 MiB; empty files are not supported');
@@ -180,7 +181,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       stop(); observer.disconnect(); subscription.dispose(); binary.dispose(); size.dispose(); selection.dispose(); osc.dispose(); term.dispose();
       document.fonts?.removeEventListener('loadingdone',measure);
     };
-  }, [id, writable, asr, files, owner, controls]);
+  }, [id, writable, asr, files, owner, controls, onViewport]);
   useEffect(() => {if (visible) {controller.current?.measure(); controller.current?.term.focus();} else {setDisplayOpen(false); setShareOpen(false);} controller.current?.view();}, [visible]);
 
   async function startUpload(file: File) {
@@ -202,6 +203,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={zh ? '清理历史' : 'Clear history'} aria-label={zh ? '清理历史' : 'Clear history'} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}
       {writable && files && <Button className="terminal-control terminal-upload-control" variant="ghost" size="xs" iconOnly leadingIcon={RiUpload2Line} title={zh ? '上传文件' : 'Upload file'} aria-label={zh ? '上传文件' : 'Upload file'} disabled={!connected || !!uploadAbort.current} onClick={() => uploadInput.current?.click()}/>}
       {owner && controls && <Button className="terminal-control terminal-restart-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRestartLine} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} aria-label={zh ? '重启 GoTTY' : 'Restart GoTTY'} disabled={!connected || !config.restart_mode || config.restart_mode === 'disabled'} onClick={() => {void control('restart').then(() => setMessage(zh ? '已发送重启请求，正在等待 GoTTY 重连…' : 'Restart requested. Waiting for GoTTY to reconnect…')).catch(error => setMessage(String(error.message || error)));}}/>}
+      <Button className="terminal-control terminal-reconnect-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRefreshLine} title={zh ? '重新连接终端' : 'Reconnect terminal'} aria-label={zh ? '重新连接终端' : 'Reconnect terminal'} disabled={!connected} onClick={() => {controller.current?.reconnect(); controller.current?.term.focus();}}/>
       <Button className="terminal-control terminal-hub-control" variant="ghost" size="xs" iconOnly leadingIcon={RiServerLine} title={zh ? 'Hub 实例设置' : 'Hub instance settings'} aria-label={zh ? 'Hub 实例设置' : 'Hub instance settings'} onClick={onManage}/>
     </div>
     {config.show_terminal_state && terminalState && <div className="terminal-state text-caption-1-regular" dir="ltr">{terminalState.activeCols} × {terminalState.activeRows} · {terminalState.policy}</div>}

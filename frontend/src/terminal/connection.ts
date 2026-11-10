@@ -38,6 +38,9 @@ export class HubConnection implements Connection {
     };
   }
   open() {} close() {this.stopped=true;this.closed = true;this.abort.abort();this.rejectPending();this.ws.close();}
+  // Drop the socket without marking the connection stopped, so WebTTY's
+  // automatic reconnect path takes over and restores the session.
+  reconnect() {if(this.closed)return;this.abort.abort();this.ws.close();}
   private async describeClose(event:CloseEvent){
     let detail=this.failure;
     if(!detail&&event.code===1006&&!this.stopped){

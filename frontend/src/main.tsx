@@ -1,6 +1,6 @@
-import React, { useEffect, useLayoutEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { RiTerminalBoxLine, RiAddLine, RiSettings3Line, RiSunLine, RiMoonLine, RiMenuLine, RiCloseLine, RiEyeLine, RiEyeOffLine, RiTranslate2, RiArrowRightLine, RiExpandDiagonalLine, RiCollapseDiagonalLine, RiWifiOffLine, RiSideBarLine, RiLayoutTopLine } from '@remixicon/react';
+import { RiTerminalBoxLine, RiAddLine, RiSettings3Line, RiSunLine, RiMoonLine, RiMenuLine, RiCloseLine, RiEyeLine, RiEyeOffLine, RiTranslate2, RiArrowRightLine, RiExpandDiagonalLine, RiCollapseDiagonalLine, RiWifiOffLine, RiSideBarLine, RiLayoutTopLine, RiRefreshLine } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
 import { Input } from '@/components/base/input/input';
 import { Drawer, DrawerHeader, DrawerBody } from '@/components/base/drawer/drawer';
@@ -47,6 +47,14 @@ function App() {
   const [sessions,setSessions]=useState<{expires:number}[]>([]);
   const [mobile,setMobile]=useState(()=>matchMedia('(max-width: 767px)').matches);
   useEffect(()=>{const query=matchMedia('(max-width: 767px)');const update=()=>setMobile(query.matches);query.addEventListener('change',update);return()=>query.removeEventListener('change',update)},[]);
+  // Track the visual viewport app-wide so the workspace stays correctly sized
+  // when mobile browser chrome collapses, even before any terminal mounts.
+  const applyViewportHeight=useCallback((height:number)=>{document.documentElement.style.setProperty('--hub-viewport-height',`${height}px`)},[]);
+  useEffect(()=>{
+    const vv=window.visualViewport;if(!vv)return;
+    const update=()=>applyViewportHeight(vv.height);
+    update();vv.addEventListener('resize',update);return()=>vv.removeEventListener('resize',update);
+  },[applyViewportHeight]);
   function acceptAccount(value:Account|null){useAccount(value);setAccount(value)}
   function fail(error:unknown){setApiError(errorText(error instanceof Error?error.message:String(error),locale))}
   useEffect(()=>{
@@ -79,6 +87,7 @@ function App() {
       if(typeof prefs.sidebarCollapsed==='boolean')setSidebarCollapsed(prefs.sidebarCollapsed);
       if(typeof prefs.navbarCollapsed==='boolean')setNavbarCollapsed(prefs.navbarCollapsed);
       if(typeof prefs.split==='boolean')setSplit(prefs.split);
+      if(typeof prefs.maximized==='boolean')setMaximized(prefs.maximized);
       ready=true;update(rows);setPreferencesLoaded(true);
     }).catch(error=>{if(!disposed)fail(error)});
     events.addEventListener('instances',event=>{try{if(ready)update(JSON.parse((event as MessageEvent).data))}catch(error){fail(error)}});
@@ -103,10 +112,21 @@ function App() {
   const [navbarCollapsed,setNavbarCollapsed] = useState(false);
   useEffect(()=>{
     if(preview||!account||!preferencesLoaded)return;
-    const timeout=setTimeout(()=>api('/me/preferences',{opened:orderedOpened,instanceOrder:order,active,dark,sidebarCollapsed,navbarCollapsed,split,locale},'PUT').catch(fail),600);
+    const timeout=setTimeout(()=>api('/me/preferences',{opened:orderedOpened,instanceOrder:order,active,dark,sidebarCollapsed,navbarCollapsed,split,maximized,locale},'PUT').catch(fail),600);
     return()=>clearTimeout(timeout);
-  },[account?.username,preferencesLoaded,opened,orderKey,active,dark,sidebarCollapsed,navbarCollapsed,split,locale]);
+  },[account?.username,preferencesLoaded,opened,orderKey,active,dark,sidebarCollapsed,navbarCollapsed,split,maximized,locale]);
   useEffect(()=>{if(opened.length&&!opened.includes(active))setActive(opened[0])},[opened,active]);
+  useEffect(()=>{
+    if(preview||!active)return;
+    const frame=requestAnimationFrame(()=>{
+      const container=document.querySelector('.session-tabs-scroll');
+      const tab=container?.querySelector(`[data-instance-id="${CSS.escape(active)}"]`);
+      if(!container||!tab)return;
+      const target=(tab as HTMLElement).offsetLeft-(container.clientWidth-(tab as HTMLElement).offsetWidth)/2;
+      container.scrollTo({left:Math.max(0,target),behavior:'smooth'});
+    });
+    return()=>cancelAnimationFrame(frame);
+  },[active,orderKey]);
   const [terminalStates,setTerminalStates] = useState<Record<string,'red'|'gray'|'yellow'|'green'>>(()=>Object.fromEntries(instances.filter(i=>i.online).map(i=>[i.id,'gray'])));
   useEffect(()=>{
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'&&!document.querySelector('[role=dialog],dialog[open]'))setMaximized(false)};
@@ -184,7 +204,7 @@ function App() {
     <InstanceSortList scope={scope} ids={order}>{orderedInstances.map(i=><SortableInstance scope={scope} id={i.id} name={i.name} locale={locale} className="instance-nav-row" key={i.id}><Button variant="ghost" className="nav-item terminal-nav registered-instance" data-active={opened.includes(i.id)&&active===i.id} aria-current={opened.includes(i.id)&&active===i.id?'page':undefined} title={`${i.name} · ${t(i.online?'online':'offline')}`} onClick={()=>open(i)}><span className="session-label">{i.online?statusIcon(i.id):<span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>}<span className="instance-nav-name">{i.name}</span></span></Button><Button className="instance-manage quiet-button" variant="ghost" iconOnly leadingIcon={RiSettings3Line} aria-label={`${t('manage')} ${i.name}`} onClick={()=>manage(i.id)}/></SortableInstance>)}</InstanceSortList>
 
   </>;
-  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onManage={()=>void manage(i.id)} visible={active===i.id||(effectiveSplit&&orderedOpened.find(id=>id!==active)===i.id)} locale={locale}/>;return <section className="terminal-panel dark" key={i.id}>
+  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onManage={()=>void manage(i.id)} visible={active===i.id||(effectiveSplit&&orderedOpened.find(id=>id!==active)===i.id)} locale={locale} onViewport={applyViewportHeight}/>;return <section className="terminal-panel dark" key={i.id}>
     <div className="terminal-heading text-caption-1-regular"><span className="terminal-host"><span className="status-dot"/>{i.host}</span><span>{t(i.role==='observer'?'readOnly':'writable')} · {t('demo')}</span></div>
     <div className="terminal-output" dir="ltr"><p className="text-text-tertiary">{t('connectedDemo')}</p><p className="text-text-tertiary">{t('terminalPreview')}</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span>gotty --version</p><p>GoTTY · web terminal</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span><span className="cursor"/></p></div>
     <div className="terminal-keys">{['Esc','Ctrl','Tab','↑','↓','←','→','⌨'].map(k=><Button key={k} variant="secondary" onClick={()=>setNotice('keyNotice')}>{k}</Button>)}</div>
@@ -194,7 +214,7 @@ function App() {
   return <DirectionProvider locale={locale}><InstanceSortProvider order={order} onReorder={setInstanceOrder} locale={locale}><div className={cx("app",maximized&&"workspace-maximized",sidebarCollapsed&&"sidebar-collapsed",navbarCollapsed&&"navbar-collapsed")}>
     <aside className="sidebar">{navigation('sidebar')}</aside>
     <main className="main">
-      <header className="topbar"><div className="breadcrumb"><Button className="mobile-menu quiet-button" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="topbar-actions">{preview&&<span className="prototype-label text-caption-1-regular">{t('prototype')}</span>}<Button className="quiet-button language-button" variant="ghost" leadingIcon={RiTranslate2} aria-label={t('language')} onClick={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}>{locale==='zh-CN'?'EN':'中文'}</Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={dark?RiSunLine:RiMoonLine} aria-label={t('theme')} onClick={()=>setDark(!dark)}/><span className="toolbar-divider"/>{(preview||!account)&&<Button className="login-button" variant="secondary" onClick={()=>showPanel('login')}>{t('login')}</Button>}{(preview||account)&&<SettingsMenu labels={{settings:t('settings'),console:t('console'),password:t('changePassword'),logout:t('logout')}} admin={!!account?.is_admin} onSelect={settings}/>}</div></header>
+      <header className="topbar"><div className="breadcrumb"><Button className="mobile-menu quiet-button" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="topbar-actions">{preview&&<span className="prototype-label text-caption-1-regular">{t('prototype')}</span>}<Button className="quiet-button language-button" variant="ghost" leadingIcon={RiTranslate2} aria-label={t('language')} onClick={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}>{locale==='zh-CN'?'EN':'中文'}</Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={dark?RiSunLine:RiMoonLine} aria-label={t('theme')} onClick={()=>setDark(!dark)}/><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label={t('refreshPage')} title={t('refreshPage')} onClick={()=>location.reload()}/><span className="toolbar-divider"/>{(preview||!account)&&<Button className="login-button" variant="secondary" onClick={()=>showPanel('login')}>{t('login')}</Button>}{(preview||account)&&<SettingsMenu labels={{settings:t('settings'),console:t('console'),password:t('changePassword'),logout:t('logout')}} admin={!!account?.is_admin} onSelect={settings}/>}</div></header>
       <div className="workspace"><div className="terminal-tabs"><div className="chrome-controls"><Button className="quiet-button sidebar-toggle" variant="ghost" iconOnly leadingIcon={RiSideBarLine} aria-label={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} title={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} aria-expanded={!sidebarCollapsed} onClick={()=>setSidebarCollapsed(!sidebarCollapsed)}/><Button className="quiet-button mobile-menu" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="session-tabs-scroll"><InstanceSortList scope="tabs" ids={orderedOpened}>{orderedOpened.map(id=><SortableInstance key={id} scope="tabs" id={id} name={instances.find(i=>i.id===id)!.name} locale={locale} className={cx('session-tab',active===id&&'selected')}><Button className="quiet-button" variant="ghost" onClick={()=>setActive(id)}><span className="session-label">{statusIcon(id)}{instances.find(i=>i.id===id)!.name}</span></Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiCloseLine} aria-label={`${t('closeTab')} ${instances.find(i=>i.id===id)!.name}`} onClick={()=>{const next=opened.filter(v=>v!==id);setOpened(next);if(active===id){setActive(next[0]??'')}}}/></SortableInstance>)}</InstanceSortList><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div><div className="workspace-actions"><Button className="quiet-button navbar-toggle" variant="ghost" iconOnly leadingIcon={RiLayoutTopLine} aria-label={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} title={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} aria-expanded={!navbarCollapsed} onClick={()=>setNavbarCollapsed(!navbarCollapsed)}/><Button className="split-button quiet-button" variant="ghost" disabled={opened.length<2} onClick={()=>setSplit(!split)}>{t(split?'single':'split')}</Button><Button className="maximize-button quiet-button" variant="ghost" iconOnly leadingIcon={maximized?RiCollapseDiagonalLine:RiExpandDiagonalLine} aria-label={t(maximized?'restoreWorkspace':'maximizeWorkspace')} title={t(maximized?'restoreWorkspace':'maximizeWorkspace')} aria-pressed={maximized} onClick={()=>setMaximized(!maximized)}/></div></div><div className={cx('terminals',effectiveSplit&&'split')}>{orderedOpened.length?orderedOpened.map(id=>{const instance=instances.find(i=>i.id===id);return instance&&<div key={id} className="terminal-slot" hidden={id!==active&&!(effectiveSplit&&orderedOpened.find(v=>v!==active)===id)}>{instance.online?terminal(instance):<div className="terminal-empty">{t('offline')}</div>}</div>}):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}</div></div>
     </main>
     <Drawer isOpen={drawer} onOpenChange={setDrawer} placement="start"><DrawerHeader title={t('switchInstance')} closeLabel={t('close')}/><DrawerBody><div className="mobile-navigation">{navigation('drawer')}</div></DrawerBody></Drawer>
