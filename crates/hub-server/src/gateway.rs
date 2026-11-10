@@ -152,7 +152,13 @@ async fn device(app: App, id: String, mut socket: WebSocket) {
              }},
              "asr_data"=>{let sender=streams.lock().await.get(&f.stream).cloned();if let Some(sender)=sender{let message=if f.data["binary"]==true{STANDARD.decode(f.data["payload"].as_str().unwrap_or("")).ok().map(Message::Binary)}else{f.data["payload"].as_str().map(|s|Message::Text(s.into()))};if let Some(message)=message{if sender.try_send(message).is_err(){streams.lock().await.remove(&f.stream);let _=tx.try_send(Frame::new("close",&f.stream,json!({})));}}}},
              "control_result"=>{let sender=streams.lock().await.get(&f.stream).cloned();if let Some(sender)=sender{if sender.try_send(Message::Text(json!({"control_result":f.data}).to_string())).is_err(){streams.lock().await.remove(&f.stream);let _=tx.try_send(Frame::new("close",&f.stream,json!({})));}}},
-             "data"=>{if let Some(data)=f.data.as_str(){let sender=streams.lock().await.get(&f.stream).cloned();if let Some(sender)=sender{if sender.try_send(Message::Text(data.into())).is_err(){streams.lock().await.remove(&f.stream);let _=tx.try_send(Frame::new("close",&f.stream,json!({"reason":"slow_consumer"})));}}}},
+             "data"=>{if let Some(data)=f.data.as_str(){let sender=streams.lock().await.get(&f.stream).cloned();if let Some(sender)=sender{
+              // A full-screen TUI burst (vim, htop) can momentarily fill the
+              // per-stream queue; wait briefly before dropping the stream.
+              if tokio::time::timeout(Duration::from_secs(5),sender.send(Message::Text(data.into()))).await.map(|v|v.is_err()).unwrap_or(true){
+               tracing::warn!(stream=f.stream.as_str(),reason="slow_consumer","Dropping congested terminal stream");
+               streams.lock().await.remove(&f.stream);let _=tx.try_send(Frame::new("close",&f.stream,json!({"reason":"slow_consumer"})));
+              }}}},
              "close"=>{streams.lock().await.remove(&f.stream);},
              "rotated"=>{let _=sqlx::query("UPDATE instances SET device=device_next,device_next=NULL WHERE id=? AND device_next=?").bind(&id).bind(f.data["fingerprint"].as_str().unwrap_or("")).execute(&app.db).await;},
              "open_ack"|"pong"=>{},

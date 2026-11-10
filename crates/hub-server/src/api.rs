@@ -437,6 +437,10 @@ pub async fn register_instance(
     tx.commit().await?;
     if inserted {
         audit(&app, &name, "device_registered", &instance).await;
+    } else {
+        // A reused request_id returns the existing instance; record it so a
+        // misbehaving client re-registering over a live device is visible.
+        audit(&app, &name, "device_registration_reused", &instance).await;
     }
     Ok(Json(
         json!({"instance_id":instance,"credential":hash(&format!("credential:{claim}:{instance}")),"protocol":1}),
