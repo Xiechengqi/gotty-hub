@@ -99,6 +99,8 @@ for (const width of [375, 1440]) {
     await page.goto('/?preview=1');
   
     await expect(page.locator('.session-tab .terminal-status')).toHaveCount(1);
+    await expect(page.locator('.workspace-footer')).toHaveCount(0);
+    await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href','/icon.svg');
     await page.getByRole('button',{name:'最大化工作区',exact:true}).click();
     await expect(page.locator('.topbar')).toBeHidden();
     const workspace=await page.locator('.workspace').boundingBox();

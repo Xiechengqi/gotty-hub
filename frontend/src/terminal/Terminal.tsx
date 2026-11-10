@@ -8,7 +8,7 @@ import {WebglAddon} from '@xterm/addon-webgl';
 import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-core';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
 import {defaultDisplayOptions, displayOptions, NORD_THEME, type Appearance, type ThemeMap} from '@gotty/terminal-core/appearance';
-import {RiDeleteBinLine, RiFontSize, RiRestartLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
+import {RiDeleteBinLine, RiRestartLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
 import {Button} from '@/components/base/buttons/button';
 import {Input} from '@/components/base/input/input';
 import {Modal, ModalBody, ModalHeader} from '@/components/base/modal/modal';
@@ -25,6 +25,8 @@ import '@xterm/xterm/css/xterm.css';
 type Controller = {term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
 type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void};
 const FALLBACK_THEMES: ThemeMap = {nord: NORD_THEME};
+// Same palette glyph as GoTTY's own display settings button (theme-picker.ts).
+const DisplayIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 3.5h7M8 3.5v9M5.5 12.5h5M3 6h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>;
 
 export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage}: Props) {
   const host = useRef<HTMLDivElement>(null);
@@ -196,7 +198,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     <div ref={host} className="xterm-host" dir="ltr"/>
     <div className="terminal-toolbar" role="toolbar" aria-label={zh ? 'GoTTY 终端工具' : 'GoTTY terminal controls'}>
       <ShareManager open={shareOpen} onOpenChange={value=>{setShareOpen(value);if(value)setDisplayOpen(false);}} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={zh ? '连接数 / 分享管理' : 'Connections / Share manager'} aria-label={`${zh ? '连接数' : 'Connections'}: ${count}`} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
-      <DisplaySettings open={displayOpen} onOpenChange={value=>{setDisplayOpen(value);if(value)setShareOpen(false);}} trigger={<Button className="terminal-control terminal-display-control" variant="ghost" size="xs" iconOnly leadingIcon={RiFontSize} title={zh ? '显示设置' : 'Display settings'} aria-label={zh ? '显示设置' : 'Display settings'}/>} appearance={appearance} themes={config.themes || FALLBACK_THEMES} fontSize={terminal?.options.fontSize || 14} onChange={updateAppearance} locale={locale}/>
+      <DisplaySettings open={displayOpen} onOpenChange={value=>{setDisplayOpen(value);if(value)setShareOpen(false);}} trigger={<Button className="terminal-control terminal-display-control" variant="ghost" size="xs" iconOnly leadingIcon={DisplayIcon} title={zh ? '显示设置' : 'Display settings'} aria-label={zh ? '显示设置' : 'Display settings'}/>} appearance={appearance} themes={config.themes || FALLBACK_THEMES} fontSize={terminal?.options.fontSize || 14} onChange={updateAppearance} locale={locale}/>
       {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={zh ? '清理历史' : 'Clear history'} aria-label={zh ? '清理历史' : 'Clear history'} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}
       {writable && files && <Button className="terminal-control terminal-upload-control" variant="ghost" size="xs" iconOnly leadingIcon={RiUpload2Line} title={zh ? '上传文件' : 'Upload file'} aria-label={zh ? '上传文件' : 'Upload file'} disabled={!connected || !!uploadAbort.current} onClick={() => uploadInput.current?.click()}/>}
       {owner && controls && <Button className="terminal-control terminal-restart-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRestartLine} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} aria-label={zh ? '重启 GoTTY' : 'Restart GoTTY'} disabled={!connected || !config.restart_mode || config.restart_mode === 'disabled'} onClick={() => {void control('restart').then(() => setMessage(zh ? '已发送重启请求，正在等待 GoTTY 重连…' : 'Restart requested. Waiting for GoTTY to reconnect…')).catch(error => setMessage(String(error.message || error)));}}/>}
