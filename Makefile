@@ -6,7 +6,7 @@ web:
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets -- -D warnings
-	test -f frontend/vendor/gotty-terminal-core-0.2.1.tgz
+	python3 scripts/check-core.py
 test:
 	cargo build --locked
 	cargo test --locked

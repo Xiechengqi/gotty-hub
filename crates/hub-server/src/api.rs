@@ -620,10 +620,140 @@ mod tests {
             .route("/api/v1/auth/password/login", post(password_login))
             .route("/api/v1/me", get(me))
             .route("/api/v1/me/preferences", put(save_preferences))
+            .route(
+                "/api/v1/me/terminal-settings",
+                get(crate::terminal_settings::get).put(crate::terminal_settings::save),
+            )
             .route("/api/v1/admin/dashboard", get(crate::admin::dashboard))
             .layer(middleware::from_fn_with_state(app.clone(), guard))
             .with_state(app.clone())
             .layer(middleware::from_fn_with_state(app, crate::origin::headers))
+    }
+
+    #[tokio::test]
+    async fn terminal_settings_are_account_scoped_atomic_and_independent_of_layout() {
+        let app = app().await;
+        let first = user(&app, "first").await;
+        let second = user(&app, "second").await;
+        for (id, secret) in [(&first, "first-session"), (&second, "second-session")] {
+            sqlx::query("INSERT INTO sessions VALUES(?,?,?,?)")
+                .bind(hash(secret))
+                .bind(id)
+                .bind("csrf")
+                .bind(now() + 3600)
+                .execute(&app.db)
+                .await
+                .unwrap();
+        }
+        let routes = auth_routes(app);
+        let request = |secret: &str, path: &str, value: Option<Value>, csrf: bool| {
+            let mut builder = Request::builder()
+                .method(if value.is_some() { "PUT" } else { "GET" })
+                .uri(path)
+                .header("host", "hub.test")
+                .header("origin", "http://hub.test")
+                .header("cookie", format!("hub_session={secret}"))
+                .header("content-type", "application/json");
+            if csrf {
+                builder = builder.header("x-csrf-token", "csrf");
+            }
+            builder
+                .body(Body::from(value.map(|v| v.to_string()).unwrap_or_default()))
+                .unwrap()
+        };
+        let path = "/api/v1/me/terminal-settings";
+        let settings = json!({"revision":0,"settings":{"schemaVersion":1,"theme":"nord","fontSize":18,"fontId":"fira-code"}});
+        let response = routes
+            .clone()
+            .oneshot(request(
+                "first-session",
+                path,
+                Some(settings.clone()),
+                false,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = routes
+            .clone()
+            .oneshot(request("first-session", path, Some(settings.clone()), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(saved["revision"], 1);
+        let response = routes
+            .clone()
+            .oneshot(request(
+                "first-session",
+                "/api/v1/me/preferences",
+                Some(json!({"maximized":true})),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = routes
+            .clone()
+            .oneshot(request("first-session", path, None, true))
+            .await
+            .unwrap();
+        let current: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(current, saved);
+        let response = routes
+            .clone()
+            .oneshot(request("first-session", path, Some(settings.clone()), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let mut changed = settings.clone();
+        changed["revision"] = json!(1);
+        changed["settings"]["fontSize"] = json!(49);
+        assert_eq!(
+            routes
+                .clone()
+                .oneshot(request("first-session", path, Some(changed.clone()), true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        changed["settings"]["fontSize"] = json!(20);
+        changed["settings"]["fontId"] = json!("external-font");
+        assert_eq!(
+            routes
+                .clone()
+                .oneshot(request("first-session", path, Some(changed), true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let response = routes
+            .clone()
+            .oneshot(request("second-session", path, None, true))
+            .await
+            .unwrap();
+        let other: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(other, json!({"revision":0,"settings":null}));
+        let mut changed = settings;
+        changed["revision"] = json!(1);
+        changed["settings"]["fontSize"] = json!(20);
+        let (left, right) = tokio::join!(
+            routes
+                .clone()
+                .oneshot(request("first-session", path, Some(changed.clone()), true)),
+            routes.oneshot(request("first-session", path, Some(changed), true))
+        );
+        let mut statuses = [
+            left.unwrap().status().as_u16(),
+            right.unwrap().status().as_u16(),
+        ];
+        statuses.sort();
+        assert_eq!(statuses, [200, 409]);
     }
 
     fn login_request(host: &str, origin: &str, password: &str) -> Request<Body> {

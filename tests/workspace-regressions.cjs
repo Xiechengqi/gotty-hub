@@ -10,7 +10,7 @@ const {randomUUID} = require('node:crypto');
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || '../frontend/node_modules/playwright-core');
 const root = path.resolve(__dirname, '..');
 const dir = fs.mkdtempSync(path.join(process.env.TEST_ARTIFACTS || os.tmpdir(), 'hub-workspace-'));
-const children = [], results = {}, errors = [], sent = [];
+const children = [], results = {}, errors = [], sent = [], controlActions = [], fontRequests = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let browser, hub, cookie, csrf;
 async function port() {
@@ -105,21 +105,121 @@ function installInspection() {
   start('gotty-direct', process.env.GOTTY_BINARY, ['--config', '/dev/null', '--hub-disabled', '--address', '127.0.0.1', '--port', String(directPort), '--permit-write', '--share-enabled=false', 'bash', '--noprofile', '--norc']);
   await wait(async () => (await fetch(`${directURL}/config.js`)).ok, 'standalone GoTTY startup');
   await api('/me/preferences', {opened: ids, instanceOrder: ids, active: ids[0], maximized: false, locale: 'zh-CN'}, 'PUT');
-  browser = await chromium.launch({headless: true, ...(process.env.CHROMIUM_EXECUTABLE ? {executablePath: process.env.CHROMIUM_EXECUTABLE} : {}), args: ['--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader']});
+  browser = await chromium.launch({headless: true, ...(process.env.CHROMIUM_EXECUTABLE ? {executablePath: process.env.CHROMIUM_EXECUTABLE} : {}), env:{...process.env,...(process.env.CHROMIUM_LIBRARY_PATH?{LD_LIBRARY_PATH:process.env.CHROMIUM_LIBRARY_PATH}:{}),...(process.env.CHROMIUM_FONTCONFIG?{FONTCONFIG_FILE:process.env.CHROMIUM_FONTCONFIG}:{})}, args: ['--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader']});
   const context = await browser.newContext({viewport: {width: 1280, height: 800}});
   await context.addCookies([{name: 'hub_session', value: cookie.split('=')[1], url: hub}]);
   await context.addInitScript(installInspection);
+  await context.addInitScript(({id}) => localStorage.setItem(`gotty-hub:terminal:${id}:appearance`, JSON.stringify({theme:'monokai',fontSize:16,fontFamily:'monospace'})), {id:ids[0]});
   // LAN HTTP origins do not expose crypto.randomUUID (localhost normally does).
   await context.addInitScript(() => Object.defineProperty(crypto, 'randomUUID', {value: undefined}));
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.stack));
-  page.on('websocket', ws => ws.on('framesent', frame => {const text = String(frame.payload); if (text[0] === '1') sent.push(Buffer.from(text.slice(1), 'base64').toString());}));
+  page.on('request', request => {if (new URL(request.url()).pathname.endsWith('.woff2')) fontRequests.push(request.url());});
+  page.on('websocket', ws => ws.on('framesent', frame => {const text = String(frame.payload); if (text[0] === '{') {try {const action=JSON.parse(text).control?.action;if(action)controlActions.push(action);} catch {}} if (text[0] === '1') sent.push(Buffer.from(text.slice(1), 'base64').toString());}));
   await page.goto(hub, {waitUntil: 'domcontentloaded'});
   const snapshot = () => page.evaluate(() => window.reviewSnapshot());
-  const ready = () => wait(async () => {const s = await snapshot(); return s?.pending === 0 && s.text.includes('bash-');}, 'terminal parser ready');
+  const ready = () => wait(async () => {const s = await snapshot(); return s?.pending === 0 && s.text.includes('bash-') && await page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isEnabled();}, 'terminal parser ready');
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  async function settingsDialog(target = page) {
+    await target.bringToFront();
+    await target.getByRole('button', {name:'设置',exact:true}).click();
+    await target.getByRole('button', {name:'终端设置',exact:true}).click();
+    const dialog=target.getByRole('dialog',{name:'终端设置',exact:true}); await dialog.waitFor();
+    await target.waitForFunction(()=>!document.querySelector('[data-entering],[data-exiting]'));
+    return dialog;
+  }
+  const fontLoaded=(target,family)=>target.evaluate(family=>[...document.fonts].some(font=>font.family.replace(/^['"]|['"]$/g,'')===family&&font.status==='loaded'),family);
+  await wait(()=>fontLoaded(page,'Source Code Pro'),'embedded default font');
+  async function verifyFontMetrics(index) {
+    await wait(()=>page.evaluate(index=>{
+      const term=window.reviewTerm(index);if(!term)return false;
+      const ctx=document.createElement('canvas').getContext('2d');ctx.font=`${term.options.fontSize}px ${term.options.fontFamily}`;
+      return Math.abs(ctx.measureText('W').width-term._core._charSizeService.width)<0.1;
+    },index),'loaded font cell metrics');
+  }
+  await verifyFontMetrics(1);
+  assert(fontRequests.every(url=>url.includes('source-code-pro')), 'unselected fonts downloaded at startup');
+  assert.equal(await page.locator('.terminal-display-control').count(),0);
+  let dialog=await settingsDialog();
+  await page.screenshot({path:path.join(dir,'terminal-settings-desktop.png')});
+  assert.equal(await dialog.getByRole('spinbutton').inputValue(),'16','legacy font size migration');
+  assert.equal(await dialog.getByRole('button',{name:/Monokai$/}).getAttribute('aria-pressed'),'true');
+  await dialog.getByRole('button',{name:/^Fira Code/}).click();
+  await wait(()=>fontLoaded(page,'Fira Code'),'on-demand Fira Code');
+  await dialog.getByRole('button',{name:'24px',exact:true}).click();
+  await dialog.getByRole('button',{name:/Light$/}).click();
+  const originalCount=await page.evaluate(()=>{window.settingsOriginal=window.reviewTerm();window.settingsOther=window.reviewTerm(1);return window.reviewSockets.length;});
+  await dialog.getByRole('button',{name:'保存并应用',exact:true}).click(); await dialog.waitFor({state:'hidden'});
+  await wait(()=>page.evaluate(()=>window.reviewTerm()?.options.fontSize===24&&window.reviewTerm()?.options.fontFamily.includes('Fira Code')),'account settings applied');
+  assert(await page.evaluate(()=>window.reviewTerm()===window.settingsOriginal&&window.reviewTerm(1)===window.settingsOther));
+  assert.equal(await page.evaluate(()=>window.reviewSockets.length),originalCount);
+  assert.equal((await api('/me/terminal-settings')).settings.fontId,'fira-code');
+  await sleep(800);assert.equal((await api('/me/terminal-settings')).settings.fontSize,24,'layout autosave erased terminal settings');
+  await page.route('**/*.woff2',route=>route.abort());
+  const requestsBeforeReload=fontRequests.length;
+  await page.reload({waitUntil:'domcontentloaded'});await ready();
+  await wait(()=>fontLoaded(page,'Fira Code'),'font restored from IndexedDB');await sleep(150);
+  assert.equal(fontRequests.length,requestsBeforeReload,'reload fetched font bytes instead of using IndexedDB');
+  await page.unroute('**/*.woff2');
+  await verifyFontMetrics(0);
+  await page.evaluate(()=>new Promise((resolve,reject)=>{
+    const request=indexedDB.open('gotty-terminal-fonts',1);request.onerror=()=>reject(request.error);
+    request.onsuccess=()=>{const db=request.result,read=db.transaction('files','readonly').objectStore('files').getAllKeys();
+      read.onsuccess=()=>{const key=read.result.find(key=>String(key).startsWith('fira-code-'));const get=db.transaction('files','readonly').objectStore('files').get(key);
+        get.onsuccess=()=>{const tx=db.transaction('files','readwrite');tx.objectStore('files').put(new ArrayBuffer(get.result.byteLength),key);tx.oncomplete=()=>{db.close();resolve();};tx.onerror=()=>reject(tx.error);};
+      };
+    };
+  }));
+  const beforeCorruptReload=fontRequests.length;
+  await page.reload({waitUntil:'domcontentloaded'});await ready();await wait(()=>fontLoaded(page,'Fira Code'),'corrupt cache redownload');
+  assert(fontRequests.slice(beforeCorruptReload).some(url=>url.includes('fira-code')),'corrupt font cache was not repaired');await verifyFontMetrics(0);
+  dialog=await settingsDialog();
+  await page.route('**/*cascadia-code*.woff2',route=>route.abort());
+  await dialog.getByRole('button',{name:/^Cascadia Code/}).click();
+  await dialog.getByRole('alert').waitFor();
+  assert.equal(await dialog.getByRole('button',{name:/^Fira Code/}).getAttribute('aria-pressed'),'true');
+  await page.unroute('**/*cascadia-code*.woff2');
+  for(const [name,family] of [['Cascadia Code','Cascadia Code'],['JetBrains Mono','JetBrains Mono'],['DejaVu Sans Mono','DejaVu Sans Mono'],['Source Code Pro','Source Code Pro']]) {
+    await dialog.getByRole('button',{name:new RegExp('^'+name)}).click();
+    await wait(()=>fontLoaded(page,family),'font '+family);
+    await wait(async()=>await dialog.getByRole('button',{name:new RegExp('^'+name)}).getAttribute('aria-pressed')==='true','font selection '+family);
+  }
+  await dialog.getByRole('button',{name:'取消',exact:true}).last().click(); await dialog.waitFor({state:'hidden'});
+  assert.equal((await api('/me/terminal-settings')).settings.fontId,'fira-code','cancel changed account preferences');
+  dialog=await settingsDialog();await dialog.getByRole('button',{name:'18px',exact:true}).click();
+  await page.route('**/api/v1/me/terminal-settings',route=>route.request().method()==='PUT'?route.fulfill({status:500,contentType:'application/json',body:'{"error":"database_error"}'}):route.continue());
+  await dialog.getByRole('button',{name:'保存并应用',exact:true}).click();await dialog.getByRole('alert').waitFor();
+  assert.equal(await page.evaluate(()=>window.reviewTerm().options.fontSize),24);
+  await page.unroute('**/api/v1/me/terminal-settings');await dialog.getByRole('button',{name:'取消',exact:true}).last().click();
+  dialog=await settingsDialog();await dialog.getByRole('button',{name:'18px',exact:true}).click();
+  const conflictBase=await api('/me/terminal-settings');await api('/me/terminal-settings',{revision:conflictBase.revision,settings:{...conflictBase.settings,fontSize:22}},'PUT');
+  await dialog.getByRole('button',{name:'保存并应用',exact:true}).click();await dialog.getByRole('alert').waitFor();
+  assert.equal(await dialog.getByRole('spinbutton').inputValue(),'18','conflict lost the editable draft');
+  await dialog.getByRole('button',{name:'取消',exact:true}).last().click();dialog=await settingsDialog();
+  assert.equal(await dialog.getByRole('spinbutton').inputValue(),'22','conflict did not reload current server settings');
+  await dialog.getByRole('button',{name:'24px',exact:true}).click();await dialog.getByRole('button',{name:'保存并应用',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  const second=await context.newPage();await second.goto(hub,{waitUntil:'domcontentloaded'});
+  await wait(async()=>await second.evaluate(()=>window.reviewTerm()?.options.fontSize===24 && window.reviewSnapshot()?.text.includes('bash-')) && await second.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isEnabled(),'second tab settings');
+  let secondDialog=await settingsDialog(second);await secondDialog.getByRole('button',{name:'20px',exact:true}).click();
+  await secondDialog.getByRole('button',{name:'保存并应用',exact:true}).click();await secondDialog.waitFor({state:'hidden'});
+  await wait(()=>page.evaluate(()=>window.reviewTerm()?.options.fontSize===20),'settings storage-event synchronization');
+  await second.close();await page.bringToFront();
+  dialog=await settingsDialog();await dialog.getByRole('button',{name:'24px',exact:true}).click();
+  await dialog.getByRole('button',{name:'保存并应用',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  await page.screenshot({path:path.join(dir,'terminal-settings-applied.png')});
+  report('terminalSettings',{accountWide:true,legacyMigration:true,noReconnect:true,cachedReloadWithoutNetwork:true,corruptCacheRecovered:true,correctFontMetrics:true,allBundledFontsLoaded:true,failedDownloadRetry:true,failedSavePreserved:true,conflictRecovery:true,crossTab:true});
+  const restart=page.locator('.terminal-slot:not([hidden]) .terminal-restart-control');
+  const beforeRestart=controlActions.length;await restart.click();
+  const confirmation=page.getByRole('alertdialog');await confirmation.waitFor();
+  assert((await confirmation.textContent()).includes('终端-01'));assert.equal(controlActions.length,beforeRestart);
+  await confirmation.getByRole('button',{name:'取消',exact:true}).click();await confirmation.waitFor({state:'hidden'});
+  assert.equal(controlActions.length,beforeRestart);
+  await restart.click();await confirmation.getByRole('button',{name:'重启此 GoTTY',exact:true}).click();
+  await wait(()=>controlActions.length===beforeRestart+1,'confirmed restart');
+  assert.equal(controlActions.at(-1),'restart');await confirmation.waitFor({state:'hidden'});await sleep(1400);await ready();
+  report('restartConfirmation',{cancelSendsNothing:true,confirmedExactlyOnce:true});
   const file = path.join(dir, 'vim.txt');
   await command(`vim -Nu NONE -n -i NONE '${file}'`);
   await wait(async () => {const s = await snapshot(); return s?.type === 'alternate' && s.pending === 0;}, 'Vim parser');
@@ -151,8 +251,21 @@ function installInspection() {
   directSent.length = 0; directReceived.length = 0;
   await direct.reload({waitUntil: 'domcontentloaded'}); await wait(() => directReceived.join('').includes('bash-'), 'direct replay'); await sleep(350);
   assert.deepEqual(directSent.filter(value => /\x1b(?:\[[?>][\d;]*[cy]|\[\d+;\d+R|\]1[012];)/.test(value)), []);
+  await direct.locator('#gotty-theme-btn').click();
+  await direct.locator('.font-family-item').filter({hasText:'JetBrains Mono'}).click();
+  await wait(()=>fontLoaded(direct,'JetBrains Mono'),'standalone downloadable font');
+  await wait(()=>direct.evaluate(()=>localStorage.getItem('gotty-font-family')==="'JetBrains Mono', monospace"),'standalone font saved');
+  const directFontRequests=[];direct.on('request',request=>{if(request.url().endsWith('.woff2'))directFontRequests.push(request.url());});
+  await direct.route('**/*.woff2',route=>route.abort());await direct.reload({waitUntil:'domcontentloaded'});
+  await wait(()=>fontLoaded(direct,'JetBrains Mono'),'standalone font cached reload');assert.deepEqual(directFontRequests,[]);
+  const fontURL=fontRequests.find(url=>url.includes('source-code-pro'));
+  const fontResponse=await page.request.get(fontURL);assert.match(fontResponse.headers()['cache-control'],/immutable/);assert.match(fontResponse.headers()['content-type'],/font\/woff2/);
   await direct.close(); await page.bringToFront();
-  report('standaloneGoTTY', {vimSaved: true, replayRepliesSuppressed: true});
+  const noStorageContext=await browser.newContext();const noStorage=await noStorageContext.newPage();noStorage.on('pageerror',error=>errors.push(error.stack));
+  await noStorage.addInitScript(()=>Object.defineProperty(window,'indexedDB',{get(){throw new DOMException('Storage denied','SecurityError');}}));
+  await noStorage.goto(directURL,{waitUntil:'domcontentloaded'});await wait(()=>fontLoaded(noStorage,'Source Code Pro'),'font loading without IndexedDB');
+  await noStorage.locator('#gotty-theme-btn').click();await noStorage.locator('.font-family-item').filter({hasText:'Fira Code'}).click();await wait(()=>fontLoaded(noStorage,'Fira Code'),'optional font without IndexedDB');await noStorageContext.close();
+  report('standaloneGoTTY', {vimSaved: true, replayRepliesSuppressed: true,cachedFontReload:true,storageDeniedFallback:true});
   await page.evaluate(() => {window.reviewOriginal = window.reviewTerm(); window.reviewOther = window.reviewTerm(1);});
   await page.evaluate(() => window.reviewSockets.find(socket => socket.url.includes('terminal-connections') && socket.readyState === 1)?.close());
   await wait(() => page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isDisabled(), 'transport disconnected');
@@ -181,6 +294,7 @@ function installInspection() {
   await page.reload({waitUntil: 'domcontentloaded'}); await ready();
   assert.deepEqual(await page.evaluate(() => window.reviewVisibleLayouts), [true]);
   await page.unroute('**/api/v1/me/preferences');
+  dialog=await settingsDialog();await dialog.getByRole('button',{name:'取消',exact:true}).last().click();
   report('maximize', {immediateReload: true, delayedPreferences: true, noOrdinaryLayoutFlash: true});
   const widths = [];
   for (const width of [320, 375, 390, 430]) {
@@ -194,6 +308,10 @@ function installInspection() {
     assert.equal(await page.locator('.session-switcher-row').count(), 1);
     await page.locator('.session-switcher-item').click();
     await wait(async () => (await trigger.textContent()).includes('终端-12'), 'mobile session selection');
+    dialog=await settingsDialog();const settingsBox=await dialog.boundingBox();assert(settingsBox.x>=0&&settingsBox.x+settingsBox.width<=width+1);
+    await dialog.getByRole('button',{name:/Solarized Dark/}).click();
+    assert(await dialog.locator('.terminal-settings-themes button').evaluateAll(buttons=>buttons.every(button=>button.scrollWidth<=button.clientWidth+1)),'theme labels clipped on mobile');
+    await page.screenshot({path:path.join(dir,`terminal-settings-${width}.png`)});await dialog.getByRole('button',{name:'取消',exact:true}).last().click();
     widths.push({width, allSessionsAccessible: true, searchAndSwitch: true});
   }
   await page.getByRole('dialog').waitFor({state: 'hidden'});
@@ -214,9 +332,18 @@ function installInspection() {
   await wait(async () => !(await page.locator('.app').evaluate(element => element.classList.contains('workspace-loading'))), 'other account layout');
   assert(!(await page.locator('.app').evaluate(element => element.classList.contains('workspace-maximized'))));
   assert.equal(await page.locator('.real-terminal').count(), 0);
+  dialog=await settingsDialog();assert.equal(await dialog.getByRole('spinbutton').inputValue(),'14');await dialog.getByRole('button',{name:'取消',exact:true}).last().click();assert.equal((await api('/me/terminal-settings')).settings,null);
   assert.deepEqual(errors, []); report('accountIsolation', {layout: true, terminals: true});
   report('browserErrors', errors);
-})().catch(error => {report('failure', {message: error.message, stack: error.stack}); process.exitCode = 1;}).finally(async () => {
+})().catch(async error => {
+  report('failure', {message: error.message, stack: error.stack}); report('browserErrors', errors);
+  let index=0;
+  for (const context of browser?.contexts() || []) for (const page of context.pages()) {
+    const name=`failure-${index++}`;
+    try {fs.writeFileSync(path.join(dir,`${name}.json`),JSON.stringify(await page.evaluate(()=>({snapshot:window.reviewSnapshot?.(),sockets:window.reviewSockets?.map(socket=>({readyState:socket.readyState})),body:document.body.innerText})),null,2));await page.screenshot({path:path.join(dir,`${name}.png`),timeout:3000});} catch {}
+  }
+  process.exitCode = 1;
+}).finally(async () => {
   if (browser) await browser.close().catch(() => {});
   for (const child of children) {try {process.kill(-child.pid, 'SIGTERM');} catch {}}
   await sleep(1200);

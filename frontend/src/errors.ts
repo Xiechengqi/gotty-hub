@@ -18,6 +18,7 @@ export function errorText(code:string,locale:string):string{
  password_length:['密码需要 12 到 256 字节。','Use a password between 12 and 256 bytes.'],
  rotation_pending:['设备凭据轮换尚未完成，请等待设备确认。','Credential rotation is waiting for device confirmation.'],
  database_error:['服务暂时不可用，请稍后重试。','The service is temporarily unavailable.'],
+ terminal_settings_conflict:['终端设置已在其他页面更新。请重新打开设置后再保存。','Terminal settings changed in another page. Reopen settings before saving.'],
  };
  return messages[code]?.[locale==='zh-CN'?0:1]??code;
 }

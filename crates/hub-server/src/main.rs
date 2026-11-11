@@ -6,6 +6,7 @@ mod gateway;
 mod origin;
 mod security;
 mod shutdown;
+mod terminal_settings;
 use axum::{
     middleware,
     routing::{delete, get, post, put},
@@ -164,6 +165,10 @@ async fn serve(
             get(api::preferences).put(api::save_preferences),
         )
         .route("/api/v1/instances", get(api::instances))
+        .route(
+            "/api/v1/me/terminal-settings",
+            get(terminal_settings::get).put(terminal_settings::save),
+        )
         .route(
             "/api/v1/instances/:id/grants",
             get(api::grants).put(api::set_grant),

@@ -15,7 +15,6 @@ vi.mock('@xterm/addon-web-links',()=>({WebLinksAddon:class {}}));
 vi.mock('@xterm/addon-unicode11',()=>({Unicode11Addon:class {}}));
 vi.mock('@xterm/addon-image',()=>({ImageAddon:class {}}));
 vi.mock('@xterm/addon-webgl',()=>({WebglAddon:class {onContextLoss(){}}}));
-vi.mock('./DisplaySettings',()=>({DisplaySettings:({trigger}:any)=>trigger}));
 vi.mock('./ShareManager',()=>({ShareManager:({trigger}:any)=>trigger}));
 vi.mock('./Transfer',()=>({FILE_LIMIT:64*1024*1024,createTransfer:()=>({consume(){},dispose(){}}),TransferModal:()=>null}));
 vi.mock('../api',async importOriginal=>({...await importOriginal<typeof import('../api')>(),api:vi.fn(async()=>({ticket:'ticket'}))}));
@@ -41,14 +40,14 @@ it('applies wire preferences and renders GoTTY controls with real WebTTY dispatc
  });
  expect(state.terminals[0].options).toMatchObject({fontSize:20,scrollback:900,fontFamily:"'Source Code Pro', monospace"});
  expect(node.querySelector<HTMLElement>('.real-terminal')?.style.getPropertyValue('--color-terminal-background')).toBe('#2e3440');
- for(const label of ['显示设置','清理历史','上传文件','重启 GoTTY','Hub 实例设置']) expect(node.querySelector(`button[aria-label="${label}"]`)).not.toBeNull();
+ for(const label of ['清理历史','上传文件','重启 GoTTY','Hub 实例设置']) expect(node.querySelector(`button[aria-label="${label}"]`)).not.toBeNull();
  expect(node.querySelector('[aria-label="连接数: 3"]')).not.toBeNull();
  await act(async()=>{node.querySelector<HTMLButtonElement>('[aria-label="清理历史"]')!.click();});
  expect(sockets[0].send.mock.calls.some(([data])=>data.startsWith('1')&&atob(data.slice(1))==='clear\n')).toBe(true);
 });
 it('keeps observer controls local and hides remote write and owner actions',async()=>{
  await act(async()=>root.render(<RealTerminal id="read" writable={false} files visible locale="en-US" onManage={()=>{}}/>));
- expect(node.querySelector('[aria-label="Display settings"]')).not.toBeNull();
+ expect(node.querySelector('[aria-label="Display settings"]')).toBeNull();
  for(const label of ['Clear history','Upload file','Restart GoTTY']) expect(node.querySelector(`[aria-label="${label}"]`)).toBeNull();
 });
 it('refreshes a disconnected terminal by replacing its renderer and connection without touching another pane',async()=>{
@@ -60,4 +59,15 @@ it('refreshes a disconnected terminal by replacing its renderer and connection w
  await act(async()=>refresh.click());
  expect(sockets).toHaveLength(3);expect(first.readyState).toBe(3);expect(second.readyState).toBe(0);
  expect(original.dispose).toHaveBeenCalledOnce();expect(other.dispose).not.toHaveBeenCalled();expect(state.terminals).toHaveLength(3);
+});
+
+it('applies account appearance without replacing either terminal or socket',async()=>{
+ const render=(fontSize:number)=>root.render(<RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}} settings={{schemaVersion:1,theme:'light',fontSize,fontId:'monospace'}}/>);
+ await act(async()=>render(18));
+ const term=state.terminals[0],socket=sockets[0];
+ expect(term.options).toMatchObject({fontSize:18,fontFamily:'monospace',theme:{background:'#fafafa'}});
+ await act(async()=>render(24));
+ expect(state.terminals).toHaveLength(1);expect(sockets).toHaveLength(1);expect(sockets[0]).toBe(socket);
+ expect(term.dispose).not.toHaveBeenCalled();expect(term.options.fontSize).toBe(24);
+ expect(node.querySelector('[aria-label="显示设置"]')).toBeNull();
 });

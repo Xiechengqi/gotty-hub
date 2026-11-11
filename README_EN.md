@@ -40,13 +40,14 @@ Each instance represents GoTTY's current shared PTY. Multiple browsers can use t
 - A flat sidebar of accessible instances, multiple tabs, two-pane split view, collapsible navigation, and terminal maximization.
 - Mouse dragging, touch-and-hold, and keyboard sorting in the sidebar and tab bar, with synchronized order saved to user preferences.
 - Status colors synchronized with GoTTY: red for active viewing, yellow for new output while not being viewed, green for output that has stopped but remains unread, and gray for no unread output. Offline instances use a separate icon.
-- xterm.js terminals with Nord, Source Code Pro, and 14px text by default, plus theme, font, cursor, and scrollback settings.
-- A terminal toolbar for connection counts, display settings, clearing history, file uploads, and authorized remote restart and share management.
+- xterm.js terminals with Nord, bundled Source Code Pro, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account.
+- Additional open-source fonts load from Hub on demand and persist in the browser across reloads. Cursor and scrollback options still come from GoTTY.
+- A terminal toolbar for connection counts, refreshing the current terminal, clearing history, file uploads, and authorized remote restart and share management. Restart uses a power icon and requires confirmation.
 - The same two-row, 16-key mobile keyboard as GoTTY when the software keyboard opens, with one-shot Ctrl / Alt / Shift and repeating navigation keys.
 - Owner, operator, and observer roles; terminal input, files, and voice follow both Hub permissions and GoTTY configuration.
 - Native uploads, drag-and-drop uploads, ZMODEM transfers, and optional ASR voice input. ZMODEM requires `rz` / `sz` on the remote device.
 - Automatic reconnect and output replay, plus device-credential rotation, disconnect, and unbinding.
-- A Settings menu at the top right: Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device.
+- A Settings menu at the top right: Terminal settings, Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device. Terminal settings remains accessible with the workspace maximized or navigation collapsed.
 - Single-file Linux amd64 / arm64 releases, with data stored under `~/.gotty-hub` by default.
 
 ## Quick Start
@@ -111,7 +112,7 @@ Instance owners can grant access to other registered users in instance settings:
 | --- | --- |
 | Owner | Use the terminal, manage access, rotate device credentials, and unbind; restart GoTTY and manage shares when supported by the device |
 | Operator | Use terminal input, file transfers, and enabled voice input |
-| Observer | View terminal output and adjust local display settings |
+| Observer | View terminal output and adjust terminal display settings for their own account |
 
 Writing still requires GoTTY's `--permit-write`; observers are always read-only. Knowing a username allows someone to register their own GoTTY instance to that user, but does not grant account login or access to existing instances.
 
@@ -272,6 +273,8 @@ The following detailed documents are currently in Chinese:
 - [API and device protocol](docs/API.md)
 - [Terminal and device-binding review](docs/TERMINAL_AND_BINDING_REVIEW.md)
 - [Page loading, mobile terminals, and synchronized sorting review](docs/UI_LOADING_AND_TERMINAL_REVIEW.md)
+- [Account terminal settings and font caching](docs/TERMINAL_SETTINGS.md)
+- [Terminal settings and fonts review](docs/TERMINAL_SETTINGS_REVIEW.md)
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md) and [historical review](docs/IMPLEMENTATION_REVIEW.md)
 
 ## License

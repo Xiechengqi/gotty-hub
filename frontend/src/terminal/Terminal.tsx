@@ -7,28 +7,26 @@ import {ImageAddon} from '@xterm/addon-image';
 import {WebglAddon} from '@xterm/addon-webgl';
 import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-core';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
-import {defaultDisplayOptions, displayOptions, NORD_THEME, type Appearance, type ThemeMap} from '@gotty/terminal-core/appearance';
-import {RiDeleteBinLine, RiRestartLine, RiRefreshLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
+import {defaultDisplayOptions, displayOptions, NORD_THEME, BUILTIN_THEMES, DEFAULT_FONT_FAMILY, type Appearance} from '@gotty/terminal-core/appearance';
+import {RiDeleteBinLine, RiShutDownLine, RiRefreshLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
 import {Button} from '@/components/base/buttons/button';
 import {Input} from '@/components/base/input/input';
-import {Modal, ModalBody, ModalHeader} from '@/components/base/modal/modal';
+import {AlertDialog, Modal, ModalBody, ModalHeader} from '@/components/base/modal/modal';
 import {api} from '../api';
 import {terminalMessage} from './messages';
 import {createTransfer, TransferModal, FILE_LIMIT, type Transfer} from './Transfer';
-import {readAppearance, saveAppearance, type TerminalConfig} from './appearance';
-import {DisplaySettings} from './DisplaySettings';
+import {readAppearance, type TerminalConfig} from './appearance';
+import {applyLoadedFont, ensureFont, fontIdForFamily} from '@gotty/terminal-core/fonts';
+import {settingsAppearance, type TerminalSettings} from './settings';
 import {ShareManager, type Control} from './ShareManager';
 import {HubConnection} from './connection';
 import {MobileKeys} from './MobileKeys';
 import '@xterm/xterm/css/xterm.css';
 
 type Controller = {term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
-type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void};
-const FALLBACK_THEMES: ThemeMap = {nord: NORD_THEME};
-// Same palette glyph as GoTTY's own display settings button (theme-picker.ts).
-const DisplayIcon = () => <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 3.5h7M8 3.5v9M5.5 12.5h5M3 6h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void};
 
-export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport}: Props) {
+export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport, settings, instanceName, onAppearance}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef(visible); view.current = visible;
   const controller = useRef<Controller>(undefined);
@@ -36,18 +34,20 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const inputTransform=useRef<((data:string)=>string)|null>(null);
   const setInputTransform=useCallback((value:((data:string)=>string)|null)=>{inputTransform.current=value;},[]);
   const preferences = useRef<Record<string, unknown>>({});
-  const appearanceRef = useRef<Appearance>(readAppearance(id));
+  const appearanceRef = useRef<Appearance>({});
+  appearanceRef.current = settings ? settingsAppearance(settings) : readAppearance(id);
+  const reportAppearance = useRef(onAppearance); reportAppearance.current = onAppearance;
+  const aliveTerm = useRef<Xterm | undefined>(undefined);
+  const appearanceEpoch = useRef(0);
   const configRef = useRef<TerminalConfig>({});
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadAbort = useRef<AbortController | undefined>(undefined);
-  const [appearance, setAppearance] = useState(appearanceRef.current);
   const [config, setConfig] = useState<TerminalConfig>({});
   const [message, setMessage] = useState('');
   const [connected, setConnected] = useState(false);
   const [count, setCount] = useState(0);
   const [terminalState, setTerminalState] = useState<TerminalStatePayload>();
   const [transfer, setTransfer] = useState<Transfer | null>(null);
-  const [displayOpen, setDisplayOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [upload, setUpload] = useState<{name: string; progress: number; done?: boolean}>();
   const [dragging, setDragging] = useState(false);
@@ -56,6 +56,9 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [refreshConfirm, setRefreshConfirm] = useState(false);
   const refreshPending = useRef(false);
+  const [restartConfirm, setRestartConfirm] = useState(false);
+  const [restartError, setRestartError] = useState('');
+  const restartPending = useRef(false);
   const zh = locale === 'zh-CN';
   const control = useCallback<Control>((action, payload = {}) => controller.current?.control(action, payload) ?? Promise.reject(Error('Terminal is disconnected')), []);
 
@@ -65,19 +68,25 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     setRefreshConfirm(false);
     uploadAbort.current?.abort();
     setUpload(undefined); setTransfer(null); setMessage(''); setConnected(false);
-    setDisplayOpen(false); setShareOpen(false);
+    setShareOpen(false);
     setRefreshGeneration(value => value + 1);
   }
 
-  function updateAppearance(value: Appearance) {
-    appearanceRef.current = value; setAppearance(value); saveAppearance(id, value);
-    const current = controller.current;
-    if (current) {
-      const options = displayOptions(preferences.current, configRef.current.themes || FALLBACK_THEMES, value);
-      Object.assign(current.term.options, options);
-      setColors({background: options.theme.background, foreground: options.theme.foreground}); current.measure();
-    }
-  }
+  const applyAppearance = useCallback((term: Xterm, measure: () => void) => {
+    const epoch = ++appearanceEpoch.current;
+    const options = displayOptions(preferences.current, BUILTIN_THEMES, appearanceRef.current);
+    Object.assign(term.options, options);
+    setColors({background: options.theme.background, foreground: options.theme.foreground});
+    reportAppearance.current?.({theme: appearanceRef.current.theme || 'nord', fontSize: options.fontSize, fontFamily: options.fontFamily});
+    measure();
+    const font = fontIdForFamily(options.fontFamily);
+    const current = () => aliveTerm.current === term && appearanceEpoch.current === epoch;
+    if (font) void ensureFont(font).then(() => {if (current()) {applyLoadedFont(term.options, options.fontFamily); measure();}}).catch(() => {
+      if (!current()) return;
+      void ensureFont('source-code-pro').then(() => {if (current()) {applyLoadedFont(term.options, DEFAULT_FONT_FAMILY); measure();}}).catch(() => {});
+    });
+  }, []);
+  useEffect(() => {const value = controller.current; if (value) applyAppearance(value.term, value.measure);}, [settings, applyAppearance]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -85,6 +94,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     let replaying = false;
     refreshPending.current = false;
     const term = new Xterm({...defaultDisplayOptions(), allowProposedApi: true, disableStdin: !writable});
+    aliveTerm.current = term;
     const fit = new FitAddon();
     term.loadAddon(fit); term.loadAddon(new WebLinksAddon()); term.loadAddon(new Unicode11Addon()); term.unicode.activeVersion = '11';
     try {term.loadAddon(new ImageAddon());} catch { /* Text renderer remains usable. */ }
@@ -111,11 +121,6 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
         if (!disposed && view.current && host.current?.clientWidth && host.current?.clientHeight) {try {fit.fit();} catch { /* Hidden pane. */ }}
       });});
     };
-    const applyAppearance = () => {
-      const options = displayOptions(preferences.current, configRef.current.themes || FALLBACK_THEMES, appearanceRef.current);
-      Object.assign(term.options, options);
-      setColors({background: options.theme.background, foreground: options.theme.foreground}); measure();
-    };
     const installVoice = () => {
       voice?.close(); voice = null;
       if (!asr || !writable || !host.current) return;
@@ -134,7 +139,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       setPreferences: value => {
         preferences.current = value;
         if (value['hub-config'] && typeof value['hub-config'] === 'object') {configRef.current = value['hub-config'] as TerminalConfig; setConfig(configRef.current); installVoice();}
-        altIsMeta = value['alt-is-meta'] === true; applyAppearance();
+        altIsMeta = value['alt-is-meta'] === true; applyAppearance(term, measure);
       },
       updateConnectionCount: value => setCount(value), updateTerminalState: value => setTerminalState(value),
       showAPIIndicator: execId => {apiExecutions.add(execId); setAPIRunning(true);}, hideAPIIndicator: execId => {apiExecutions.delete(execId); setAPIRunning(apiExecutions.size > 0);},
@@ -161,7 +166,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     };
     const selection = term.onSelectionChange(() => {if (term.hasSelection()) void copy(term.getSelection());});
     const osc = term.parser.registerOscHandler(52, data => {const payload = data.slice(data.indexOf(';') + 1); if (data.includes(';') && payload && payload !== '?') {try {void copy(new TextDecoder().decode(Uint8Array.from(atob(payload), char => char.charCodeAt(0))));} catch { /* Invalid clipboard sequence. */ }} return true;});
-    const observer = new ResizeObserver(measure); observer.observe(host.current); applyAppearance();
+    const observer = new ResizeObserver(measure); observer.observe(host.current); applyAppearance(term, measure);
     void document.fonts?.ready.then(()=>{if(!disposed)measure();});
     document.fonts?.addEventListener('loadingdone',measure);
     const stop = wt.open(); installVoice();
@@ -190,14 +195,16 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       },
     };
     return () => {
-      disposed = true; uploadAbort.current?.abort(); clearTimeout(messageTimer); cancelAnimationFrame(fitFrame); voice?.close(); zmodem?.dispose();
+      disposed = true; if (aliveTerm.current === term) aliveTerm.current = undefined; uploadAbort.current?.abort(); clearTimeout(messageTimer); cancelAnimationFrame(fitFrame); voice?.close(); zmodem?.dispose();
       window.visualViewport?.removeEventListener('resize', viewport); controller.current = undefined; clearInterval(interval);
       document.removeEventListener('visibilitychange', report); window.removeEventListener('focus', report); window.removeEventListener('blur', report); document.removeEventListener('focusin', report);
       stop(); observer.disconnect(); subscription.dispose(); binary.dispose(); size.dispose(); selection.dispose(); osc.dispose(); term.dispose();
       document.fonts?.removeEventListener('loadingdone',measure);
     };
-  }, [id, writable, asr, files, owner, controls, onViewport, refreshGeneration]);
-  useEffect(() => {if (visible) {controller.current?.measure(); controller.current?.term.focus();} else {setDisplayOpen(false); setShareOpen(false);} controller.current?.view();}, [visible]);
+  }, [id, writable, asr, files, owner, controls, onViewport, refreshGeneration, applyAppearance]);
+  // Browsers using DOM font measurement cannot measure a hidden pane. Reapply
+  // its loaded font when shown so it does not retain the old cell dimensions.
+  useEffect(() => {if (visible) {const value = controller.current; if (value) {applyAppearance(value.term, value.measure); value.term.focus();}} else {setShareOpen(false);} controller.current?.view();}, [visible, applyAppearance]);
 
   async function startUpload(file: File) {
     if (!controller.current || uploadAbort.current) return;
@@ -213,13 +220,12 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     onDrop={event => {setDragging(false); if (writable && files && connected) {event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void startUpload(file);}}}>
     <div ref={host} className="xterm-host" dir="ltr"/>
     <div className="terminal-toolbar" role="toolbar" aria-label={zh ? 'GoTTY 终端工具' : 'GoTTY terminal controls'}>
-      <ShareManager open={shareOpen} onOpenChange={value=>{setShareOpen(value);if(value)setDisplayOpen(false);}} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={zh ? '连接数 / 分享管理' : 'Connections / Share manager'} aria-label={`${zh ? '连接数' : 'Connections'}: ${count}`} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
-      <DisplaySettings open={displayOpen} onOpenChange={value=>{setDisplayOpen(value);if(value)setShareOpen(false);}} trigger={<Button className="terminal-control terminal-display-control" variant="ghost" size="xs" iconOnly leadingIcon={DisplayIcon} title={zh ? '显示设置' : 'Display settings'} aria-label={zh ? '显示设置' : 'Display settings'}/>} appearance={appearance} themes={config.themes || FALLBACK_THEMES} fontSize={terminal?.options.fontSize || 14} onChange={updateAppearance} locale={locale}/>
+      <ShareManager open={shareOpen} onOpenChange={setShareOpen} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={zh ? '连接数 / 分享管理' : 'Connections / Share manager'} aria-label={`${zh ? '连接数' : 'Connections'}: ${count}`} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
       {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={zh ? '清理历史' : 'Clear history'} aria-label={zh ? '清理历史' : 'Clear history'} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}
       {writable && files && <Button className="terminal-control terminal-upload-control" variant="ghost" size="xs" iconOnly leadingIcon={RiUpload2Line} title={zh ? '上传文件' : 'Upload file'} aria-label={zh ? '上传文件' : 'Upload file'} disabled={!connected || !!uploadAbort.current} onClick={() => uploadInput.current?.click()}/>}
-      {owner && controls && <Button className="terminal-control terminal-restart-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRestartLine} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} aria-label={zh ? '重启 GoTTY' : 'Restart GoTTY'} disabled={!connected || !config.restart_mode || config.restart_mode === 'disabled'} onClick={() => {void control('restart').then(() => setMessage(zh ? '已发送重启请求，正在等待 GoTTY 重连…' : 'Restart requested. Waiting for GoTTY to reconnect…')).catch(error => setMessage(String(error.message || error)));}}/>}
       <Button className="terminal-control terminal-reconnect-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRefreshLine} title={zh ? '刷新当前终端' : 'Refresh current terminal'} aria-label={zh ? '刷新当前终端' : 'Refresh current terminal'} onClick={() => {if (uploadAbort.current || transfer) setRefreshConfirm(true); else refreshTerminal();}}/>
       <Button className="terminal-control terminal-hub-control" variant="ghost" size="xs" iconOnly leadingIcon={RiServerLine} title={zh ? 'Hub 实例设置' : 'Hub instance settings'} aria-label={zh ? 'Hub 实例设置' : 'Hub instance settings'} onClick={onManage}/>
+      {owner && controls && <Button className="terminal-control terminal-restart-control" variant="ghost" size="xs" iconOnly leadingIcon={RiShutDownLine} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} aria-label={zh ? '重启 GoTTY' : 'Restart GoTTY'} disabled={!connected || !config.restart_mode || config.restart_mode === 'disabled'} onClick={() => {setRestartError(''); setRestartConfirm(true);}}/>}
     </div>
     {config.show_terminal_state && terminalState && <div className="terminal-state text-caption-1-regular" dir="ltr">{terminalState.activeCols} × {terminalState.activeRows} · {terminalState.policy}</div>}
     {apiRunning && <div className="terminal-api-indicator text-caption-1-regular" role="status">API running</div>}
@@ -228,6 +234,13 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     <div hidden><Input ref={uploadInput} type="file" aria-label={zh ? '选择上传文件' : 'Choose file to upload'} onChange={() => {const file = uploadInput.current?.files?.[0]; if (file) void startUpload(file); if (uploadInput.current) uploadInput.current.value = '';}}/></div>
     <MobileKeys term={terminal} enabled={writable&&visible&&connected&&config.mobile_keys!==false} transform={setInputTransform} locale={locale}/>
     <TransferModal transfer={transfer} locale={locale} onClose={() => setTransfer(null)}/>
+    <AlertDialog isOpen={restartConfirm} onOpenChange={setRestartConfirm} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} description={zh ? `确认重启“${instanceName || id}”？此实例的连接和正在运行的命令可能中断。` : `Restart “${instanceName || id}”? Connections and running commands on this instance may be interrupted.`} confirmLabel={zh ? '重启此 GoTTY' : 'Restart this GoTTY'} cancelLabel={zh ? '取消' : 'Cancel'} pendingLabel={zh ? '发送中…' : 'Sending…'} isConfirmDisabled={!owner || !controls || !connected || !config.restart_mode || config.restart_mode === 'disabled'} onConfirm={async () => {
+      if (restartPending.current || !owner || !controls || !connected || !config.restart_mode || config.restart_mode === 'disabled') return;
+      restartPending.current = true;
+      try {await control('restart'); setMessage(zh ? '已发送重启请求，正在等待 GoTTY 重连…' : 'Restart requested. Waiting for GoTTY to reconnect…');}
+      catch (error) {setRestartError(String(error instanceof Error ? error.message : error)); throw error;}
+      finally {restartPending.current = false;}
+    }}>{restartError && <p role="alert" className="text-text-error-primary">{restartError}</p>}</AlertDialog>
     <Modal isOpen={refreshConfirm} onOpenChange={setRefreshConfirm} size="sm"><ModalHeader title={zh ? '刷新当前终端' : 'Refresh current terminal'} closeLabel={zh ? '取消' : 'Cancel'}/><ModalBody><div className="flex flex-col gap-4"><p>{zh ? '刷新会中断当前文件传输。远端命令会继续运行。' : 'Refreshing interrupts the current file transfer. Remote commands keep running.'}</p><Button onClick={refreshTerminal}>{zh ? '中断传输并刷新' : 'Stop transfer and refresh'}</Button><Button variant="secondary" onClick={() => setRefreshConfirm(false)}>{zh ? '取消' : 'Cancel'}</Button></div></ModalBody></Modal>
     <Modal isOpen={!!upload} onOpenChange={value => {if (!value) closeUpload();}} size="sm"><ModalHeader title={zh ? '上传文件' : 'Upload file'} closeLabel={zh ? '关闭' : 'Close'}/><ModalBody><div className="flex flex-col gap-4"><p className="break-all">{upload?.name}</p><progress className="terminal-upload-progress" value={upload?.progress || 0} max={100}/><p>{upload?.progress}%</p><Button variant="secondary" onClick={closeUpload}>{upload?.done ? (zh ? '完成' : 'Done') : (zh ? '取消' : 'Cancel')}</Button></div></ModalBody></Modal>
   </section>;

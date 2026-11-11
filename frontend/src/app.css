@@ -73,14 +73,13 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-toolbar .terminal-control svg{width:14px;height:14px}
 .terminal-toolbar .terminal-connections{width:auto;min-width:52px;padding-inline:8px;gap:6px}
 .terminal-connections>span{padding:0}
-.terminal-state{position:absolute;inset-block-start:202px;inset-inline-end:10px;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);padding:4px 8px;border-radius:4px;pointer-events:none;z-index:2}
+.terminal-state{position:absolute;inset-block-start:222px;inset-inline-end:10px;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);padding:4px 8px;border-radius:4px;pointer-events:none;z-index:2}
 .terminal-api-indicator{position:absolute;inset-inline-start:12px;inset-block-end:12px;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);padding:4px 8px;border-radius:4px;pointer-events:none}
 .real-terminal .terminal-message{max-width:calc(100% - 88px);pointer-events:none;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);z-index:2}
 .real-terminal .gotty-voice-btn{inset-block-end:16px;z-index:2}
 .gotty-voice-btn--active{background:var(--color-notification-success-background);color:var(--color-notification-success-foreground)}
 .terminal-setting-options{display:flex;flex-wrap:wrap;gap:8px;margin-block-start:8px}
-.terminal-font-options{display:flex;flex-direction:column;gap:8px;margin-block-start:8px}
-.terminal-setting-options [aria-pressed=true],.terminal-font-options [aria-pressed=true]{background:var(--color-background-tertiary-default);border-color:var(--color-border-focus-ring)}
+.terminal-setting-options [aria-pressed=true]{background:var(--color-background-tertiary-default);border-color:var(--color-border-focus-ring)}
 .terminal-share-row{border-block-start:1px solid var(--color-separator-border);padding-block-start:16px}
 .terminal-upload-progress{width:100%;accent-color:var(--color-notification-success-foreground)}
 .terminal-drop-overlay{position:absolute;inset:0;z-index:4;display:grid;place-items:center;background:var(--color-terminal-control-background);color:var(--color-terminal-control-foreground);border:2px dashed var(--color-border-focus-ring);pointer-events:none}
@@ -88,10 +87,10 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 /* GoTTY terminal controls keep fixed slots even when a permission hides one. */
 .terminal-toolbar{display:block;inline-size:52px;block-size:220px;pointer-events:none}
 .terminal-toolbar .terminal-control{position:absolute;inset-inline-end:0;pointer-events:auto}
-.terminal-connections{inset-block-start:0}.terminal-display-control{inset-block-start:32px}.terminal-clear-control{inset-block-start:64px}.terminal-upload-control{inset-block-start:96px}.terminal-restart-control{inset-block-start:128px}.terminal-reconnect-control{inset-block-start:160px}.terminal-hub-control{inset-block-start:192px}
+.terminal-connections{inset-block-start:0}.terminal-reconnect-control{inset-block-start:32px}.terminal-clear-control{inset-block-start:64px}.terminal-upload-control{inset-block-start:96px}.terminal-restart-control{inset-block-start:176px}.terminal-hub-control{inset-block-start:128px}
 .terminal-toolbar .terminal-control>span{padding:0}
 .terminal-popover{--color-background-primary-default:var(--color-terminal-panel-background);--color-text-primary:var(--color-terminal-panel-text);--color-text-secondary:var(--color-terminal-panel-muted);background:var(--color-terminal-panel-background);border:1px solid var(--color-terminal-panel-border);border-radius:10px;padding:6px;backdrop-filter:blur(8px);box-shadow:var(--shadow-lg);color:var(--color-terminal-panel-text);max-inline-size:calc(100vw - 64px)}
-.terminal-display-popover{inline-size:240px}.terminal-share-popover{inline-size:360px}
+.terminal-share-popover{inline-size:360px}
 .terminal-popover-dialog{position:relative;padding:0;gap:0;overflow:hidden}
 .terminal-popover-scroll{max-block-size:min(560px,calc(var(--hub-viewport-height,100dvh) - 86px));overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--color-terminal-panel-border) transparent;padding:0 4px 4px}
 .terminal-section-title{padding:8px 10px 4px;color:var(--color-terminal-panel-muted);text-transform:uppercase}
@@ -99,11 +98,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-popover button{background:transparent;color:var(--color-terminal-panel-text);box-shadow:none;border-radius:6px}
 .terminal-popover button:hover{background:var(--color-terminal-option-hover)}
 .terminal-popover button[aria-pressed=true]{background:var(--color-terminal-option-active);border-color:var(--color-terminal-panel-border)}
-.terminal-popover .terminal-theme-item,.terminal-popover .terminal-font-options button{display:flex;justify-content:space-between;inline-size:100%;padding:8px 10px}
-.terminal-theme-item>span{display:flex;align-items:center;gap:10px;padding:0}
-.terminal-theme-swatch{inline-size:20px;block-size:20px;border-radius:50%;border:2px solid var(--color-terminal-panel-border);flex-shrink:0}
 .terminal-popover .terminal-setting-options{gap:4px;margin:0;padding:2px 10px 8px}
-.terminal-popover .terminal-font-sizes button{flex:1;min-inline-size:28px;block-size:26px;padding:0 4px;border:1px solid var(--color-terminal-panel-border)}
 .terminal-popover .terminal-font-options{gap:0;margin:0}.terminal-popover button:disabled{opacity:.4}
 .terminal-share-popover form{padding:0 10px 8px;gap:8px}.terminal-share-popover input{min-block-size:28px;color:var(--color-terminal-panel-text);background:var(--color-terminal-option-background)}
 .terminal-share-row{padding:8px 10px;border-color:var(--color-terminal-panel-border)}
@@ -122,7 +117,6 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 @media(pointer:coarse){.instance-nav-row>.instance-sort-handle{opacity:1}.instance-sort-handle{inline-size:28px;min-inline-size:28px;block-size:40px}.session-tab>.instance-sort-handle{inline-size:24px;min-inline-size:24px}}
 .real-terminal:has(.terminal-mobile-keys) .gotty-voice-btn{inset-block-end:109px}
 @media(max-height:500px){.real-terminal:has(.terminal-mobile-keys) .gotty-voice-btn{inset-block-end:93px}}
-.terminal-popover .terminal-font-options button>span{display:flex;gap:8px;padding:0;flex:1}
 .terminal-share-form{display:grid}.terminal-expiry-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .terminal-share-options{display:flex;flex-wrap:wrap;gap:8px}
 .terminal-share-options span{color:var(--color-terminal-panel-text)}
@@ -151,3 +145,16 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .session-switcher-item .session-name{white-space:normal;overflow-wrap:anywhere}
 .session-switcher-item .text-caption-1-regular{flex-shrink:0;white-space:nowrap}
 @media(max-width:767px){.mobile-session-switcher{display:flex}.session-tabs-scroll{display:none}.workspace-actions .navbar-toggle{display:none}.terminal-tabs{gap:4px}.workspace-actions{flex-shrink:0}}
+
+/* Account terminal settings use the same BoardUI modal in every workspace mode. */
+.terminal-settings-themes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.terminal-settings-themes button{justify-content:flex-start;min-inline-size:0;block-size:auto}
+.terminal-settings-themes button>span{flex:1;min-inline-size:0;justify-content:flex-start;gap:8px;padding-inline:0;white-space:normal}
+.terminal-settings-swatch{display:inline-grid;place-items:center;inline-size:32px;block-size:28px;flex-shrink:0;border-radius:4px;border:1px solid var(--color-separator-border)}
+.terminal-settings-font{inline-size:100%;justify-content:flex-start;min-block-size:44px}
+.terminal-settings-font>span{display:flex;flex:1;min-inline-size:0;justify-content:space-between;gap:8px}
+.terminal-settings-font[aria-pressed=true],.terminal-settings-themes [aria-pressed=true]{border-color:var(--color-border-focus-ring);background:var(--color-background-tertiary-default)}
+.terminal-settings-preview{padding:16px;border-radius:8px;overflow-x:auto;white-space:pre;line-height:1.5;border:1px solid var(--color-separator-border)}
+@media(max-width:767px){.terminal-settings-overlay{padding:8px}.terminal-settings-dialog{max-block-size:calc(var(--hub-viewport-height,100dvh) - 16px)}.terminal-toolbar{block-size:284px}.terminal-toolbar .terminal-control{min-inline-size:44px;min-block-size:44px}.terminal-toolbar .terminal-control svg{inline-size:18px;block-size:18px}.terminal-reconnect-control{inset-block-start:44px}.terminal-clear-control{inset-block-start:88px}.terminal-upload-control{inset-block-start:132px}.terminal-hub-control{inset-block-start:176px}.terminal-restart-control{inset-block-start:236px}.terminal-state{inset-block-start:300px}.terminal-settings-dialog button{min-block-size:44px}}
+@media(max-width:767px){.terminal-settings-swatch{inline-size:24px}.terminal-settings-themes button>span{gap:4px}}
+@media(max-width:359px){.terminal-settings-themes{grid-template-columns:minmax(0,1fr)}}
