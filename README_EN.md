@@ -38,6 +38,7 @@ Each instance represents GoTTY's current shared PTY. Multiple browsers can use t
 
 - Username / password registration and login, with a fixed `admin` account and an interactive administrator-password setup on first launch.
 - A flat sidebar of accessible instances, multiple tabs, two-pane split view, collapsible navigation, and terminal maximization.
+- Split view pairs two named instances with left/right and active-pane labels. Choose either instance, swap sides, or resize with a pointer or keyboard. Sorting preserves the pair; reloads restore the layout, and narrow screens temporarily show one terminal.
 - Mouse dragging, touch-and-hold, and keyboard sorting in the sidebar and tab bar, with synchronized order saved to user preferences.
 - Status colors synchronized with GoTTY: red for active viewing, yellow for new output while not being viewed, green for output that has stopped but remains unread, and gray for no unread output. Offline instances use a separate icon.
 - xterm.js terminals with Nord, bundled Source Code Pro, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account, including the soft beige Paper theme (`#f5f5d5`).

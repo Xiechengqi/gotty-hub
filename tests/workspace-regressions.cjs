@@ -61,7 +61,7 @@ function installInspection() {
   window.reviewSnapshot = (index = 0) => {
     const term = window.reviewTerm(index); if (!term) return null;
     const buffer = term.buffer.active;
-    return {pending: term._core._writeBuffer._pendingData, type: buffer.type, text: Array.from({length: buffer.length}, (_, i) => buffer.getLine(i)?.translateToString(true)).join('\n')};
+    return {pending: term._core._writeBuffer._pendingData, type: buffer.type, cols: term.cols, rows: term.rows, cursor: [buffer.cursorX, buffer.cursorY], text: Array.from({length: buffer.length}, (_, i) => buffer.getLine(i)?.translateToString(true)).join('\n')};
   };
   window.reviewVisibleLayouts = [];
   function sample() {
@@ -122,6 +122,11 @@ function installInspection() {
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  if(process.env.WORKSPACE_SUITE==='split'){
+    await api('/me/terminal-settings',{revision:0,settings:{schemaVersion:1,theme:'paper',fontSize:24,fontId:'fira-code'}},'PUT');
+    await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   async function settingsDialog(target = page) {
     await target.bringToFront();
     await target.getByRole('button', {name:'设置',exact:true}).click();
@@ -321,6 +326,7 @@ function installInspection() {
   await page.keyboard.press('Escape'); await page.keyboard.type(':wq'); await page.keyboard.press('Enter');
   await wait(async () => (await snapshot())?.type === 'normal' && fs.readFileSync(file, 'utf8').includes('unsaved-before-refresh'), 'save preserved Vim session');
   report('terminalRefresh', {newRenderer: true, disconnectedRecovery: true, otherPaneUnchanged: true, shellPreserved: true, unsavedVimPreserved: true});
+  await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
   assert.equal(await page.getByRole('button', {name: '刷新页面', exact: true}).count(), 1);
   await page.locator('.maximize-button').click();
   await page.reload({waitUntil: 'domcontentloaded'}); await ready();
@@ -377,7 +383,7 @@ function installInspection() {
   let index=0;
   for (const context of browser?.contexts() || []) for (const page of context.pages()) {
     const name=`failure-${index++}`;
-    try {fs.writeFileSync(path.join(dir,`${name}.json`),JSON.stringify(await page.evaluate(()=>({snapshot:window.reviewSnapshot?.(),sockets:window.reviewSockets?.map(socket=>({readyState:socket.readyState})),body:document.body.innerText})),null,2));await page.screenshot({path:path.join(dir,`${name}.png`),timeout:3000});} catch {}
+    try {fs.writeFileSync(path.join(dir,`${name}.json`),JSON.stringify(await page.evaluate(()=>({snapshot:window.reviewSnapshot?.(),terminals:[...document.querySelectorAll('.real-terminal')].map((element,index)=>({id:element.closest('.terminal-slot')?.dataset.instanceId,snapshot:window.reviewSnapshot?.(index)})),inputs:window.splitInputs,sizes:window.splitSizes,sockets:window.reviewSockets?.map(socket=>({readyState:socket.readyState})),body:document.body.innerText})),null,2));await page.screenshot({path:path.join(dir,`${name}.png`),timeout:3000});} catch {}
   }
   process.exitCode = 1;
 }).finally(async () => {

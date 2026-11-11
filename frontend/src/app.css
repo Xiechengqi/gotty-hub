@@ -63,7 +63,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-slot[hidden]{display:none}
 .real-terminal{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;background:var(--color-terminal-background);color:var(--color-terminal-foreground)}
 .real-terminal .xterm .xterm-viewport{background:var(--color-terminal-background)}
-.xterm-host{position:relative;flex:1;min-height:0;overflow:hidden}
+.xterm-host{position:relative;flex:1;min-height:0;overflow:auto}
 .terminal-message{position:absolute;inset-block-start:12px;inset-inline-start:12px;padding:8px;background:var(--color-background-secondary-default);color:var(--color-text-secondary);z-index:1}
 
 .gotty-voice-btn{position:absolute;inset-inline-end:16px;inset-block-end:64px;border:1px solid var(--color-border-button-default);border-radius:50%;padding:12px;background:var(--color-background-secondary-default);color:var(--color-text-primary)}
@@ -159,3 +159,37 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 @media(max-width:767px){.terminal-settings-overlay{padding:8px}.terminal-settings-dialog{max-block-size:calc(var(--hub-viewport-height,100dvh) - 16px)}.terminal-toolbar{block-size:284px}.terminal-toolbar .terminal-control{min-inline-size:44px;min-block-size:44px}.terminal-toolbar .terminal-control svg{inline-size:18px;block-size:18px}.terminal-reconnect-control{inset-block-start:44px}.terminal-clear-control{inset-block-start:88px}.terminal-upload-control{inset-block-start:132px}.terminal-hub-control{inset-block-start:176px}.terminal-restart-control{inset-block-start:236px}.terminal-state{inset-block-start:300px}.terminal-settings-dialog button{min-block-size:44px}}
 @media(max-width:767px){.terminal-settings-swatch{inline-size:24px}.terminal-settings-themes button>span{gap:4px}}
 @media(max-width:359px){.terminal-settings-themes{grid-template-columns:minmax(0,1fr)}}
+
+/* Hallmark · component: terminal workspace · existing BoardUI system.
+ * Pre-emit critique: P5 H5 E4 S5 R5 V4. Pane identity and input focus agree. */
+.terminals{position:relative;grid-template-rows:minmax(0,1fr);gap:0}
+.terminal-slot{grid-column:1;grid-row:1}
+.terminals.split>.terminal-slot[data-pane=right]{grid-column:3}
+.terminals.split>.terminal-slot{outline:1px solid var(--color-separator-border);outline-offset:-1px}
+.terminals.split>.terminal-slot[data-focused=true]{outline:2px solid var(--color-border-focus-ring);outline-offset:-2px}
+.terminal-slot>.terminal-empty{flex:1;min-block-size:0}
+.terminal-pane-heading{display:flex;align-items:center;flex-shrink:0;gap:8px;min-inline-size:0;min-block-size:40px;padding-inline:8px;border-block-end:1px solid var(--color-separator-border);background:var(--color-background-primary-default);color:var(--color-text-primary)}
+.pane-instance-trigger{flex:1;min-inline-size:0;justify-content:flex-start;padding-inline:4px;min-block-size:32px;color:var(--color-text-primary)}
+.pane-instance-trigger>span{display:flex;align-items:center;gap:8px;flex:1;min-inline-size:0;justify-content:flex-start;padding-inline:0}
+.pane-instance-trigger .session-label{flex:1;min-inline-size:0}
+.pane-position,.pane-tab-label{flex-shrink:0;padding-inline:4px;border:1px solid var(--color-border-button-default);border-radius:4px;color:var(--color-text-primary)}
+.pane-heading-meta{display:flex;align-items:center;gap:8px;flex-shrink:0;white-space:nowrap}
+.pane-active-label{color:var(--color-text-primary)}
+.pane-close{inline-size:28px;min-inline-size:28px;min-block-size:28px;padding:0}
+.pane-close svg{inline-size:16px;block-size:16px}
+.swap-panes-button{min-inline-size:36px;min-block-size:36px}
+.split-divider{grid-column:2;grid-row:1;display:flex;align-items:center;justify-content:center;min-inline-size:0;background:var(--color-background-secondary-default);cursor:col-resize;touch-action:none;user-select:none;z-index:1}
+.split-divider>span{inline-size:2px;block-size:40px;border-radius:4px;background:var(--color-text-tertiary);pointer-events:none}
+.split-divider:focus-visible{outline:2px solid var(--color-border-focus-ring);outline-offset:-2px}
+.split-divider-dragging>span,.split-divider:focus-visible>span{background:var(--color-border-focus-ring)}
+.terminals:has(.split-divider-dragging){user-select:none}
+@media(hover:hover){.split-divider:hover{background:var(--color-background-secondary-hover)}}
+.split-instance-list{list-style:none;padding:0;margin:0}
+.split-instance-list>li{border-block-end:1px solid var(--color-separator-border)}
+.split-instance-option{inline-size:100%;min-inline-size:0;min-block-size:48px;padding:12px 8px;justify-content:flex-start}
+.split-instance-option>span{display:flex;align-items:center;justify-content:space-between;gap:12px;inline-size:100%;min-inline-size:0;padding-inline:0}
+.split-instance-option .session-label{min-inline-size:0;flex:1}
+.split-instance-name{min-inline-size:0;text-align:start;white-space:normal;overflow-wrap:anywhere}
+.split-instance-option>span>.text-caption-1-regular{flex-shrink:0;color:var(--color-text-tertiary)}
+.split-instance-option[aria-pressed=true]{background:var(--color-background-secondary-default)}
+@media(max-width:767px){.terminal-pane-heading{min-block-size:44px;padding-inline:4px;gap:4px}.pane-instance-trigger{min-block-size:44px}.pane-close{min-inline-size:44px;min-block-size:44px}.swap-panes-button{display:none}}

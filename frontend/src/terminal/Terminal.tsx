@@ -24,9 +24,9 @@ import {MobileKeys} from './MobileKeys';
 import '@xterm/xterm/css/xterm.css';
 
 type Controller = {term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
-type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void};
+type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
 
-export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport, settings, instanceName, onAppearance}: Props) {
+export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef(visible); view.current = visible;
   const controller = useRef<Controller>(undefined);
@@ -37,6 +37,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const appearanceRef = useRef<Appearance>({});
   appearanceRef.current = settings ? settingsAppearance(settings) : readAppearance(id);
   const reportAppearance = useRef(onAppearance); reportAppearance.current = onAppearance;
+  const reportFocus = useRef(onFocusHandled); reportFocus.current = onFocusHandled;
   const aliveTerm = useRef<Xterm | undefined>(undefined);
   const appearanceEpoch = useRef(0);
   const configRef = useRef<TerminalConfig>({});
@@ -60,6 +61,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const [restartError, setRestartError] = useState('');
   const restartPending = useRef(false);
   const zh = locale === 'zh-CN';
+  const named = (label: string) => label + ' · ' + (instanceName || id);
   const control = useCallback<Control>((action, payload = {}) => controller.current?.control(action, payload) ?? Promise.reject(Error('Terminal is disconnected')), []);
 
   function refreshTerminal() {
@@ -103,6 +105,8 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     try {const webgl = new WebglAddon(); webgl.onContextLoss(() => webgl.dispose()); term.loadAddon(webgl);} catch { /* WebGL is optional. */ }
     let input: (data: string | Uint8Array) => void = () => {};
     let resize: (cols: number, rows: number) => void = () => {};
+    let requestedSize: {cols: number; rows: number} | undefined;
+    let serverSize: {cols: number; rows: number} | undefined;
     let sendUpload: (message: string) => void = () => {};
     let bufferSize = 1024;
     let connection: HubConnection | null = null;
@@ -118,7 +122,21 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     const measure = () => {
       cancelAnimationFrame(fitFrame);
       fitFrame = requestAnimationFrame(() => {fitFrame = requestAnimationFrame(() => {
-        if (!disposed && view.current && host.current?.clientWidth && host.current?.clientHeight) {try {fit.fit();} catch { /* Hidden pane. */ }}
+        if (!disposed && view.current && host.current?.clientWidth && host.current?.clientHeight) {
+          try {
+            const size = fit.proposeDimensions();
+            if (!size || !Number.isFinite(size.cols) || !Number.isFinite(size.rows)) return;
+            // Request the viewport size independently from the rendering grid.
+            // GoTTY may enforce a minimum or use another client as PTY leader.
+            // Fitting that output into a smaller grid corrupts full-screen apps.
+            if (!requestedSize || size.cols !== requestedSize.cols || size.rows !== requestedSize.rows) {
+              requestedSize = size;
+              resize(size.cols, size.rows);
+            }
+            const grid = serverSize || size;
+            term.resize(grid.cols, grid.rows);
+          } catch { /* Hidden pane or unavailable font metrics. */ }
+        }
       });});
     };
     const installVoice = () => {
@@ -133,7 +151,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     };
     const zmodem = writable && files ? createTransfer(data => term.write(data), data => input(data), setTransfer, enabled => {term.options.disableStdin = !enabled || !writable;}) : null;
     const adapter: Terminal & {setUploadFileSender: (sender: (message: string) => void) => void; setUploadFileBufferSize: (size: number) => void} = {
-      info: () => ({columns: term.cols, rows: term.rows}), output: (data, replay) => {if (zmodem && !replay) zmodem.consume(data); else term.write(data);},
+      info: () => ({columns: requestedSize?.cols ?? term.cols, rows: requestedSize?.rows ?? term.rows}), output: (data, replay) => {if (zmodem && !replay) zmodem.consume(data); else term.write(data);},
       flushOutput: callback => term.write(new Uint8Array(0), callback), setReplayMode: active => {replaying = active;},
       showMessage, removeMessage: () => showMessage('', 0), setWindowTitle: () => {},
       setPreferences: value => {
@@ -141,17 +159,23 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
         if (value['hub-config'] && typeof value['hub-config'] === 'object') {configRef.current = value['hub-config'] as TerminalConfig; setConfig(configRef.current); installVoice();}
         altIsMeta = value['alt-is-meta'] === true; applyAppearance(term, measure);
       },
-      updateConnectionCount: value => setCount(value), updateTerminalState: value => setTerminalState(value),
+      updateConnectionCount: value => setCount(value), updateTerminalState: value => {
+        setTerminalState(value);
+        const {activeCols: cols, activeRows: rows} = value;
+        if (Number.isInteger(cols) && cols > 0 && cols <= 4096 && Number.isInteger(rows) && rows > 0 && rows <= 4096) {
+          serverSize = {cols, rows};
+          term.resize(cols, rows);
+        }
+      },
       showAPIIndicator: execId => {apiExecutions.add(execId); setAPIRunning(true);}, hideAPIIndicator: execId => {apiExecutions.delete(execId); setAPIRunning(apiExecutions.size > 0);},
       setUploadFileSender: sender => {sendUpload = sender;}, setUploadFileBufferSize: size => {bufferSize = size;},
-      onInput: callback => {input = callback;}, onResize: callback => {resize = callback;}, close: () => {}, reset: () => term.reset(), deactivate: () => {}, focus: () => {if (view.current) term.focus();}, scrollToBottom: () => term.scrollToBottom(),
+      onInput: callback => {input = callback;}, onResize: callback => {resize = callback;}, close: () => {}, reset: () => term.reset(), deactivate: () => {}, focus: () => {if (view.current && host.current?.parentElement?.contains(document.activeElement)) term.focus();}, scrollToBottom: () => term.scrollToBottom(),
     };
     const viewing = () => view.current && document.visibilityState === 'visible' && document.hasFocus() && !!host.current?.contains(document.activeElement);
     const wt = new WebTTY(adapter, {create: () => {connection = new HubConnection(id, writable, owner, controls, viewing, () => view.current); return connection;}}, '', '');
     wt.onConnect = () => {if (!disposed) setConnected(true);}; wt.onDisconnect = () => {if (!disposed) {setConnected(false); setCount(0);}};
     const subscription = term.onData(data => {if (writable && !replaying) input(inputTransform.current?.(data)??data);});
     const binary = term.onBinary(data => {if (writable && !replaying) input(Uint8Array.from(data, char => char.charCodeAt(0)));});
-    const size = term.onResize(({cols, rows}) => {if (view.current && cols > 0 && rows > 0) resize(cols, rows);});
     term.attachCustomKeyEventHandler(event => {
       if (!writable || !altIsMeta || event.type !== 'keydown' || !event.altKey || event.ctrlKey || event.metaKey || event.code === 'Tab') return true;
       const char = /^Key[A-Z]$/.test(event.code) ? (event.shiftKey ? event.code[3] : event.code[3].toLowerCase()) : event.key.length === 1 ? event.key : '';
@@ -160,9 +184,14 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     const copy = async (text: string) => {
       if (!text || !view.current) return;
       try {if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-        else {const field = document.createElement('textarea'); field.value = text; field.style.position = 'fixed'; field.style.opacity = '0'; host.current?.appendChild(field); field.select(); document.execCommand('copy'); field.remove();}
+        else {
+          const previousFocus = document.activeElement;
+          const field = document.createElement('textarea'); field.value = text; field.style.position = 'fixed'; field.style.opacity = '0'; host.current?.appendChild(field);
+          try {field.select(); document.execCommand('copy');}
+          finally {field.remove(); if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();}
+        }
       } catch {return;}
-      if (!disposed) {showMessage('Copied to clipboard', 1400); term.focus();}
+      if (!disposed) showMessage('Copied to clipboard', 1400);
     };
     const selection = term.onSelectionChange(() => {if (term.hasSelection()) void copy(term.getSelection());});
     const osc = term.parser.registerOscHandler(52, data => {const payload = data.slice(data.indexOf(';') + 1); if (data.includes(';') && payload && payload !== '?') {try {void copy(new TextDecoder().decode(Uint8Array.from(atob(payload), char => char.charCodeAt(0))));} catch { /* Invalid clipboard sequence. */ }} return true;});
@@ -198,13 +227,32 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       disposed = true; if (aliveTerm.current === term) aliveTerm.current = undefined; uploadAbort.current?.abort(); clearTimeout(messageTimer); cancelAnimationFrame(fitFrame); voice?.close(); zmodem?.dispose();
       window.visualViewport?.removeEventListener('resize', viewport); controller.current = undefined; clearInterval(interval);
       document.removeEventListener('visibilitychange', report); window.removeEventListener('focus', report); window.removeEventListener('blur', report); document.removeEventListener('focusin', report);
-      stop(); observer.disconnect(); subscription.dispose(); binary.dispose(); size.dispose(); selection.dispose(); osc.dispose(); term.dispose();
+      stop(); observer.disconnect(); subscription.dispose(); binary.dispose(); selection.dispose(); osc.dispose(); term.dispose();
       document.fonts?.removeEventListener('loadingdone',measure);
     };
   }, [id, writable, asr, files, owner, controls, onViewport, refreshGeneration, applyAppearance]);
   // Browsers using DOM font measurement cannot measure a hidden pane. Reapply
   // its loaded font when shown so it does not retain the old cell dimensions.
-  useEffect(() => {if (visible) {const value = controller.current; if (value) {applyAppearance(value.term, value.measure); value.term.focus();}} else {setShareOpen(false);} controller.current?.view();}, [visible, applyAppearance]);
+  useEffect(() => {if (visible) {const value = controller.current; if (value) applyAppearance(value.term, value.measure);} else {setShareOpen(false);} controller.current?.view();}, [visible, applyAppearance]);
+  useEffect(() => {
+    if (!visible || !focusRequest) return;
+    let frame = 0;
+    const started = performance.now();
+    const focus = () => {
+      // React Aria restores its trigger after an exiting dialog unmounts.
+      // Wait for that restoration, and never steal focus from a new dialog.
+      const overlays = [...document.querySelectorAll('[role=dialog], [role=alertdialog], [role=listbox]')];
+      if (overlays.length) {
+        if (performance.now() - started < 1500 && overlays.every(element => element.closest('[data-exiting]'))) frame = requestAnimationFrame(focus);
+        else reportFocus.current?.(id, focusRequest);
+        return;
+      }
+      controller.current?.term.focus();
+      reportFocus.current?.(id, focusRequest);
+    };
+    frame = requestAnimationFrame(() => {frame = requestAnimationFrame(focus);});
+    return () => cancelAnimationFrame(frame);
+  }, [visible, focusRequest, id]);
 
   async function startUpload(file: File) {
     if (!controller.current || uploadAbort.current) return;
@@ -219,13 +267,13 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     onDragLeave={event => {if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false);}}
     onDrop={event => {setDragging(false); if (writable && files && connected) {event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void startUpload(file);}}}>
     <div ref={host} className="xterm-host" dir="ltr"/>
-    <div className="terminal-toolbar" role="toolbar" aria-label={zh ? 'GoTTY 终端工具' : 'GoTTY terminal controls'}>
-      <ShareManager open={shareOpen} onOpenChange={setShareOpen} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={zh ? '连接数 / 分享管理' : 'Connections / Share manager'} aria-label={`${zh ? '连接数' : 'Connections'}: ${count}`} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
-      {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={zh ? '清理历史' : 'Clear history'} aria-label={zh ? '清理历史' : 'Clear history'} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}
-      {writable && files && <Button className="terminal-control terminal-upload-control" variant="ghost" size="xs" iconOnly leadingIcon={RiUpload2Line} title={zh ? '上传文件' : 'Upload file'} aria-label={zh ? '上传文件' : 'Upload file'} disabled={!connected || !!uploadAbort.current} onClick={() => uploadInput.current?.click()}/>}
-      <Button className="terminal-control terminal-reconnect-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRefreshLine} title={zh ? '刷新当前终端' : 'Refresh current terminal'} aria-label={zh ? '刷新当前终端' : 'Refresh current terminal'} onClick={() => {if (uploadAbort.current || transfer) setRefreshConfirm(true); else refreshTerminal();}}/>
-      <Button className="terminal-control terminal-hub-control" variant="ghost" size="xs" iconOnly leadingIcon={RiServerLine} title={zh ? 'Hub 实例设置' : 'Hub instance settings'} aria-label={zh ? 'Hub 实例设置' : 'Hub instance settings'} onClick={onManage}/>
-      {owner && controls && <Button className="terminal-control terminal-restart-control" variant="ghost" size="xs" iconOnly leadingIcon={RiShutDownLine} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} aria-label={zh ? '重启 GoTTY' : 'Restart GoTTY'} disabled={!connected || !config.restart_mode || config.restart_mode === 'disabled'} onClick={() => {setRestartError(''); setRestartConfirm(true);}}/>}
+    <div className="terminal-toolbar" role="toolbar" aria-label={named(zh ? 'GoTTY 终端工具' : 'GoTTY terminal controls')}>
+      <ShareManager open={shareOpen} onOpenChange={setShareOpen} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={named(zh ? '连接数 / 分享管理' : 'Connections / Share manager')} aria-label={named(`${zh ? '连接数' : 'Connections'}: ${count}`)} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
+      {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={named(zh ? '清理历史' : 'Clear history')} aria-label={named(zh ? '清理历史' : 'Clear history')} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}
+      {writable && files && <Button className="terminal-control terminal-upload-control" variant="ghost" size="xs" iconOnly leadingIcon={RiUpload2Line} title={named(zh ? '上传文件' : 'Upload file')} aria-label={named(zh ? '上传文件' : 'Upload file')} disabled={!connected || !!uploadAbort.current} onClick={() => uploadInput.current?.click()}/>}
+      <Button className="terminal-control terminal-reconnect-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRefreshLine} title={named(zh ? '刷新当前终端' : 'Refresh current terminal')} aria-label={named(zh ? '刷新当前终端' : 'Refresh current terminal')} onClick={() => {if (uploadAbort.current || transfer) setRefreshConfirm(true); else refreshTerminal();}}/>
+      <Button className="terminal-control terminal-hub-control" variant="ghost" size="xs" iconOnly leadingIcon={RiServerLine} title={named(zh ? 'Hub 实例设置' : 'Hub instance settings')} aria-label={named(zh ? 'Hub 实例设置' : 'Hub instance settings')} onClick={onManage}/>
+      {owner && controls && <Button className="terminal-control terminal-restart-control" variant="ghost" size="xs" iconOnly leadingIcon={RiShutDownLine} title={named(zh ? '重启 GoTTY' : 'Restart GoTTY')} aria-label={named(zh ? '重启 GoTTY' : 'Restart GoTTY')} disabled={!connected || !config.restart_mode || config.restart_mode === 'disabled'} onClick={() => {setRestartError(''); setRestartConfirm(true);}}/>}
     </div>
     {config.show_terminal_state && terminalState && <div className="terminal-state text-caption-1-regular" dir="ltr">{terminalState.activeCols} × {terminalState.activeRows} · {terminalState.policy}</div>}
     {apiRunning && <div className="terminal-api-indicator text-caption-1-regular" role="status">API running</div>}
