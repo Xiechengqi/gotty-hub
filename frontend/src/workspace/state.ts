@@ -3,7 +3,7 @@ import {normalizeOrder} from '../instances/order';
 export type Pane = 'left' | 'right';
 export type Split = {left: string; right: string; focused: Pane; ratio: number};
 export type Workspace = {opened: string[]; order: string[]; active: string; groups: Split[]};
-export type SavedWorkspace = Workspace & {schemaVersion: 2};
+export type SavedWorkspace = Workspace & {schemaVersion: 3};
 export const MIN_PANE_WIDTH = 360;
 export const DIVIDER_WIDTH = 8;
 export const emptyWorkspace = (): Workspace => ({opened: [], order: [], active: '', groups: []});
@@ -18,8 +18,7 @@ export function sameWorkspace(a: Workspace, b: Workspace): boolean {
   return a.active === b.active && same(a.opened, b.opened) && same(a.order, b.order) && a.groups.length === b.groups.length && a.groups.every((g, i) => {const h = b.groups[i]; return g.left === h.left && g.right === h.right && g.focused === h.focused && g.ratio === h.ratio;});
 }
 
-// A pair is one sorting unit, including in the all-instances directory. This
-// prevents opening a previously closed instance from inserting it into a pair.
+// A pair is one sorting unit. Reopening an instance cannot insert it into a pair.
 export function navigationUnits(state: Workspace, openedOnly = false): string[][] {
   const ids = openedOnly ? openedOrder(state) : state.order;
   return ids.filter(id => !state.groups.some(g => g.right === id)).map(id => {
@@ -59,7 +58,7 @@ export function decodeWorkspace(value: unknown, legacyOrder?: unknown): Workspac
   const saved = value as Record<string, unknown>;
   if (!strings(saved.opened) || typeof saved.active !== 'string') return;
   let order: string[], groups: Split[];
-  if (saved.schemaVersion === 2) {
+  if (saved.schemaVersion === 3 || saved.schemaVersion === 2) {
     if (!strings(saved.order) || !Array.isArray(saved.groups) || !saved.groups.every(validGroup)) return;
     order = saved.order; groups = saved.groups;
   } else if (saved.schemaVersion === 1) {
@@ -69,10 +68,17 @@ export function decodeWorkspace(value: unknown, legacyOrder?: unknown): Workspac
   } else return;
   return normalizeWorkspace({opened: saved.opened, active: saved.active, order, groups}, [...new Set([...order, ...saved.opened])]);
 }
-export function saveWorkspace(value: Workspace): SavedWorkspace {return {schemaVersion: 2, ...value};}
+export function saveWorkspace(value: Workspace): SavedWorkspace {return {schemaVersion: 3, ...value};}
+// The order remembers closed tabs. Only genuinely new IDs open automatically;
+// repeated snapshots must not undo a user's explicit close.
+export function reconcileWorkspace(state: Workspace, available: readonly string[], openAll = false): Workspace {
+  const added = available.filter(id => openAll || !state.order.includes(id));
+  const next = normalizeWorkspace({...state, opened: [...state.opened, ...added]}, available);
+  return sameWorkspace(state, next) ? state : next;
+}
 export function workspaceFromPreferences(prefs: Record<string, unknown>, available: readonly string[], firstOnline = ''): Workspace {
   const saved = decodeWorkspace(prefs.workspace, prefs.instanceOrder);
-  if (saved) return normalizeWorkspace(saved, available);
+  if (saved) return reconcileWorkspace(saved, available, (prefs.workspace as SavedWorkspace).schemaVersion !== 3);
   const opened = Array.isArray(prefs.opened) ? prefs.opened.filter((id): id is string => typeof id === 'string') : firstOnline ? [firstOnline] : [];
   let state = normalizeWorkspace({opened, active: typeof prefs.active === 'string' ? prefs.active : '', order: normalizeOrder(prefs.instanceOrder, available), groups: []}, available);
   if (prefs.split === true && state.opened.length > 1) {
@@ -81,7 +87,7 @@ export function workspaceFromPreferences(prefs: Record<string, unknown>, availab
     const pair = ordered.filter(id => id === state.active || id === other);
     state = normalizeWorkspace({...state, groups: [{left: pair[0], right: pair[1], focused: state.active === pair[0] ? 'left' : 'right', ratio: 0.5}]}, available);
   }
-  return state;
+  return reconcileWorkspace(state, available, true);
 }
 export type WorkspaceAction =
   | {type: 'restore'; value: Workspace}
@@ -94,7 +100,7 @@ export type WorkspaceAction =
   | {type: 'move'; id: string; direction: -1 | 1};
 export function workspaceReducer(state: Workspace, action: WorkspaceAction): Workspace {
   if (action.type === 'restore') return action.value;
-  if (action.type === 'reconcile') return normalizeWorkspace(state, action.available);
+  if (action.type === 'reconcile') return reconcileWorkspace(state, action.available);
   const group = groupFor(state, action.id);
   let next = state;
   switch (action.type) {

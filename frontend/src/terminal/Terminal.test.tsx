@@ -38,7 +38,7 @@ beforeEach(()=>{
 });
 afterEach(async()=>{await act(async()=>root.unmount());node.remove();vi.restoreAllMocks();vi.unstubAllGlobals();});
 it('applies wire preferences and renders GoTTY controls with real WebTTY dispatch',async()=>{
- await act(async()=>root.render(<RealTerminal id="one" writable files owner controls visible locale="zh-CN" onManage={()=>{}} onActions={registerActions}/>));
+ await act(async()=>root.render(<RealTerminal id="one" writable files owner controls visible locale="zh-CN" onActions={registerActions}/>));
  await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
  await act(async()=>{
   sockets[0].onmessage({data:'4'+JSON.stringify({'font-size':20,'scrollback-lines':900,'hub-config':{restart_mode:'exec',mobile_keys:false,themes:{nord:{background:'#2e3440',foreground:'#d8dee9'}}}})});
@@ -47,32 +47,33 @@ it('applies wire preferences and renders GoTTY controls with real WebTTY dispatc
  expect(state.terminals[0].options).toMatchObject({fontSize:20,scrollback:900,fontFamily:"'DejaVu Sans Mono', monospace"});
  expect(node.querySelector<HTMLElement>('.real-terminal')?.style.getPropertyValue('--color-terminal-background')).toBe('#2e3440');
  for(const label of ['清理历史','上传文件']) expect(node.querySelector(`button[aria-label="${label} · one"]`)).not.toBeNull();
- expect(actions.one).toMatchObject({restartAvailable:true,canRestart:true,dialogOpen:false});
+ expect(actions.one).toMatchObject({restartAvailable:true,canRestart:true});
  expect(node.querySelector('[aria-label="连接数: 3 · one"]')).not.toBeNull();
  await act(async()=>{node.querySelector<HTMLButtonElement>('[aria-label="清理历史 · one"]')!.click();});
  expect(sockets[0].send.mock.calls.some(([data])=>data.startsWith('1')&&atob(data.slice(1))==='clear\n')).toBe(true);
 });
 it('keeps observer controls local and hides remote write and owner actions',async()=>{
- await act(async()=>root.render(<RealTerminal id="read" writable={false} files visible locale="en-US" onManage={()=>{}} onActions={registerActions}/>));
+ await act(async()=>root.render(<RealTerminal id="read" writable={false} files visible locale="en-US" onActions={registerActions}/>));
  expect(node.querySelector('[aria-label="Display settings"]')).toBeNull();
  for(const label of ['Clear history','Upload file','Restart GoTTY']) expect(node.querySelector(`[aria-label="${label} · read"]`)).toBeNull();
  expect(actions.read).toMatchObject({restartAvailable:false,canRestart:false,refresh:expect.any(Function)});
  await act(async()=>actions.read.restart());
- expect(actions.read.dialogOpen).toBe(false);
 });
-it('refreshes a disconnected terminal by replacing its renderer and connection without touching another pane',async()=>{
- await act(async()=>root.render(<><RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}} onActions={registerActions}/><RealTerminal id="two" writable visible locale="zh-CN" onManage={()=>{}} onActions={registerActions}/></>));
+it('refreshes a disconnected terminal by replacing its connection and retaining both renderers',async()=>{
+ await act(async()=>root.render(<><RealTerminal id="one" writable visible locale="zh-CN" onActions={registerActions}/><RealTerminal id="two" writable visible locale="zh-CN" onActions={registerActions}/></>));
  expect(sockets).toHaveLength(2);
  const first=sockets[0];const second=sockets[1];const original=state.terminals[0];const other=state.terminals[1];
+ original.options.disableStdin=true; // An interrupted transfer had disabled input.
  await act(async()=>actions.one.refresh());
  expect(sockets).toHaveLength(3);expect(first.readyState).toBe(3);expect(second.readyState).toBe(0);
- expect(original.dispose).toHaveBeenCalledOnce();expect(other.dispose).not.toHaveBeenCalled();expect(state.terminals).toHaveLength(3);
+ expect(original.dispose).not.toHaveBeenCalled();expect(other.dispose).not.toHaveBeenCalled();expect(state.terminals).toHaveLength(2);
+ expect(original.options.disableStdin).toBe(false);
  await act(async()=>root.render(null));
  expect(actions).toEqual({});
 });
 
 it('applies account appearance without replacing either terminal or socket',async()=>{
- const render=(fontSize:number,theme='light')=>root.render(<RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}} settings={{schemaVersion:1,theme,fontSize,fontId:'monospace'}}/>);
+ const render=(fontSize:number,theme='light')=>root.render(<RealTerminal id="one" writable visible locale="zh-CN" settings={{schemaVersion:1,theme,fontSize,fontId:'monospace'}}/>);
  await act(async()=>render(18));
  const term=state.terminals[0],socket=sockets[0];
  expect(term.options).toMatchObject({fontSize:18,fontFamily:'monospace',theme:{background:'#fafafa'}});
@@ -91,8 +92,8 @@ it('showing a second pane never steals focus and explicit requests focus either 
  const flush=async()=>{for(let i=0;i<4;i++)await act(async()=>{const pending=[...frames.values()];frames.clear();for(const callback of pending)callback(performance.now());});};
  const handled=vi.fn();
  const render=(secondVisible:boolean,left=0,right=0)=>root.render(<>
-  <RealTerminal id="one" writable visible focusRequest={left} onFocusHandled={handled} locale="zh-CN" onManage={()=>{}}/>
-  <RealTerminal id="two" writable visible={secondVisible} focusRequest={right} onFocusHandled={handled} locale="zh-CN" onManage={()=>{}}/>
+  <RealTerminal id="one" writable visible focusRequest={left} onFocusHandled={handled} locale="zh-CN"/>
+  <RealTerminal id="two" writable visible={secondVisible} focusRequest={right} onFocusHandled={handled} locale="zh-CN"/>
  </>);
  await act(async()=>render(false,1));await flush();
  const first=state.terminals[0],second=state.terminals[1];
@@ -124,7 +125,7 @@ it('renders at the confirmed PTY size while requesting the narrow viewport witho
  vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(600);
  const flush=async()=>{for(let i=0;i<4;i++)await act(async()=>{const pending=[...frames.values()];frames.clear();for(const callback of pending)callback(performance.now());});};
  state.geometry={cols:36,rows:18};
- await act(async()=>root.render(<RealTerminal id="narrow" writable visible locale="zh-CN" onManage={()=>{}}/>));
+ await act(async()=>root.render(<RealTerminal id="narrow" writable visible locale="zh-CN"/>));
  await flush();
  await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
  expect(sockets[0].send.mock.calls.some(([frame])=>frame[0]==='3'&&JSON.parse(frame.slice(1)).columns===36)).toBe(true);
@@ -133,7 +134,7 @@ it('renders at the confirmed PTY size while requesting the narrow viewport witho
  const term=state.terminals[0];
  expect([term.cols,term.rows]).toEqual([60,20]);
  expect(sockets[0].send.mock.calls).toHaveLength(sent);
- await act(async()=>root.render(<RealTerminal id="narrow" writable visible locale="zh-CN" onManage={()=>{}} settings={{schemaVersion:1,theme:'paper',fontSize:24,fontId:'monospace'}}/>));
+ await act(async()=>root.render(<RealTerminal id="narrow" writable visible locale="zh-CN" settings={{schemaVersion:1,theme:'paper',fontSize:24,fontId:'monospace'}}/>));
  await flush();
  expect([term.cols,term.rows]).toEqual([60,20]);
  expect(state.terminals).toHaveLength(1);expect(sockets).toHaveLength(1);

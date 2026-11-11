@@ -37,18 +37,19 @@ Each instance represents GoTTY's current shared PTY. Multiple browsers can use t
 ## Features
 
 - Username / password registration and login, with a fixed `admin` account and an interactive administrator-password setup on first launch.
-- One compact toolbar combines the instance browser, tabs, page refresh, settings, and pinning. Unpin it to fill the window with the terminal; reveal it at the top edge or with the reveal button. Search and filter instances in a drawer.
+- The terminal fills the browser viewport. Equal-width instance tabs overlay it on a gray background with 50% transparency; only + and Settings remain at the right. Registered instances get tabs automatically, connect on first visit, and can be reopened from + after closing.
 - Split a tab with its immediate right neighbor. Multiple pairs retain their identities, ratios, and order; selecting an unrelated tab shows it alone. Swap sides, resize with a pointer or keyboard, and restore the layout on reload. Narrow screens show the current terminal while preserving groups.
 - Left-click a tab to select it and open its actions: refresh, instance settings, split, move, close, and authorized restart. Right-click selects; holding the right button drags the entire tab. Split pairs move together. Touch-and-hold and menu move actions are also available.
 - Status colors synchronized with GoTTY: red for active viewing, yellow for new output while not being viewed, green for output that has stopped but remains unread, and gray for no unread output. Offline instances use a separate icon.
-- xterm.js terminals with Nord, bundled DejaVu Sans Mono, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account, including the soft beige Paper theme (`#f5f5d5`).
+- xterm.js terminals with Nord, bundled DejaVu Sans Mono, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account, including the soft beige Paper theme (`#f5f5d5`) and tab background transparency (0–100%).
 - Additional open-source fonts load from Hub on demand and persist in the browser across reloads. Cursor and scrollback options still come from GoTTY.
-- A terminal toolbar for connection counts, refreshing the current terminal, clearing history, file uploads, and authorized remote restart and share management. Restart uses a power icon and requires confirmation.
+- Clients share a stable terminal grid; new connections and reloads do not steal size control. Take control from the tab menu. Terminal refresh retains the renderer and history; page reload restores GoTTY's in-memory history, Vim screen, and cursor, with 5000 history lines by default. See the [dataflow review](docs/TERMINAL_DATAFLOW_REVIEW.md).
+- The terminal toolbar provides connection counts, history clearing, uploads, and share management. Refresh, instance settings, and authorized restart are in the tab menu; restart uses a power icon and requires confirmation.
 - The same two-row, 16-key mobile keyboard as GoTTY when the software keyboard opens, with one-shot Ctrl / Alt / Shift and repeating navigation keys.
 - Owner, operator, and observer roles; terminal input, files, and voice follow both Hub permissions and GoTTY configuration.
 - Native uploads, drag-and-drop uploads, ZMODEM transfers, and optional ASR voice input. ZMODEM requires `rz` / `sz` on the remote device.
 - Automatic reconnect and output replay, plus device-credential rotation, disconnect, and unbinding.
-- A Settings menu at the top right: Terminal settings, Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device. Reveal the hidden toolbar at the top to access terminal settings.
+- A Settings menu at the top right: Terminal settings, Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device. The account name and language switch share the first menu row.
 - Single-file Linux amd64 / arm64 releases, with data stored under `~/.gotty-hub` by default.
 
 ## Quick Start

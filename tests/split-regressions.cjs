@@ -13,7 +13,7 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   const expectPair = (left,right) => wait(async () => JSON.stringify(await pair()) === JSON.stringify([{id:left,pane:'left'},{id:right,pane:'right'}]),'adjacent pair '+names[left]+' / '+names[right]);
   const focused = () => page.evaluate(() => document.activeElement?.closest('.terminal-slot')?.dataset.instanceId);
   const expectFocus = id => wait(async () => await focused()===id && await page.locator('.session-tab.selected').getAttribute('data-instance-id')===id,'terminal focus '+names[id]);
-  async function reveal() {if(await page.locator('.workspace-bar').getAttribute('aria-hidden')==='true') await page.locator('.workspace-reveal').click();}
+  async function reveal() {await page.locator('.workspace-bar').waitFor();}
   async function menu(id) {await reveal(); await tab(id).scrollIntoViewIfNeeded(); await sleep(100); await tab(id).click(); const m=page.locator('.tab-actions-menu');await m.waitFor();return m;}
   async function action(id,name) {const m=await menu(id);await m.getByRole('button',{name,exact:typeof name==='string'}).click();await m.waitFor({state:'hidden'});}
   async function select(id) {await reveal();await tab(id).click({button:'right'});await expectFocus(id);}
@@ -27,8 +27,16 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   async function contrast() {
     await wait(async()=>page.locator('.workspace-bar .session-name').evaluateAll(elements=>{
       const ctx=document.createElement('canvas').getContext('2d',{willReadFrequently:true});
-      const luminance=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);const rgb=[...ctx.getImageData(0,0,1,1).data].slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
-      return elements.every(element=>{let parent=element,background='';while(parent){background=getComputedStyle(parent).backgroundColor;if(background!=='rgba(0, 0, 0, 0)'&&background!=='transparent')break;parent=parent.parentElement;}const a=luminance(getComputedStyle(element).color),b=luminance(background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5;});
+      const rgb=()=>[...ctx.getImageData(0,0,1,1).data].slice(0,3);
+      const luminance=values=>{const v=values.map(n=>n/255).map(n=>n<=.04045?n/12.92:((n+.055)/1.055)**2.4);return v[0]*.2126+v[1]*.7152+v[2]*.0722;};
+      const terminal=getComputedStyle(document.querySelector('.terminal-slot:not([hidden]) .real-terminal')).backgroundColor;
+      return elements.every(element=>{
+        ctx.clearRect(0,0,1,1);ctx.fillStyle=terminal;ctx.fillRect(0,0,1,1);
+        const layers=[];let parent=element;while(parent){layers.unshift(getComputedStyle(parent).backgroundColor);if(parent.classList.contains('workspace-bar'))break;parent=parent.parentElement;}
+        for(const color of layers){ctx.fillStyle=color;ctx.fillRect(0,0,1,1);}const b=luminance(rgb());
+        ctx.clearRect(0,0,1,1);ctx.fillStyle=getComputedStyle(element).color;ctx.fillRect(0,0,1,1);const a=luminance(rgb());
+        return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5;
+      });
     }),'tab label contrast');
   }
   const me=await api('/me'), prefs=await api('/me/preferences');
@@ -37,16 +45,16 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   await page.evaluate(id=>{localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id));localStorage.removeItem('gotty-hub:layout:'+encodeURIComponent(id));},me.id);
   await page.reload({waitUntil:'domcontentloaded'});await expectPair(a,c);await expectFocus(c);
   assert.equal(await page.locator('.sidebar,.topbar,.terminal-pane-heading,.instance-sort-handle').count(),0);
-  assert.equal(Math.round((await page.locator('.workspace-bar').boundingBox()).height),36);
+  assert.equal(Math.round((await page.locator('.workspace-bar').boundingBox()).height),32);
   await action(c,'退出分屏');
   // Undo migration's adjacency normalization, then create groups using the real menu.
-  const reset={...legacy,active:a,split:false,workspace:{schemaVersion:2,opened:ids,order:ids,active:a,groups:[]}};
+  const reset={...legacy,active:a,split:false,workspace:{schemaVersion:3,opened:ids,order:ids,active:a,groups:[]}};
   await api('/me/preferences',reset,'PUT');await page.evaluate(id=>localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id)),me.id);
   await page.reload({waitUntil:'domcontentloaded'});await expectFocus(a);
   let m=await menu(ids.at(-1));assert(await m.getByRole('button',{name:/与右侧标签分屏/}).isDisabled());await page.keyboard.press('Escape');await m.waitFor({state:'hidden'});
   await action(b,/与右侧标签分屏/);await expectPair(b,c);await expectFocus(b);
   assert.equal(await page.locator('.workspace-tab-pair').count(),1);
-  assert((await tab(b).innerText()).includes('左'));assert((await tab(c).innerText()).includes('右'));
+  assert((await tab(b).textContent()).includes('左'));assert((await tab(c).textContent()).includes('右'));
   m=await menu(a);assert(await m.getByRole('button',{name:/与右侧标签分屏/}).isDisabled());await sleep(200);await page.screenshot({path:path.join(dir,'compact-tab-menu.png')});await page.keyboard.press('Escape');
   await select(d);assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
   await action(d,/与右侧标签分屏/);await expectPair(d,ids[4]);assert.equal(await page.locator('.workspace-tab-pair').count(),2);
@@ -88,23 +96,17 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   await divider.focus();await page.keyboard.press('ArrowLeft');assert.equal(Number(await divider.getAttribute('aria-valuenow')),58);await page.keyboard.press('Enter');
   for(const key of ['Home','End']){await page.keyboard.press(key);assert((await page.locator('.terminal-slot:not([hidden])').evaluateAll(es=>es.map(e=>e.getBoundingClientRect().width))).every(w=>w>=359.9));}await page.keyboard.press('Enter');await identity();
   await contrast();await page.screenshot({path:path.join(dir,'compact-paper-desktop.png')});
-  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'切换主题',exact:true}).click();
-  await wait(()=>page.evaluate(()=>document.documentElement.classList.contains('dark')),'dark theme');await page.waitForFunction(()=>!document.querySelector('[data-exiting],[data-entering]'));await sleep(200);await contrast();await page.screenshot({path:path.join(dir,'compact-dark-desktop.png')});
-  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'切换主题',exact:true}).click();
-  // Unpinned navigation is an overlay; showing it and opening menus must never resize the PTY.
-  await select(b);await page.locator('.pin-toolbar').click();await page.mouse.move(500,400);await expectFocus(b);
-  await wait(async()=>await page.locator('.workspace-bar').getAttribute('aria-hidden')==='true','toolbar hides');await sleep(300);
+  // The navigation always overlays the full-height terminal. Menus do not resize it.
+  await select(b);await sleep(300);
   const sizes=await page.evaluate(()=>window.splitSizes.length), height=(await page.locator('.terminals').boundingBox()).height;
-  await reveal();m=await menu(b);await sleep(900);assert.equal(await page.locator('.workspace-bar').getAttribute('aria-hidden'),'false');
+  m=await menu(b);await sleep(900);
   assert.equal((await page.locator('.terminals').boundingBox()).height,height);assert.equal(await page.evaluate(()=>window.splitSizes.length),sizes);
-  await page.keyboard.press('Escape');await m.waitFor({state:'hidden'});await slot(b).locator('.xterm-helper-textarea').focus();await page.mouse.move(500,400);
-  await wait(async()=>await page.locator('.workspace-bar').getAttribute('aria-hidden')==='true','toolbar hides after menu');
-  await page.keyboard.press('Escape');assert(await page.locator('.app').evaluate(e=>e.classList.contains('chrome-unpinned')),'Vim Escape changed toolbar');await identity();
-  await reveal();await page.locator('.pin-toolbar').click();await select(b);
+  await page.keyboard.press('Escape');await m.waitFor({state:'hidden'});await slot(b).locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press('Escape');assert(await page.locator('.workspace-bar').isVisible());await identity();await select(b);
   await page.route('**/api/v1/me/preferences',route=>route.request().method()==='PUT'?route.abort():route.continue());
   await divider.focus();for(let i=0;i<5;i++)await page.keyboard.press('ArrowRight');
   const cached=await page.evaluate(id=>JSON.parse(localStorage.getItem('gotty-hub:workspace:'+encodeURIComponent(id))),me.id);
-  assert(cached.pending);assert.equal(cached.workspace.schemaVersion,2);assert.equal(cached.workspace.groups.length,2);
+  assert(cached.pending);assert.equal(cached.workspace.schemaVersion,3);assert.equal(cached.workspace.groups.length,2);
   assert(Math.abs(cached.workspace.groups.find(g=>g.left===c).ratio-0.6)<0.01);
   await page.reload({waitUntil:'domcontentloaded'});await expectPair(c,b);await expectFocus(b);assert.equal(Number(await divider.getAttribute('aria-valuenow')),60);assert.deepEqual(await order(),cached.workspace.order);
   await wait(async()=>(await terminal(b))?.type==='alternate'&&(await terminal(b))?.pending===0&&(await terminal(b))?.text.includes('unsaved'),'Vim reload');
@@ -115,7 +117,7 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
     await page.setViewportSize({width,height:844});await sleep(200);
     assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'horizontal page overflow');
-    if(width===375){await page.locator('.session-switcher-trigger').click();await page.getByRole('textbox',{name:'搜索实例…'}).fill(names[a]);await page.locator('.instance-browser-select').click();await expectFocus(a);}
+    if(width===375){await select(a);}
     await page.screenshot({path:path.join(dir,'compact-'+width+'.png')});
   }
   await page.setViewportSize({width:1280,height:800});assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1,'unrelated mobile selection replaced group');
@@ -125,13 +127,12 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   await wait(()=>devices[2].child.exitCode!==null,'stopped');devices[2].child=start('gotty-compact-reconnect',process.env.GOTTY_BINARY,devices[2].args);
   await wait(()=>slot(c).locator('.terminal-clear-control').isEnabled(),'reconnect');await expectPair(c,b);await sleep(200);assert.equal(await focused(),b,'reconnect stole focus');
   await action(c,'关闭终端标签');assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);await expectFocus(b);
-  await page.locator('.browse-instances').click();await page.getByRole('textbox',{name:'搜索实例…'}).fill(names[c]);await page.locator('.instance-browser-select').click();await expectFocus(c);assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
+  await page.locator('.add-instance').click();await page.getByRole('button',{name:/重新打开已关闭实例/}).click();await page.getByRole('option',{name:names[c],exact:true}).click();await expectFocus(c);assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
   const observer=await browser.newContext({viewport:{width:1280,height:800}});await observer.addInitScript(installInspection);await observer.addInitScript(()=>localStorage.setItem('gotty-hub.locale','zh-CN'));
   const username='compact-observer';const registration=await observer.request.post(hub+'/api/v1/auth/register',{data:{username,password:'compact-observer-password-123'}});assert(registration.ok());
   for(const id of [b,c])await api('/instances/'+id+'/grants',{username,role:'observer'},'PUT');
   const op=await observer.newPage();op.on('pageerror',e=>errors.push(e.stack));await op.goto(hub,{waitUntil:'domcontentloaded'});
-  await wait(async()=>await op.locator('.terminal-slot').count()===1,'observer terminal');await op.locator('.browse-instances').click();
-  const other=await op.locator('.instance-browser-select:not([aria-current="page"])').first().getAttribute('title');await op.locator('.instance-browser-select').filter({hasText:other.split(' · ')[0]}).click();
+  await wait(async()=>await op.locator('.session-tab').count()===2,'observer tabs');
   await op.locator('.session-tab .tab-trigger').first().click();assert.equal(await op.locator('.tab-actions-menu').getByRole('button',{name:'重启此 GoTTY…',exact:true}).count(),0);
   await op.locator('.tab-actions-menu').getByRole('button',{name:/与右侧标签分屏/}).click();await wait(async()=>await op.locator('.terminal-slot:not([hidden])').count()===2,'observer pair');
   assert.equal(await op.locator('.terminal-clear-control,.terminal-upload-control,.terminal-restart-control').count(),0);
@@ -139,18 +140,18 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   // Use real browser touch events: scrolling is distinct from a deliberate hold-and-drag.
   const touchContext=await browser.newContext({viewport:{width:375,height:844},hasTouch:true,isMobile:true});
   await touchContext.addCookies(await page.context().cookies(hub));const touch=await touchContext.newPage();touch.on('pageerror',e=>errors.push(e.stack));
-  await touch.goto(hub,{waitUntil:'domcontentloaded'});await touch.locator('.session-switcher-trigger').click();
-  await touch.locator('.instance-browser-row').first().waitFor();await sleep(350);
-  const touchOrder=()=>touch.locator('.instance-browser-row').evaluateAll(es=>es.map(e=>e.dataset.tabId));
+  await touch.goto(hub,{waitUntil:'domcontentloaded'});
+  await touch.locator('.session-tab').first().waitFor();await sleep(350);
+  const touchOrder=()=>touch.locator('.session-tab').evaluateAll(es=>es.map(e=>e.dataset.tabId));
   const beforeTouch=await touchOrder();const cdp=await touchContext.newCDPSession(touch);
-  const rows=touch.locator('.instance-browser-unit');const from=await rows.first().boundingBox(),to=await rows.nth(2).boundingBox();
-  const point={x:from.x+80,y:from.y+from.height/2};
+  const rows=touch.locator('.workspace-tab-unit');const from=await rows.first().boundingBox(),to=await rows.nth(2).boundingBox();
+  const point={x:from.x+from.width/2,y:from.y+from.height/2};
   await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});await sleep(350);
   await wait(async()=>await touch.locator('[data-dragging=true]').count()===1,'long-press activation');
-  for(let i=1;i<=8;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:point.x,y:point.y+(to.y+to.height/2-point.y)*i/8}]});
+  for(let i=1;i<=8;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:point.x+(to.x+to.width/2-point.x)*i/8,y:point.y}]});
   await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await wait(async()=>JSON.stringify(await touchOrder())!==JSON.stringify(beforeTouch),'touch reorder');
-  await touch.screenshot({path:path.join(dir,'compact-touch-directory.png')});await touchContext.close();await page.bringToFront();
+  await touch.screenshot({path:path.join(dir,'compact-touch-tabs.png')});await touchContext.close();await page.bringToFront();
   // Restore a predictable workspace for the remaining full-suite checks.
   await wait(async()=>(await api('/me/preferences')).workspace?.opened.includes(c),'reopened persisted');
   await api('/me/preferences',reset,'PUT');await page.evaluate(id=>{localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id));localStorage.removeItem('gotty-hub:layout:'+encodeURIComponent(id));},me.id);

@@ -10,7 +10,16 @@ class Socket {
 const connections:HubConnection[]=[];
 beforeEach(()=>{localStorage.clear();vi.stubGlobal('WebSocket',Socket);});
 afterEach(()=>{connections.splice(0).forEach(connection=>connection.close());vi.unstubAllGlobals();});
-function connection(writable=true,owner=true,controls=true){const value=new HubConnection('id-1',writable,owner,controls,()=>true,()=>true);value.ticket='ticket';connections.push(value);return value;}
+function connection(writable=true,owner=true,controls=true,initialize=true){const value=new HubConnection('id-1',writable,owner,controls,()=>true,()=>true);value.ticket='ticket';connections.push(value);if(initialize)value.send('{}');(value.ws.send as ReturnType<typeof vi.fn>).mockClear();return value;}
+it('keeps view reports and controls behind authentication while the retained parser drains',async()=>{
+ const value=connection(true,true,true,false);
+ value.reportView();value.send('2');value.send('1data');
+ await expect(value.request('restart')).rejects.toThrow('unavailable');
+ expect(value.ws.send).not.toHaveBeenCalled();
+ value.send(JSON.stringify({ClientKey:'browser-client-identity',ReplayVersion:2,LastSequence:17,Epoch:'epoch'}));
+ const frames=(value.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(([frame])=>JSON.parse(frame));
+ expect(frames).toEqual([{ticket:'ticket',epoch:'epoch',offset:0,client_key:'browser-client-identity',replay_version:2,sequence:17},{viewing:true}]);
+});
 it('matches GoTTY display defaults and retains remote terminal metrics',()=>{
  const value=displayOptions({'font-size':20,'scrollback-lines':800,'cursor-style':'bar'},{nord:NORD_THEME},{});
  expect(value).toMatchObject({fontSize:20,fontFamily:"'DejaVu Sans Mono', monospace",scrollback:800,cursorStyle:'bar',theme:NORD_THEME});

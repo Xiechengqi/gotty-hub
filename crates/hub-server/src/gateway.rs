@@ -266,7 +266,7 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
         }
         streams.insert(stream.clone(), tx);
     }
-    if device.tx.try_send(Frame::new("open",&stream,json!({"channel":channel,"role":role,"epoch":auth["epoch"],"offset":auth["offset"],"writable":role!="observer"&&device.capabilities["write"]==true}))).is_err(){
+    if device.tx.try_send(Frame::new("open",&stream,json!({"channel":channel,"role":role,"epoch":auth["epoch"],"offset":auth["offset"],"client_key":terminal_client_key(&s.user_id,&auth),"replay_version":auth["replay_version"],"sequence":auth["sequence"],"writable":role!="observer"&&device.capabilities["write"]==true}))).is_err(){
         device.streams.lock().await.remove(&stream);
         close_browser(&app, &mut socket, 1013, "Instance temporarily unavailable").await;
         return;
@@ -400,6 +400,18 @@ mod control_tests {
     use super::*;
 
     #[test]
+    fn terminal_identity_is_scoped_to_the_authenticated_account() {
+        let auth = json!({"client_key":"browser-terminal-key-1234","role":"owner"});
+        let key = terminal_client_key("account-a", &auth);
+        assert_eq!(key.len(), 64);
+        assert_eq!(key, terminal_client_key("account-a", &auth));
+        assert_ne!(key, terminal_client_key("account-b", &auth));
+        for invalid in [json!({}), json!({"client_key":"short"}), json!({"client_key":"a".repeat(129)}), json!({"client_key":"invalid browser key"})] {
+            assert!(terminal_client_key("account-a", &invalid).is_empty());
+        }
+    }
+
+    #[test]
     fn terminal_management_is_owner_only_and_allowlisted() {
         let control = json!({"id":"request-1","action":"restart","payload":{}});
         assert!(valid_control("owner", &control));
@@ -422,5 +434,13 @@ mod control_tests {
         ] {
             assert!(!valid_control("owner", &control));
         }
+    }
+}
+
+// Bind browser identity to the authenticated account, never to an asserted role.
+fn terminal_client_key(user: &str, auth: &Value) -> String {
+    match auth["client_key"].as_str() {
+        Some(key) if key.len() >= 16 && key.len() <= 128 && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') => hash(&format!("terminal:{user}:{key}")),
+        _ => String::new(),
     }
 }

@@ -75,3 +75,17 @@ it('maintains adjacency, disjoint membership and valid active IDs through mixed 
     expect(navigationUnits(state).flat()).toEqual(state.order);expect(state.opened).toContain(state.active);
   }
 });
+
+it('opens every existing instance on migration and only new IDs afterwards',()=>{
+  const migrated=workspaceFromPreferences({workspace:{schemaVersion:2,...initial(),opened:['a']}},initial().order);
+  expect(migrated.opened).toEqual(initial().opened);
+  const closed=workspaceReducer(migrated,{type:'close',id:'b'});
+  expect(workspaceFromPreferences({workspace:saveWorkspace(closed)},initial().order)).toEqual(closed);
+  const added=workspaceReducer(closed,{type:'reconcile',available:[...initial().order,'f']});
+  expect(added.opened).toEqual(['a','c','d','e','f']);expect(added.active).toBe('a');
+  expect(workspaceReducer(added,{type:'reconcile',available:[...initial().order,'f']})).toBe(added);
+});
+it('opens new accounts and arrivals into an empty workspace without requiring a directory',()=>{
+  expect(workspaceFromPreferences({},['offline','online'],'online')).toMatchObject({opened:['online','offline'],active:'online'});
+  expect(workspaceReducer({opened:[],order:[],active:'',groups:[]},{type:'reconcile',available:['one']})).toMatchObject({opened:['one'],active:'one'});
+});

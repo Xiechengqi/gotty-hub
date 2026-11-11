@@ -6,6 +6,7 @@ import type {Control} from './ShareManager';
 export class HubConnection implements Connection {
   ws: WebSocket; closed = false; ticket = '';
   private opened=false; private stopped=false;
+  private initialized=false;
   private failure?: {code:number;reason:string};
   private abort=new AbortController();
   onopen = () => {}; onreceive = (_data: string) => {}; onclose = (_event: CloseEvent) => {};
@@ -59,13 +60,17 @@ export class HubConnection implements Connection {
   onOpen(callback: () => void) {this.onopen = callback;} onReceive(callback: (data: string) => void) {this.onreceive = callback;} onClose(callback: (event: CloseEvent) => void) {this.onclose = callback;}
   send(data: string) {
     if (this.closed || this.ws.readyState !== 1) return;
-    if (data.startsWith('{')) {const init = JSON.parse(data); this.ws.send(JSON.stringify({ticket: this.ticket, epoch: init.Epoch ?? '', offset: init.LastOffset ?? 0})); this.reportView(); return;}
+    if (data.startsWith('{')) {const init = JSON.parse(data); this.ws.send(JSON.stringify({ticket: this.ticket, epoch: init.Epoch ?? '', offset: init.LastOffset ?? 0, client_key: init.ClientKey ?? '', replay_version: init.ReplayVersion ?? 0, sequence: init.LastSequence ?? 0})); this.initialized=true; this.reportView(); return;}
+    if (!this.initialized) return;
     if (!this.writable && !['2', '4'].includes(data[0])) return;
-    if (data[0] === '3' && !this.visible()) return;
+    if (data[0] === '3' && !this.visible()) {
+      const size = JSON.parse(data.slice(1));
+      this.ws.send('3' + JSON.stringify({...size, visible: false, takeControl: false})); return;
+    }
     this.ws.send(data);
   }
   request: Control = (action, payload = {}) => {
-    if (!this.owner || !this.controls || this.closed || this.ws.readyState !== 1 || !this.ticket) return Promise.reject(Error('Terminal management is unavailable'));
+    if (!this.owner || !this.controls || !this.initialized || this.closed || this.ws.readyState !== 1 || !this.ticket) return Promise.reject(Error('Terminal management is unavailable'));
     if (this.pending.size) return Promise.reject(Error('Another terminal operation is running'));
     const requestId = randomId();
     return new Promise((resolve, reject) => {
@@ -74,7 +79,7 @@ export class HubConnection implements Connection {
       this.ws.send(JSON.stringify({control: {id: requestId, action, payload}}));
     });
   };
-  reportView() {if (this.ws.readyState === 1 && this.ticket && !this.closed) this.ws.send(JSON.stringify({viewing: this.viewing()}));}
+  reportView() {if (this.initialized && this.ws.readyState === 1 && this.ticket && !this.closed) this.ws.send(JSON.stringify({viewing: this.viewing()}));}
 }
 
 function apiFailure(error:unknown):{code:number;reason:string}|undefined{

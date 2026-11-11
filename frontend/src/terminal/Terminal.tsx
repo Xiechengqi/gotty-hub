@@ -24,11 +24,11 @@ import {HubConnection} from './connection';
 import {MobileKeys} from './MobileKeys';
 import '@xterm/xterm/css/xterm.css';
 
-type Controller = {term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
-export type TerminalActions = {dialogOpen: boolean; refresh: () => void; restart: () => void; restartAvailable: boolean; canRestart: boolean};
-type Props = {onActions?: (id: string, actions: TerminalActions | undefined) => void; id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
+type Controller = {refresh: () => void; takeSizeControl: () => void; term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
+export type TerminalActions = {refresh: () => void; restart: () => void; restartAvailable: boolean; canRestart: boolean; takeSizeControl?: () => void; canTakeSizeControl?: boolean};
+type Props = {onActions?: (id: string, actions: TerminalActions | undefined) => void; id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
 
-export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled, onActions}: Props) {
+export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onViewport, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled, onActions}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef(visible); view.current = visible;
   const controller = useRef<Controller>(undefined);
@@ -57,7 +57,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const [colors, setColors] = useState({background: NORD_THEME.background, foreground: NORD_THEME.foreground});
   const [fontStatus, setFontStatus] = useState<FontApplication>();
   const [apiRunning, setAPIRunning] = useState(false);
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
+
   const [refreshConfirm, setRefreshConfirm] = useState(false);
   const refreshPending = useRef(false);
   const [restartConfirm, setRestartConfirm] = useState(false);
@@ -74,19 +74,21 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     uploadAbort.current?.abort();
     setUpload(undefined); setTransfer(null); setMessage(''); setConnected(false);
     setShareOpen(false);
-    setRefreshGeneration(value => value + 1);
+    controller.current?.refresh();
+    refreshPending.current = false;
   }
 
   useEffect(() => {
     onActions?.(id, {
-      dialogOpen: restartConfirm || refreshConfirm || !!upload || !!transfer || shareOpen,
       refresh: () => {if (uploadAbort.current || transfer) setRefreshConfirm(true); else refreshTerminal();},
       restart: () => {if (owner && controls && connected && config.restart_mode && config.restart_mode !== 'disabled') {setRestartError(''); setRestartConfirm(true);}},
       restartAvailable: owner && controls,
+      takeSizeControl: () => {if (writable && connected) controller.current?.takeSizeControl();},
+      canTakeSizeControl: writable && connected && terminalState?.sizeControl === true,
       canRestart: !!(owner && controls && connected && config.restart_mode && config.restart_mode !== 'disabled'),
     });
     return () => onActions?.(id, undefined);
-  }, [id, onActions, owner, controls, connected, config.restart_mode, transfer, restartConfirm, refreshConfirm, upload, shareOpen]);
+  }, [id, onActions, owner, controls, writable, connected, config.restart_mode, terminalState?.sizeControl, transfer]);
 
   const applyAppearance = useCallback((term: Xterm, measure: () => void) => {
     const epoch = ++appearanceEpoch.current;
@@ -100,7 +102,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       isCurrent: () => aliveTerm.current === term && appearanceEpoch.current === epoch,
       onChange: state => {fontDiagnostics(host.current, state); setFontStatus(state);}, onApplied: measure});
   }, []);
-  useEffect(() => {const value = controller.current; if (value) applyAppearance(value.term, value.measure);}, [settings, applyAppearance]);
+  useEffect(() => {const value = controller.current; if (value) applyAppearance(value.term, value.measure);}, [settings?.theme, settings?.fontSize, settings?.fontId, applyAppearance]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -166,10 +168,12 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
         initialize: async ws => {const value = await api(`/instances/${id}/terminal-tickets`, {}); ws.send(JSON.stringify({ticket: value.ticket, channel: 'asr'}));},
       });
     };
-    const zmodem = writable && files ? createTransfer(data => term.write(data), data => input(data), setTransfer, enabled => {term.options.disableStdin = !enabled || !writable;}) : null;
+    const makeTransfer = () => writable && files ? createTransfer(data => term.write(data), data => input(data), setTransfer, enabled => {term.options.disableStdin = !enabled || !writable;}) : null;
+    let zmodem = makeTransfer();
     const adapter: Terminal & {setUploadFileSender: (sender: (message: string) => void) => void; setUploadFileBufferSize: (size: number) => void} = {
+      isVisible: () => view.current, onHistoryStatus: truncated => {if (host.current) host.current.dataset.historyTruncated = String(truncated); if (truncated) showMessage('Older output exceeded the retained history limit.', 6000);},
       info: () => ({columns: requestedSize?.cols ?? term.cols, rows: requestedSize?.rows ?? term.rows}), output: (data, replay) => {if (zmodem && !replay) zmodem.consume(data); else term.write(data);},
-      flushOutput: callback => term.write(new Uint8Array(0), callback), setReplayMode: active => {replaying = active;},
+      flushOutput: callback => term.write(new Uint8Array(0), callback), setReplayMode: active => {replaying = active; element.dataset.replayActive = String(active);},
       showMessage, removeMessage: () => showMessage('', 0), setWindowTitle: () => {},
       setPreferences: value => {
         preferences.current = value;
@@ -189,7 +193,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       onInput: callback => {input = callback;}, onResize: callback => {resize = callback;}, close: () => {}, reset: () => term.reset(), deactivate: () => {}, focus: () => {if (view.current && host.current?.parentElement?.contains(document.activeElement)) term.focus();}, scrollToBottom: () => term.scrollToBottom(),
     };
     const viewing = () => view.current && document.visibilityState === 'visible' && document.hasFocus() && !!host.current?.contains(document.activeElement);
-    const wt = new WebTTY(adapter, {create: () => {connection = new HubConnection(id, writable, owner, controls, viewing, () => view.current); return connection;}}, '', '');
+    const wt = new WebTTY(adapter, {create: () => {connection = new HubConnection(id, writable, owner, controls, viewing, () => view.current); return connection;}}, '', '', 'hub:' + id);
     wt.onConnect = () => {if (!disposed) setConnected(true);}; wt.onDisconnect = () => {if (!disposed) {setConnected(false); setCount(0);}};
     const subscription = term.onData(data => {if (writable && !replaying) input(inputTransform.current?.(data)??data);});
     const binary = term.onBinary(data => {if (writable && !replaying) input(Uint8Array.from(data, char => char.charCodeAt(0)));});
@@ -211,7 +215,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       if (!disposed) showMessage('Copied to clipboard', 1400);
     };
     const selection = term.onSelectionChange(() => {if (term.hasSelection()) void copy(term.getSelection());});
-    const osc = term.parser.registerOscHandler(52, data => {const payload = data.slice(data.indexOf(';') + 1); if (data.includes(';') && payload && payload !== '?') {try {void copy(new TextDecoder().decode(Uint8Array.from(atob(payload), char => char.charCodeAt(0))));} catch { /* Invalid clipboard sequence. */ }} return true;});
+    const osc = term.parser.registerOscHandler(52, data => {if (replaying) return true; const payload = data.slice(data.indexOf(';') + 1); if (data.includes(';') && payload && payload !== '?') {try {void copy(new TextDecoder().decode(Uint8Array.from(atob(payload), char => char.charCodeAt(0))));} catch { /* Invalid clipboard sequence. */ }} return true;});
     const observer = new ResizeObserver(measure); observer.observe(host.current); applyAppearance(term, measure);
     void document.fonts?.ready.then(()=>{if(!disposed)measure();});
     document.fonts?.addEventListener('loadingdone',measure);
@@ -220,7 +224,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     window.visualViewport?.addEventListener('resize', viewport); viewport();
     const report = () => connection?.reportView(); const interval = setInterval(report, 3000);
     document.addEventListener('visibilitychange', report); window.addEventListener('focus', report); window.addEventListener('blur', report); document.addEventListener('focusin', report);
-    controller.current = {term, measure, send: data => {if (writable) input(data);}, view: report,
+    controller.current = {refresh: () => {zmodem?.dispose(); zmodem=makeTransfer(); term.options.disableStdin = !writable; wt.reconnectNow(); measure();}, takeSizeControl: () => wt.takeSizeControl(), term, measure, send: data => {if (writable) input(data);}, view: () => {report(); wt.reportVisibility();},
       control: (action, payload) => connection?.request(action, payload) ?? Promise.reject(Error('Terminal is disconnected')),
       upload: async (file, signal) => {
         if (!writable || !files || !file.size || file.size > FILE_LIMIT) throw Error('Maximum file size: 64 MiB; empty files are not supported');
@@ -247,7 +251,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       stop(); observer.disconnect(); subscription.dispose(); binary.dispose(); selection.dispose(); osc.dispose(); term.dispose();
       document.fonts?.removeEventListener('loadingdone',measure);
     };
-  }, [id, writable, asr, files, owner, controls, onViewport, refreshGeneration, applyAppearance]);
+  }, [id, writable, asr, files, owner, controls, onViewport, applyAppearance]);
   // Browsers using DOM font measurement cannot measure a hidden pane. Reapply
   // its loaded font when shown so it does not retain the old cell dimensions.
   useEffect(() => {if (visible) {const value = controller.current; if (value) applyAppearance(value.term, value.measure);} else {setShareOpen(false);} controller.current?.view();}, [visible, applyAppearance]);

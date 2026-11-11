@@ -3,14 +3,16 @@ import {RiCheckLine} from '@remixicon/react';
 import {BUILTIN_THEMES, FONT_FAMILIES, FONT_SIZES, themeLabel, type Appearance} from '@gotty/terminal-core/appearance';
 import {ensureFont, fontState, inspectFontCache, subscribeFonts, type FontState} from '@gotty/terminal-core/fonts';
 import {Button} from '@/components/base/buttons/button';
+import {Slider} from '@/components/base/slider/slider';
 import {Input} from '@/components/base/input/input';
 import {Modal, ModalBody, ModalFooter, ModalHeader} from '@/components/base/modal/modal';
 import {errorText} from '../errors';
 import {DEFAULT_SETTINGS, migrateAppearance, validSettings, type SettingsSnapshot, type TerminalSettings as Settings} from './settings';
 import {TerminalPreview} from './TerminalPreview';
 
-export function TerminalSettings({open, onClose, snapshot, legacy, locale, loading, loadError, onSave}: {
+export function TerminalSettings({open, onClose, snapshot, legacy, locale, loading, loadError, onSave, onPreviewTransparency}: {
   open: boolean; onClose: () => void; snapshot: SettingsSnapshot; legacy?: Appearance; locale: string; loading: boolean;
+  onPreviewTransparency?: (value: number | null) => void;
   loadError: string; onSave: (settings: Settings, revision: number) => Promise<void>;
 }) {
   const zh = locale === 'zh-CN';
@@ -32,6 +34,11 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
     void inspectFontCache();
     return () => {++selection.current;};
   }, [open]);
+  useEffect(() => {
+    if (open && previewReady) onPreviewTransparency?.(draft.tabBarTransparency ?? 50);
+    else if (!open) onPreviewTransparency?.(null);
+  }, [open, previewReady, draft.tabBarTransparency, onPreviewTransparency]);
+  useEffect(() => () => onPreviewTransparency?.(null), [onPreviewTransparency]);
   async function selectFont(id: string) {
     const current = ++selection.current; setPendingFont(id); setError('');
     try {
@@ -55,6 +62,10 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
     <ModalHeader title={zh ? '终端设置' : 'Terminal settings'} description={zh ? '保存后应用于当前账号的全部终端。' : 'Apply to all terminals in your account.'} closeLabel={zh ? '取消' : 'Cancel'} showCloseButton={!saving}/>
     <ModalBody><div className="flex flex-col gap-6">
       {(error || loadError) && <p role="alert" className="text-text-error-primary">{error || errorText(loadError, locale)}</p>}
+      <section className="flex flex-col gap-2">
+        <Slider label={zh ? 'Tab 背景透明度' : 'Tab background transparency'} thumbLabel={zh ? 'Tab 背景透明度（%）' : 'Tab background transparency (%)'} minValue={0} maxValue={100} step={1} value={draft.tabBarTransparency ?? 50} formatValue={value => `${value}%`} isDisabled={saving} onChange={value => setDraft(previous => ({...previous, tabBarTransparency: value}))}/>
+        <p className="text-caption-1-regular text-text-secondary">{zh ? '0% 不透明 · 100% 完全透明' : '0% opaque · 100% transparent'}</p>
+      </section>
       <section className="flex flex-col gap-2"><h3 className="text-body-medium text-text-primary">{zh ? '配色主题' : 'Color theme'}</h3>
         <div className="terminal-settings-themes">{Object.entries(BUILTIN_THEMES).map(([name, theme]) => <Button key={name} variant="secondary" disabled={saving} aria-pressed={draft.theme === name} onClick={() => setDraft(value => ({...value, theme: name}))} trailingIcon={draft.theme === name ? RiCheckLine : undefined}>
           <span className="terminal-settings-swatch" style={{background: theme.background, color: theme.foreground}}>Aa</span>{themeLabel(name, locale)}

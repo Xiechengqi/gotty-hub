@@ -15,6 +15,7 @@ export function terminalMessage(text:string,locale:string):string{
   return voice[text]??text;
  }
  const reasons:Record<string,string>={
+  'Older output exceeded the retained history limit.':'较早的输出已超出历史保留上限，仅恢复保留范围内的内容。',
   'Authentication or instance access denied':'登录已过期或实例访问权限已被取消',
   'Authentication origin validation failed':'连接来源校验失败，请检查反向代理转发的地址',
   'Instance offline':'GoTTY 实例已离线',

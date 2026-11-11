@@ -1,9 +1,9 @@
 import {useEffect, useRef, type ReactNode} from 'react';
 import {DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors} from '@dnd-kit/core';
-import {SortableContext, useSortable, verticalListSortingStrategy, horizontalListSortingStrategy} from '@dnd-kit/sortable';
+import {SortableContext, useSortable, horizontalListSortingStrategy} from '@dnd-kit/sortable';
 import {CSS} from '@dnd-kit/utilities';
 
-type Scope = 'tabs' | 'directory';
+type Scope = 'tabs';
 export class RightMouseSensor extends MouseSensor {
   static activators: typeof MouseSensor.activators = [{eventName: 'onMouseDown', handler: ({nativeEvent: event}, {onActivation}) => {
     if (event.button !== 2 || (event.target instanceof Element && event.target.closest('[data-no-drag]'))) return false;
@@ -45,9 +45,9 @@ export function WorkspaceSortProvider({onReorder, onDragging, onFinish, children
   </DndContext>;
 }
 export function WorkspaceSortList({scope, units, children}: {scope: Scope; units: string[][]; children: ReactNode}) {
-  return <SortableContext items={units.map(unit => scope + ':' + unit[0])} strategy={scope === 'tabs' ? horizontalListSortingStrategy : verticalListSortingStrategy}>{children}</SortableContext>;
+  return <SortableContext items={units.map(unit => scope + ':' + unit[0])} strategy={horizontalListSortingStrategy}>{children}</SortableContext>;
 }
-export function SortableWorkspaceUnit({scope, id, className, children}: {scope: Scope; id: string; className: string; children: ReactNode}) {
+export function SortableWorkspaceUnit({scope, id, className, children, weight = 1}: {scope: Scope; id: string; className: string; children: ReactNode; weight?: number}) {
   const {setNodeRef, listeners, transform, transition, isDragging} = useSortable({id: scope + ':' + id, data: {instanceId: id, scope}});
-  return <div ref={setNodeRef} {...listeners} tabIndex={-1} className={className} data-sort-id={id} data-dragging={isDragging || undefined} onContextMenu={event => event.preventDefault()} style={{transform: CSS.Transform.toString(transform), transition}}>{children}</div>;
+  return <div ref={setNodeRef} {...listeners} tabIndex={-1} className={className} data-sort-id={id} data-dragging={isDragging || undefined} onContextMenu={event => event.preventDefault()} style={{transform: CSS.Transform.toString(transform), transition, flexGrow: weight}}>{children}</div>;
 }

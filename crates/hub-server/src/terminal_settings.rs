@@ -14,11 +14,18 @@ pub struct Settings {
     theme: String,
     font_size: u8,
     font_id: String,
+    #[serde(default = "default_tab_transparency")]
+    tab_bar_transparency: u8,
+}
+
+fn default_tab_transparency() -> u8 {
+    50
 }
 
 impl Settings {
     fn validate(&self) -> Result<()> {
-        if self.schema_version != 1
+        if self.tab_bar_transparency > 100
+            || self.schema_version != 1
             || !(8..=48).contains(&self.font_size)
             || ![
                 "default",
@@ -89,4 +96,33 @@ pub async fn save(
             .bind(encoded).bind(user.user_id).bind(value.revision).fetch_optional(&app.db).await?
     }.ok_or(Error(StatusCode::CONFLICT, "terminal_settings_conflict"))?;
     Ok(Json(json!({"revision":revision,"settings":value.settings})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transparency_defaults_for_legacy_settings_and_validates_bounds() {
+        let legacy = json!({"schemaVersion":1,"theme":"paper","fontSize":18,"fontId":"monospace"});
+        let settings: Settings = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(settings.tab_bar_transparency, 50);
+        for n in [0, 50, 100] {
+            let mut value = legacy.clone();
+            value["tabBarTransparency"] = json!(n);
+            let settings: Settings = serde_json::from_value(value).unwrap();
+            assert!(settings.validate().is_ok());
+            assert_eq!(
+                serde_json::to_value(settings).unwrap()["tabBarTransparency"],
+                n
+            );
+        }
+        for n in [json!(-1), json!(101), json!(1.5), json!("50"), json!(null)] {
+            let mut value = legacy.clone();
+            value["tabBarTransparency"] = n;
+            assert!(serde_json::from_value::<Settings>(value)
+                .map(|v| v.validate().is_err())
+                .unwrap_or(true));
+        }
+    }
 }

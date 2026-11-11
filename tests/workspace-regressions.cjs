@@ -76,7 +76,8 @@ function installInspection() {
   function sample() {
     const app = document.querySelector('.app'), main = document.querySelector('.main');
     if (app && main && getComputedStyle(main).visibility === 'visible') {
-      const maximized = app.classList.contains('chrome-unpinned');
+      const terminal=document.querySelector('.terminals')?.getBoundingClientRect();
+      const maximized = !!terminal && terminal.y === 0 && Math.abs(terminal.height-visualViewport.height)<1;
       if (window.reviewVisibleLayouts.at(-1) !== maximized) window.reviewVisibleLayouts.push(maximized);
     }
     requestAnimationFrame(sample);
@@ -131,6 +132,14 @@ function installInspection() {
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  if(process.env.WORKSPACE_SUITE==='overlay'){
+    await require('./overlay-regressions.cjs')({page,context,browser,hub,ids,api,wait,sleep,dir,report,start,port,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
+  if(process.env.WORKSPACE_SUITE==='dataflow'){
+    await require('./dataflow-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   if(process.env.WORKSPACE_SUITE==='rendering'){
     await require('./rendering-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;
@@ -140,7 +149,7 @@ function installInspection() {
     await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;
   }
-  async function reveal(target = page) {if(await target.locator('.workspace-bar').getAttribute('aria-hidden')==='true')await target.locator('.workspace-reveal').click();}
+  async function reveal(target = page) {await target.locator('.workspace-bar').waitFor();}
   async function terminalAction(name) {await reveal();await page.locator('.session-tab.selected .tab-trigger').click();const menu=page.locator('.tab-actions-menu');await menu.waitFor();await menu.getByRole('button',{name,exact:true}).click();await menu.waitFor({state:'hidden'});}
   async function settingsDialog(target = page) {
     await target.bringToFront();await reveal(target);
@@ -151,7 +160,6 @@ function installInspection() {
     return dialog;
   }
   const fontLoaded=(target,family)=>target.evaluate(family=>[...document.fonts].some(font=>font.family.replace(/^['"]|['"]$/g,'')===family&&font.status==='loaded'),family);
-  await wait(()=>fontLoaded(page,'DejaVu Sans Mono'),'embedded default font');
   async function verifyFontMetrics(index) {
     await wait(()=>page.evaluate(index=>{
       const term=window.reviewTerm(index);if(!term)return false;
@@ -159,6 +167,11 @@ function installInspection() {
       return Math.abs(ctx.measureText('W').width-term._core._charSizeService.width)<0.1;
     },index),'loaded font cell metrics');
   }
+  // Visit a second instance to test updates to retained background terminals.
+  await page.locator('.session-tab[data-instance-id="'+ids[1]+'"] .tab-trigger').click({button:'right'});
+  await wait(()=>page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isEnabled(),'second terminal');
+  await page.locator('.session-tab[data-instance-id="'+ids[0]+'"] .tab-trigger').click({button:'right'});
+  await wait(()=>fontLoaded(page,'DejaVu Sans Mono'),'embedded default font');
   await verifyFontMetrics(1);
   assert(fontRequests.every(url=>url.includes('dejavu-sans-mono')), 'unselected fonts downloaded at startup');
   assert.equal(await page.locator('.terminal-display-control').count(),0);
@@ -287,7 +300,7 @@ function installInspection() {
   direct.on('pageerror', error => errors.push(error.stack));
   direct.on('websocket', socket => {
     socket.on('framesent', frame => {const s = String(frame.payload); if (s[0] === '1') directSent.push(Buffer.from(s.slice(1), 'base64').toString());});
-    socket.on('framereceived', frame => {const s = String(frame.payload); if (s[0] === '1') directReceived.push(Buffer.from(s.slice(1), 'base64').toString());});
+    socket.on('framereceived', frame => {let s = String(frame.payload); if (s[0] === 'c') s = JSON.parse(s.slice(1)).data; if (s[0] === '1') directReceived.push(Buffer.from(s.slice(1), 'base64').toString());});
   });
   await direct.goto(directURL, {waitUntil: 'domcontentloaded'});
   await wait(() => directReceived.join('').includes('bash-'), 'direct GoTTY terminal');
@@ -329,7 +342,7 @@ function installInspection() {
   await page.evaluate(() => window.reviewSockets.find(socket => socket.url.includes('terminal-connections') && socket.readyState === 1)?.close());
   await wait(() => page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isDisabled(), 'transport disconnected');
   await terminalAction('刷新此终端');
-  await wait(() => page.evaluate(() => window.reviewTerm() && window.reviewTerm() !== window.reviewOriginal), 'renderer replaced'); await ready();
+  await wait(() => page.evaluate(() => window.reviewTerm() && window.reviewTerm() === window.reviewOriginal && window.reviewSockets.at(-1)?.readyState === 1), 'renderer retained and socket reconnected'); await ready();
   assert(await page.evaluate(() => window.reviewTerm(1) === window.reviewOther));
   await command('printf "AFTER=%s\\n" "$HUB_REFRESH_PROBE"');
   await wait(async () => (await snapshot())?.text.includes('AFTER=preserved'), 'shell state after terminal refresh');
@@ -341,61 +354,16 @@ function installInspection() {
   await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus();
   await page.keyboard.press('Escape'); await page.keyboard.type(':wq'); await page.keyboard.press('Enter');
   await wait(async () => (await snapshot())?.type === 'normal' && fs.readFileSync(file, 'utf8').includes('unsaved-before-refresh'), 'save preserved Vim session');
-  report('terminalRefresh', {newRenderer: true, disconnectedRecovery: true, otherPaneUnchanged: true, shellPreserved: true, unsavedVimPreserved: true});
+  report('terminalRefresh', {rendererRetained: true, disconnectedRecovery: true, otherPaneUnchanged: true, shellPreserved: true, unsavedVimPreserved: true});
   await renewSession(context); await page.reload({waitUntil:'domcontentloaded'}); await ready();
   await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
   await renewSession(context); await page.reload({waitUntil:'domcontentloaded'}); await ready();
-  assert.equal(await page.getByRole('button', {name: '刷新页面', exact: true}).count(), 1);
-  await page.locator('.pin-toolbar').click();
-  await page.reload({waitUntil: 'domcontentloaded'}); await ready();
-  assert(await page.locator('.app').evaluate(element => element.classList.contains('chrome-unpinned')));
-  assert.deepEqual(await page.evaluate(() => window.reviewVisibleLayouts), [true]);
-  await sleep(800);
-  await page.route('**/api/v1/me/preferences', async route => {if (route.request().method() === 'GET') await sleep(800); await route.continue();});
-  await page.reload({waitUntil: 'domcontentloaded'}); await ready();
-  assert.deepEqual(await page.evaluate(() => window.reviewVisibleLayouts), [true]);
-  await page.unroute('**/api/v1/me/preferences');
-  dialog=await settingsDialog();await dialog.getByRole('button',{name:'取消',exact:true}).last().click();
-  report('pinPersistence', {immediateReload: true, delayedPreferences: true, noOrdinaryLayoutFlash: true});
-  await reveal();await page.locator('.pin-toolbar').click();
-  const widths = [];
-  for (const width of [320, 375, 390, 430]) {
-    await page.setViewportSize({width, height: 844}); await sleep(180);
-    const trigger = page.locator('.session-switcher-trigger'); assert(await trigger.isVisible());
-    const box = await trigger.boundingBox(); assert(box.x >= 0 && box.x + box.width <= width);
-    assert(await page.locator('.session-tabs-scroll').isHidden());
-    await trigger.click(); await page.getByRole('dialog').waitFor();
-    assert.equal(await page.locator('.instance-browser-row').count(), 12);
-    await page.getByRole('textbox', {name: '搜索实例…'}).fill('终端-12');
-    assert.equal(await page.locator('.instance-browser-row').count(), 1);
-    await page.locator('.instance-browser-select').click();
-    await wait(async () => (await trigger.textContent()).includes('终端-12'), 'mobile session selection');
-    dialog=await settingsDialog();const settingsBox=await dialog.boundingBox();assert(settingsBox.x>=0&&settingsBox.x+settingsBox.width<=width+1);
-    await dialog.getByRole('button',{name:/柔和米色$/}).click();
-    assert(await dialog.locator('.terminal-settings-themes button').evaluateAll(buttons=>buttons.every(button=>button.scrollWidth<=button.clientWidth+1)),'theme labels clipped on mobile');
-    await page.screenshot({path:path.join(dir,`terminal-settings-${width}.png`)});await dialog.getByRole('button',{name:'取消',exact:true}).last().click();
-    widths.push({width, allSessionsAccessible: true, searchAndSwitch: true});
-  }
-  await page.getByRole('dialog').waitFor({state: 'hidden'});
-  await page.screenshot({path: path.join(dir, 'mobile.png')});
-  await page.locator('.session-switcher-trigger').click();
-  await page.getByRole('dialog').waitFor(); await sleep(350);
-  await page.screenshot({path: path.join(dir, 'mobile-sessions.png')});
-  await page.locator('.instance-browser-row').first().locator('.instance-actions-trigger').click();
-  await page.locator('.tab-actions-menu').getByRole('button',{name:'关闭终端标签',exact:true}).click();
-  await page.locator('.session-switcher-trigger').click();
-  await page.getByRole('button',{name:'已打开终端',exact:true}).click();
-  assert.equal(await page.locator('.instance-browser-row').count(),11);
-  await page.keyboard.press('Escape');
-  await page.setViewportSize({width: 844, height: 390}); await sleep(150);
-  assert(await page.locator('.session-tabs-scroll').isVisible());
-  await wait(() => page.locator('.session-tab.selected').evaluate(element => {const tab = element.getBoundingClientRect(), strip = element.closest('.session-tabs-scroll').getBoundingClientRect(); return tab.left >= strip.left - 1 && tab.right <= strip.right + 1;}), 'active tab visible after rotation');
-  report('mobile', {widths,closeSession: true, landscape: true});
+  await require('./overlay-regressions.cjs')({page,context,browser,hub,ids,api,wait,sleep,dir,report,start,port,installInspection,errors});
   await account('other-review'); await api('/me/preferences', {maximized: false, locale: 'zh-CN'}, 'PUT');
   await context.addCookies([{name: 'hub_session', value: cookie.split('=')[1], url: hub}]);
   await page.reload({waitUntil: 'domcontentloaded'});
   await wait(async () => !(await page.locator('.app').evaluate(element => element.classList.contains('workspace-loading'))), 'other account layout');
-  assert(!(await page.locator('.app').evaluate(element => element.classList.contains('chrome-unpinned'))));
+  assert.equal(await page.locator('.session-tab').count(),0);
   assert.equal(await page.locator('.real-terminal').count(), 0);
   dialog=await settingsDialog();assert.equal(await dialog.getByRole('spinbutton').inputValue(),'14');await dialog.getByRole('button',{name:'取消',exact:true}).last().click();assert.equal((await api('/me/terminal-settings')).settings,null);
   assert.deepEqual(errors, []); report('accountIsolation', {layout: true, terminals: true});

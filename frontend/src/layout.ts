@@ -1,39 +1,15 @@
 import {randomId} from './random';
-import {decodeWorkspace, normalizeWorkspace, sameWorkspace, saveWorkspace, workspaceFromPreferences, type SavedWorkspace, type Workspace} from './workspace/state';
-type Layout = {pinned: boolean; revision: string; pending: boolean};
-const key = (account: string) => `gotty-hub:layout:${encodeURIComponent(account)}`;
-
-export function readLayout(account: string): Layout | undefined {
+import {decodeWorkspace, reconcileWorkspace, sameWorkspace, saveWorkspace, workspaceFromPreferences, type SavedWorkspace, type Workspace} from './workspace/state';
+// Retired chrome choices must not survive the generic preference merge.
+export function currentPreferences(value: Record<string, unknown>): Record<string, unknown> {
+  const retired = new Set(['dark', 'toolbarPinned', 'maximized', 'sidebarCollapsed', 'navbarCollapsed']);
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !retired.has(key)));
+}
+export function forgetChromeSettings(account: string) {
   try {
-    const value = JSON.parse(localStorage.getItem(key(account)) ?? 'null');
-    if (value && typeof value.revision === 'string' && typeof value.pending === 'boolean') {
-      if (typeof value.pinned === 'boolean') return value;
-      if (typeof value.maximized === 'boolean') return {pinned: !value.maximized, revision: value.revision, pending: value.pending};
-    }
-  } catch { /* Storage can be disabled or contain old/corrupt data. */ }
-}
-
-export function rememberPinned(account: string, pinned: boolean, pending = true): Layout {
-  const value = {pinned, revision: randomId(), pending};
-  try {localStorage.setItem(key(account), JSON.stringify(value));} catch { /* Server persistence still works. */ }
-  return value;
-}
-
-export function restorePinned(account: string, remote: unknown, legacyMaximized?: unknown): boolean {
-  const local = readLayout(account);
-  // A reload before the save was acknowledged must retain the user's click.
-  if (local?.pending) return local.pinned;
-  const value = typeof remote === 'boolean' ? remote : typeof legacyMaximized === 'boolean' ? !legacyMaximized : local?.pinned ?? true;
-  rememberPinned(account, value, false);
-  return value;
-}
-
-export function acknowledgeLayout(account: string, revision: string | undefined, pinned: boolean) {
-  const value = readLayout(account);
-  // An earlier request finishing must not acknowledge a newer unsaved choice.
-  if (value && value.revision === revision && value.pinned === pinned) {
-    try {localStorage.setItem(key(account), JSON.stringify({...value, pending: false}));} catch { /* Best effort. */ }
-  }
+    localStorage.removeItem('gotty-hub.theme');
+    localStorage.removeItem(`gotty-hub:layout:${encodeURIComponent(account)}`);
+  } catch { /* Storage may be disabled. */ }
 }
 
 type WorkspaceCache = {workspace: SavedWorkspace; revision: string; pending: boolean};
@@ -55,8 +31,8 @@ export function rememberWorkspace(account: string, workspace: Workspace, pending
 export function restoreWorkspace(account: string, prefs: Record<string, unknown>, available: string[], firstOnline = ''): Workspace {
   const local = readWorkspaceCache(account);
   const pending = local?.pending ? decodeWorkspace(local.workspace, prefs.instanceOrder) : undefined;
-  const restored = pending ? normalizeWorkspace(pending, available) : workspaceFromPreferences(prefs, available, firstOnline);
-  if (!pending || local?.workspace.schemaVersion !== 2 || !sameWorkspace(pending, restored)) rememberWorkspace(account, restored, !!pending);
+  const restored = pending ? reconcileWorkspace(pending, available, local?.workspace.schemaVersion !== 3) : workspaceFromPreferences(prefs, available, firstOnline);
+  if (!pending || local?.workspace.schemaVersion !== 3 || !sameWorkspace(pending, restored)) rememberWorkspace(account, restored, !!pending);
   return restored;
 }
 

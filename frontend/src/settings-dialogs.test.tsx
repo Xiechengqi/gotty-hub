@@ -71,6 +71,6 @@ it('signs out of the current account from the logout dialog',async()=>{
   expect(button('退出所有设备')).toBeDefined();
   await act(async()=>button('退出当前账号')!.click());
   expect(calls).toContainEqual({path:'/auth/logout',body:{},method:undefined});
-  expect(button('设置'),'signed-out users see no settings menu').toBeUndefined();
+  expect(button('设置'),'signed-out settings entry opens login').toBeDefined();
   expect(button('登录')).toBeDefined();
 });
