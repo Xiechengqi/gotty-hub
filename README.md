@@ -99,7 +99,7 @@ gotty --permit-write bash
 
 成功后显示绿色提示，配置变为只读；可以通过“编辑”修改配置、“重新接入”复用身份，或“断开”停止连接并保留配置。GoTTY 的 Hub 功能默认开启，HTTP 和 HTTPS 均可使用；`--hub-disabled` 关闭 Hub 功能，`--hub-allow-http=false` 仅允许 HTTPS。
 
-绑定凭据保存在 GoTTY 设备上的 `~/.gotty/hub.json`；若 `~/.gotty` 是配置文件，则使用 `~/.gotty-hub.json`。已有 GoTTY 密码时复用登录态，无密码时主站访问者可以管理绑定；分享页面不能管理 Hub 配置。
+绑定凭据按稳定的监听地址、端口和路径隔离，保存在 GoTTY 设备的 `~/.gotty/hub/<标识>.json`；若 `~/.gotty` 是配置文件，则使用 `~/.gotty-hub-bindings/<标识>.json`。同一身份文件禁止多个进程同时使用。旧共享文件不会被自动复用，迁移方法见 [实例身份迁移](docs/WORKSPACE_RECOVERY.md)。已有 GoTTY 密码时复用登录态，无密码时主站访问者可以管理绑定；分享页面不能管理 Hub 配置。
 
 ## 账号与权限
 
@@ -275,3 +275,5 @@ git diff --check
 ## License
 
 [MIT](LICENSE)
+
+真实浏览器回归（12 个 GoTTY、Vim、回放、布局恢复与移动端）见 [workspace-regressions.cjs](tests/workspace-regressions.cjs)，运行方式见 [工作区修复与迁移](docs/WORKSPACE_RECOVERY.md)。

@@ -1,5 +1,6 @@
 import type {Connection} from '@gotty/terminal-core';
 import {api,APIError} from '../api';
+import {randomId} from '../random';
 import type {Control} from './ShareManager';
 
 export class HubConnection implements Connection {
@@ -38,9 +39,6 @@ export class HubConnection implements Connection {
     };
   }
   open() {} close() {this.stopped=true;this.closed = true;this.abort.abort();this.rejectPending();this.ws.close();}
-  // Drop the socket without marking the connection stopped, so WebTTY's
-  // automatic reconnect path takes over and restores the session.
-  reconnect() {if(this.closed)return;this.abort.abort();this.ws.close();}
   private async describeClose(event:CloseEvent){
     let detail=this.failure;
     if(!detail&&event.code===1006&&!this.stopped){
@@ -69,7 +67,7 @@ export class HubConnection implements Connection {
   request: Control = (action, payload = {}) => {
     if (!this.owner || !this.controls || this.closed || this.ws.readyState !== 1 || !this.ticket) return Promise.reject(Error('Terminal management is unavailable'));
     if (this.pending.size) return Promise.reject(Error('Another terminal operation is running'));
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {this.pending.delete(requestId); reject(Error('Terminal operation timed out'));}, 60000);
       this.pending.set(requestId, {resolve, reject, timer});

@@ -1,4 +1,4 @@
-use crate::{origin::PublicOrigin, security::*, App};
+use crate::{api::audit, origin::PublicOrigin, security::*, App};
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
@@ -120,8 +120,11 @@ async fn device(app: App, id: String, mut socket: WebSocket) {
         revision: 0,
         capabilities: frame.data["capabilities"].clone(),
     };
-    if let Some(old) = app.devices.lock().await.insert(id.clone(), device) {
+    let previous = app.devices.lock().await.insert(id.clone(), device);
+    if let Some(old) = previous {
         let _ = old.tx.try_send(Frame::new("superseded", "", json!({})));
+        audit(&app, "device", "device_connection_replaced", &id).await;
+        tracing::warn!(instance = %id, "Device connection replaced; check shared identity files if unexpected");
     }
     let _ = tx.try_send(Frame::new(
         "hello_ack",

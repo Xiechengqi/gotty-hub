@@ -16,6 +16,8 @@ import {SettingsMenu,type SettingsAction} from './SettingsMenu';
 import {errorText} from './errors';
 import {RealTerminal} from './terminal/Terminal';
 import {normalizeOrder} from './instances/order';
+import {SessionSwitcher} from './instances/SessionSwitcher';
+import {readLayout, rememberMaximized, restoreMaximized, acknowledgeLayout} from './layout';
 import {InstanceSortProvider,InstanceSortList,SortableInstance} from './instances/SortableInstances';
 
 type Group = 'production' | 'development' | 'personal';
@@ -42,6 +44,10 @@ function App() {
   const [account,setAccount]=useState<Account|null>(null);
   const [busy,setBusy]=useState(false);
   const [preferencesLoaded,setPreferencesLoaded]=useState(false);
+  const [authLoading,setAuthLoading]=useState(!preview);
+  const activeAccount=useRef<string|null>(null);
+  const preferenceWrites=useRef<Promise<unknown>>(Promise.resolve());
+  const preferenceRevision=useRef(0);
   const remembered=useRef<any>({});
   const [apiError,setApiError]=useState('');
   const [sessions,setSessions]=useState<{expires:number}[]>([]);
@@ -55,11 +61,19 @@ function App() {
     const update=()=>applyViewportHeight(vv.height);
     update();vv.addEventListener('resize',update);return()=>vv.removeEventListener('resize',update);
   },[applyViewportHeight]);
-  function acceptAccount(value:Account|null){useAccount(value);setAccount(value)}
+  function acceptAccount(value:Account|null){
+    if(activeAccount.current!==(value?.id??null)){
+      preferenceRevision.current++;
+      setPreferencesLoaded(false);setInstances([]);setOpened([]);setActive('');remembered.current={};
+      setMaximizedState(value?readLayout(value.id)?.maximized??false:false);
+      setSidebarCollapsed(false);setNavbarCollapsed(false);setSplit(false);
+    }
+    activeAccount.current=value?.id??null;useAccount(value);setAccount(value);setAuthLoading(false);
+  }
   function fail(error:unknown){setApiError(errorText(error instanceof Error?error.message:String(error),locale))}
   useEffect(()=>{
     if(preview)return;
-    api<Account>('/me').then(acceptAccount).catch(()=>setPanel('login'));
+    api<Account>('/me').then(acceptAccount).catch(()=>{setAuthLoading(false);setPanel('login')});
   },[]);
   useEffect(()=>{
     if(preview||!account)return;
@@ -87,13 +101,13 @@ function App() {
       if(typeof prefs.sidebarCollapsed==='boolean')setSidebarCollapsed(prefs.sidebarCollapsed);
       if(typeof prefs.navbarCollapsed==='boolean')setNavbarCollapsed(prefs.navbarCollapsed);
       if(typeof prefs.split==='boolean')setSplit(prefs.split);
-      if(typeof prefs.maximized==='boolean')setMaximized(prefs.maximized);
+      setMaximizedState(restoreMaximized(account.id,prefs.maximized));
       ready=true;update(rows);setPreferencesLoaded(true);
     }).catch(error=>{if(!disposed)fail(error)});
     events.addEventListener('instances',event=>{try{if(ready)update(JSON.parse((event as MessageEvent).data))}catch(error){fail(error)}});
-    events.onerror=()=>{api('/me').catch(()=>{acceptAccount(null);setInstances([]);setOpened([]);setPanel('login')})};
+    events.onerror=()=>{if(!disposed)api('/me').catch(()=>{if(!disposed){acceptAccount(null);setPanel('login')}})};
     return()=>{disposed=true;events.close();setPreferencesLoaded(false)};
-  },[account?.username]);
+  },[account?.id]);
 
   const [locale,setLocale] = useState(initialLocale);
   const t = (key: MessageKey) => translate(locale,key);
@@ -107,17 +121,31 @@ function App() {
   const [split,setSplit] = useState(false);
   const orderedOpened=order.filter(id=>opened.includes(id));
   const effectiveSplit=split&&!mobile&&orderedOpened.length>1;
-  const [maximized,setMaximized] = useState(false);
+  const [maximized,setMaximizedState] = useState(false);
+  const setMaximized=useCallback((value:boolean)=>{
+    if(account)rememberMaximized(account.id,value);
+    setMaximizedState(value);
+  },[account?.id]);
   const [sidebarCollapsed,setSidebarCollapsed] = useState(false);
   const [navbarCollapsed,setNavbarCollapsed] = useState(false);
   useEffect(()=>{
     if(preview||!account||!preferencesLoaded)return;
-    const timeout=setTimeout(()=>api('/me/preferences',{opened:orderedOpened,instanceOrder:order,active,dark,sidebarCollapsed,navbarCollapsed,split,maximized,locale},'PUT').catch(fail),600);
+    const id=account.id;
+    const saveRevision=++preferenceRevision.current;
+    const revision=readLayout(id)?.revision;
+    const preferences={opened:orderedOpened,instanceOrder:order,active,dark,sidebarCollapsed,navbarCollapsed,split,maximized,locale};
+    const timeout=setTimeout(()=>{
+      preferenceWrites.current=preferenceWrites.current.catch(()=>{}).then(async()=>{
+        if(activeAccount.current!==id||preferenceRevision.current!==saveRevision)return;
+        await api('/me/preferences',preferences,'PUT');
+        acknowledgeLayout(id,revision,maximized);
+      }).catch(error=>{if(activeAccount.current===id)fail(error)});
+    },600);
     return()=>clearTimeout(timeout);
-  },[account?.username,preferencesLoaded,opened,orderKey,active,dark,sidebarCollapsed,navbarCollapsed,split,maximized,locale]);
+  },[account?.id,preferencesLoaded,opened,orderKey,active,dark,sidebarCollapsed,navbarCollapsed,split,maximized,locale]);
   useEffect(()=>{if(opened.length&&!opened.includes(active))setActive(opened[0])},[opened,active]);
   useEffect(()=>{
-    if(preview||!active)return;
+    if(preview||!active||mobile)return;
     const frame=requestAnimationFrame(()=>{
       const container=document.querySelector('.session-tabs-scroll');
       const tab=container?.querySelector(`[data-instance-id="${CSS.escape(active)}"]`);
@@ -126,7 +154,7 @@ function App() {
       container.scrollTo({left:Math.max(0,target),behavior:'smooth'});
     });
     return()=>cancelAnimationFrame(frame);
-  },[active,orderKey]);
+  },[active,orderKey,mobile]);
   const [terminalStates,setTerminalStates] = useState<Record<string,'red'|'gray'|'yellow'|'green'>>(()=>Object.fromEntries(instances.filter(i=>i.online).map(i=>[i.id,'gray'])));
   useEffect(()=>{
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'&&!document.querySelector('[role=dialog],dialog[open]'))setMaximized(false)};
@@ -140,7 +168,7 @@ function App() {
     };
     window.addEventListener('keydown',escape);window.addEventListener('message',message);
     return()=>{window.removeEventListener('keydown',escape);window.removeEventListener('message',message)};
-  },[]);
+  },[setMaximized]);
 
   function statusIcon(id:string){
     if(!instances.find(i=>i.id===id)?.online)return <span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>;
@@ -168,6 +196,7 @@ function App() {
   useEffect(()=>{document.documentElement.classList.toggle('dark',dark);try{localStorage.setItem('gotty-hub.theme',dark?'dark':'light')}catch{}},[dark]);
   useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(null),4500);return()=>clearTimeout(timer)},[notice]);
   const detailInstance = instances.find(i=>i.id===detail)??{id:'',name:'',online:false,role:'observer' as const};
+  function closeTerminal(id:string){setOpened(previous=>previous.filter(value=>value!==id));}
   function open(i:Instance){setApiError('');if(!i.online){setDetail(i.id);showPanel('detail');return}setOpened(a=>a.includes(i.id)?a:[...a,i.id]);setActive(i.id);setDrawer(false)}
   function showPanel(value:Panel){if(value==='logout'&&!preview&&account)api<{sessions:{expires:number}[]}>('/me/sessions').then(v=>setSessions(v.sessions)).catch(fail);setApiError('');setNotice(null);setDrawer(false);setPanel(value);setError(null);setPassword('');setConfirmation('');setShowPassword(false);setAuthMode('login')}
   function closePanel(){if(!preview&&!account)return;setPanel('');setPassword('');setConfirmation('');setError(null)}
@@ -211,11 +240,11 @@ function App() {
   </section>}
   const passwordFields = <><div className="password-field"><Input label={t('newPassword')} type={showPassword?'text':'password'} autoComplete="new-password" value={password} onChange={v=>{setPassword(v);setError(null)}}/><Button className="password-toggle quiet-button" variant="ghost" iconOnly leadingIcon={showPassword?RiEyeOffLine:RiEyeLine} aria-label={t(showPassword?'hidePassword':'showPassword')} onClick={()=>setShowPassword(!showPassword)}/></div><Input label={t('confirmPassword')} type={showPassword?'text':'password'} autoComplete="new-password" value={confirmation} onChange={v=>{setConfirmation(v);setError(null)}}/></>;
   const errorMessage = (error||apiError)&&<p className="text-body-regular text-text-error-primary" role="alert">{error?t(error):apiError}</p>;
-  return <DirectionProvider locale={locale}><InstanceSortProvider order={order} onReorder={setInstanceOrder} locale={locale}><div className={cx("app",maximized&&"workspace-maximized",sidebarCollapsed&&"sidebar-collapsed",navbarCollapsed&&"navbar-collapsed")}>
-    <aside className="sidebar">{navigation('sidebar')}</aside>
+  return <DirectionProvider locale={locale}><InstanceSortProvider order={order} onReorder={setInstanceOrder} locale={locale}><div className={cx("app",maximized&&"workspace-maximized",sidebarCollapsed&&"sidebar-collapsed",navbarCollapsed&&"navbar-collapsed",(authLoading||!!account&&!preferencesLoaded)&&"workspace-loading")}>
+    <div className="workspace-loading-status text-body-regular" role="status">{apiError || (locale==='zh-CN'?'正在加载工作区…':'Loading workspace…')}{apiError&&<Button variant="secondary" onClick={()=>location.reload()}>{t('refreshPage')}</Button>}</div><aside className="sidebar">{navigation('sidebar')}</aside>
     <main className="main">
       <header className="topbar"><div className="breadcrumb"><Button className="mobile-menu quiet-button" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="topbar-actions">{preview&&<span className="prototype-label text-caption-1-regular">{t('prototype')}</span>}<Button className="quiet-button language-button" variant="ghost" leadingIcon={RiTranslate2} aria-label={t('language')} onClick={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}>{locale==='zh-CN'?'EN':'中文'}</Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={dark?RiSunLine:RiMoonLine} aria-label={t('theme')} onClick={()=>setDark(!dark)}/><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label={t('refreshPage')} title={t('refreshPage')} onClick={()=>location.reload()}/><span className="toolbar-divider"/>{(preview||!account)&&<Button className="login-button" variant="secondary" onClick={()=>showPanel('login')}>{t('login')}</Button>}{(preview||account)&&<SettingsMenu labels={{settings:t('settings'),console:t('console'),password:t('changePassword'),logout:t('logout')}} admin={!!account?.is_admin} onSelect={settings}/>}</div></header>
-      <div className="workspace"><div className="terminal-tabs"><div className="chrome-controls"><Button className="quiet-button sidebar-toggle" variant="ghost" iconOnly leadingIcon={RiSideBarLine} aria-label={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} title={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} aria-expanded={!sidebarCollapsed} onClick={()=>setSidebarCollapsed(!sidebarCollapsed)}/><Button className="quiet-button mobile-menu" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div><div className="session-tabs-scroll"><InstanceSortList scope="tabs" ids={orderedOpened}>{orderedOpened.map(id=><SortableInstance key={id} scope="tabs" id={id} name={instances.find(i=>i.id===id)!.name} locale={locale} className={cx('session-tab',active===id&&'selected')}><Button className="quiet-button" variant="ghost" onClick={()=>setActive(id)}><span className="session-label">{statusIcon(id)}{instances.find(i=>i.id===id)!.name}</span></Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiCloseLine} aria-label={`${t('closeTab')} ${instances.find(i=>i.id===id)!.name}`} onClick={()=>{const next=opened.filter(v=>v!==id);setOpened(next);if(active===id){setActive(next[0]??'')}}}/></SortableInstance>)}</InstanceSortList><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div><div className="workspace-actions"><Button className="quiet-button navbar-toggle" variant="ghost" iconOnly leadingIcon={RiLayoutTopLine} aria-label={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} title={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} aria-expanded={!navbarCollapsed} onClick={()=>setNavbarCollapsed(!navbarCollapsed)}/><Button className="split-button quiet-button" variant="ghost" disabled={opened.length<2} onClick={()=>setSplit(!split)}>{t(split?'single':'split')}</Button><Button className="maximize-button quiet-button" variant="ghost" iconOnly leadingIcon={maximized?RiCollapseDiagonalLine:RiExpandDiagonalLine} aria-label={t(maximized?'restoreWorkspace':'maximizeWorkspace')} title={t(maximized?'restoreWorkspace':'maximizeWorkspace')} aria-pressed={maximized} onClick={()=>setMaximized(!maximized)}/></div></div><div className={cx('terminals',effectiveSplit&&'split')}>{orderedOpened.length?orderedOpened.map(id=>{const instance=instances.find(i=>i.id===id);return instance&&<div key={id} className="terminal-slot" hidden={id!==active&&!(effectiveSplit&&orderedOpened.find(v=>v!==active)===id)}>{instance.online?terminal(instance):<div className="terminal-empty">{t('offline')}</div>}</div>}):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}</div></div>
+      <div className="workspace"><div className="terminal-tabs"><div className="chrome-controls"><Button className="quiet-button sidebar-toggle" variant="ghost" iconOnly leadingIcon={RiSideBarLine} aria-label={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} title={t(sidebarCollapsed?'expandSidebar':'collapseSidebar')} aria-expanded={!sidebarCollapsed} onClick={()=>setSidebarCollapsed(!sidebarCollapsed)}/><Button className="quiet-button mobile-menu" variant="ghost" iconOnly leadingIcon={RiMenuLine} aria-label={t('menu')} onClick={()=>setDrawer(true)}/></div>{mobile&&<SessionSwitcher sessions={orderedOpened.map(id=>{const i=instances.find(i=>i.id===id)!;return {id,name:i.name,online:i.online,icon:statusIcon(id)}})} active={active} locale={locale} onSelect={setActive} onClose={closeTerminal} onBrowse={()=>setDrawer(true)}/>}<div className="session-tabs-scroll"><InstanceSortList scope="tabs" ids={orderedOpened}>{orderedOpened.map(id=><SortableInstance key={id} scope="tabs" id={id} name={instances.find(i=>i.id===id)!.name} locale={locale} className={cx('session-tab',active===id&&'selected')}><Button className="quiet-button" variant="ghost" onClick={()=>setActive(id)}><span className="session-label">{statusIcon(id)}<span className="session-name">{instances.find(i=>i.id===id)!.name}</span></span></Button><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiCloseLine} aria-label={`${t('closeTab')} ${instances.find(i=>i.id===id)!.name}`} onClick={()=>closeTerminal(id)}/></SortableInstance>)}</InstanceSortList><Button className="quiet-button" variant="ghost" iconOnly leadingIcon={RiAddLine} aria-label={t('connect')} onClick={()=>showPanel('connect')}/></div><div className="workspace-actions"><Button className="quiet-button navbar-toggle" variant="ghost" iconOnly leadingIcon={RiLayoutTopLine} aria-label={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} title={t(navbarCollapsed?'expandNavbar':'collapseNavbar')} aria-expanded={!navbarCollapsed} onClick={()=>setNavbarCollapsed(!navbarCollapsed)}/><Button className="split-button quiet-button" variant="ghost" disabled={opened.length<2} onClick={()=>setSplit(!split)}>{t(split?'single':'split')}</Button><Button className="maximize-button quiet-button" variant="ghost" iconOnly leadingIcon={maximized?RiCollapseDiagonalLine:RiExpandDiagonalLine} aria-label={t(maximized?'restoreWorkspace':'maximizeWorkspace')} title={t(maximized?'restoreWorkspace':'maximizeWorkspace')} aria-pressed={maximized} onClick={()=>setMaximized(!maximized)}/></div></div><div className={cx('terminals',effectiveSplit&&'split')}>{orderedOpened.length?orderedOpened.map(id=>{const instance=instances.find(i=>i.id===id);return instance&&<div key={id} className="terminal-slot" hidden={id!==active&&!(effectiveSplit&&orderedOpened.find(v=>v!==active)===id)}>{instance.online?terminal(instance):<div className="terminal-empty">{t('offline')}</div>}</div>}):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}</div></div>
     </main>
     <Drawer isOpen={drawer} onOpenChange={setDrawer} placement="start"><DrawerHeader title={t('switchInstance')} closeLabel={t('close')}/><DrawerBody><div className="mobile-navigation">{navigation('drawer')}</div></DrawerBody></Drawer>
     <Modal isOpen={panel==='login'} onOpenChange={v=>{if(!v)closePanel()}} size="md" className="auth-modal" overlayClassName="auth-overlay">

@@ -46,7 +46,7 @@ location / {
 | HUB_PASSWORD | admin启动密码覆盖，低于CLI、高于config |
 | HUB_HOME | 默认 ~/.gotty-hub，容器 /data |
 
-GoTTY 需对应 Connector 版本，Hub 功能默认开启，可用 `--hub-disabled` 关闭。凭据默认 `~/.gotty/hub.json`，原子写入 0600；父目录 0700。若 `~/.gotty` 是配置文件，则改用 `~/.gotty-hub.json`。不要复制同一身份同时运行两个实例。轮换需要在线设备完成落盘确认；离线设备应解绑后重新注册。解绑会关闭浏览器流，旧设备不能再连接。
+GoTTY 需对应 Connector 版本，Hub 功能默认开启，可用 `--hub-disabled` 关闭。凭据按监听地址、端口和路径保存在 `~/.gotty/hub/<标识>.json`，原子写入 0600；父目录 0700。若 `~/.gotty` 是配置文件，则改用 `~/.gotty-hub-bindings/<标识>.json`。文件锁阻止本机重复使用同一身份；不要复制凭据到其他设备并同时运行。旧共享文件需核对归属后通过 `--hub-state-file` 显式选择，详见 [迁移说明](WORKSPACE_RECOVERY.md)。轮换需要在线设备完成落盘确认；离线设备应解绑后重新注册。解绑会关闭浏览器流，旧设备不能再连接。
 
 ## 监测与故障处理
 
@@ -100,6 +100,6 @@ sqlite3 /private/backup/hub.db 'PRAGMA integrity_check;'
 4. 回滚先停新版本，使用升级前备份与旧版本配对恢复。不要直接让旧二进制运行新 schema。
 5. `docker buildx build --platform linux/amd64,linux/arm64 ...` 可构建多架构发布；外部 registry 推送独立执行。本次未推送镜像或改动生产。
 
-兼容矩阵：Hub0.2 / Connector协议1 / terminal-core0.2.1 / schema 0001+0002（实例名唯一约束）。未启用 Hub 的 GoTTY 继续独立工作；无 ASR 能力时降级键盘输入。默认限额和状态时序见架构决策。
+兼容矩阵：Hub0.2 / Connector协议1 / terminal-core0.2.2 / schema 0001+0002（实例名唯一约束）。未启用 Hub 的 GoTTY 继续独立工作；无 ASR 能力时降级键盘输入。默认限额和状态时序见架构决策。
 
 管理员、数据路径、单文件引导和在线更新以 [ADMINISTRATION.md](ADMINISTRATION.md) 为准；容器HUB_HOME=/data对应命名卷。

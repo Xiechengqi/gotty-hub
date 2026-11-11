@@ -14,9 +14,9 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
  hub_binary=tmp+'/gotty-hub';shutil.copy2(root/'target/debug/gotty-hub',hub_binary)
  hubport,gottyport,asrport=port(),port(),port()
  hub=f'http://127.0.0.1:{hubport}';gotty=f'http://127.0.0.1:{gottyport}'
- env={**os.environ,'HUB_HOME':tmp+'/home','HUB_PASSWORD':'admin integration password','HUB_ORIGIN':hub,'HUB_LISTEN':f'127.0.0.1:{hubport}','HUB_DATABASE':f'sqlite://{tmp}/hub.db?mode=rwc','HUB_TEST_BINARY':hub_binary,'HUB_TEST_URL':hub,'GOTTY_TEST_URL':gotty,'GOTTY_TEST_STATE':tmp+'/gotty-home/.gotty/hub.json'}
+ env={**os.environ,'HUB_HOME':tmp+'/home','HUB_PASSWORD':'admin integration password','HUB_ORIGIN':hub,'HUB_LISTEN':f'127.0.0.1:{hubport}','HUB_DATABASE':f'sqlite://{tmp}/hub.db?mode=rwc','HUB_TEST_BINARY':hub_binary,'HUB_TEST_URL':hub,'GOTTY_TEST_URL':gotty,'GOTTY_TEST_STATE':tmp+'/gotty-binding.json'}
  env.pop('HUB_DEV',None)
- gotty_env={**env,'HOME':tmp+'/gotty-home'}
+ gotty_env=env
  binary=os.environ.get('GOTTY_BIN','/tmp/gotty-hub-tools/gotty')
  # Older GoTTY builds (Hub opt-in via --hub-enabled) read the ~/.gotty state
  # directory as a config file and cannot restart once bound to a Hub.
@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
    processes.append(subprocess.Popen(['node',str(root/'tests/asr-fixture.cjs'),str(asrport)],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True))
    processes.append(subprocess.Popen([hub_binary,'serve'],cwd=root,env=env,stdout=hlog,stderr=hlog,start_new_session=True))
    wait(hub+'/healthz')
-   processes.append(subprocess.Popen([binary,'--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
+   processes.append(subprocess.Popen([binary,'--config','/dev/null','--hub-state-file',env['GOTTY_TEST_STATE'],'--share-registry-file',tmp+'/shares.json','--share-enabled=false','--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
    wait(gotty)
    subprocess.run(['node',str(root/'tests/smoke.cjs')],cwd=root,env=env,check=True,timeout=120)
    subprocess.run(['node',str(root/'tests/security.cjs')],cwd=root,env=env,check=True,timeout=120)
@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix='gotty-hub-integration-') as tmp:
    stage('rotate')
    subprocess.run(['node',str(root/'tests/admin.cjs')],cwd=root,env=env,check=True,timeout=90)
    observer=watch();os.killpg(processes[2].pid,signal.SIGTERM);processes[2].wait(timeout=5);assert observer.wait(timeout=15)==0
-   processes.append(subprocess.Popen([binary,'--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
+   processes.append(subprocess.Popen([binary,'--config','/dev/null','--hub-state-file',env['GOTTY_TEST_STATE'],'--share-registry-file',tmp+'/shares.json','--share-enabled=false','--address','127.0.0.1','--port',str(gottyport),'--permit-write','--enable-asr','--asr-backend',f'ws://127.0.0.1:{asrport}','bash'],cwd=tmp,env=gotty_env,stdout=glog,stderr=glog,start_new_session=True))
    stage('online')
    observer=watch();os.killpg(processes[1].pid,signal.SIGTERM);processes[1].wait(timeout=5);assert observer.wait(timeout=15)==0
    # Restore an online-backup snapshot after the stopped Hub's WAL is checkpointed.

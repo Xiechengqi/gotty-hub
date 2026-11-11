@@ -51,3 +51,13 @@ it('keeps observer controls local and hides remote write and owner actions',asyn
  expect(node.querySelector('[aria-label="Display settings"]')).not.toBeNull();
  for(const label of ['Clear history','Upload file','Restart GoTTY']) expect(node.querySelector(`[aria-label="${label}"]`)).toBeNull();
 });
+it('refreshes a disconnected terminal by replacing its renderer and connection without touching another pane',async()=>{
+ await act(async()=>root.render(<><RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}}/><RealTerminal id="two" writable visible locale="zh-CN" onManage={()=>{}}/></>));
+ expect(sockets).toHaveLength(2);
+ const first=sockets[0];const second=sockets[1];const original=state.terminals[0];const other=state.terminals[1];
+ const refresh=node.querySelector<HTMLButtonElement>('[aria-label="刷新当前终端"]')!;
+ expect(refresh.disabled).toBe(false);
+ await act(async()=>refresh.click());
+ expect(sockets).toHaveLength(3);expect(first.readyState).toBe(3);expect(second.readyState).toBe(0);
+ expect(original.dispose).toHaveBeenCalledOnce();expect(other.dispose).not.toHaveBeenCalled();expect(state.terminals).toHaveLength(3);
+});

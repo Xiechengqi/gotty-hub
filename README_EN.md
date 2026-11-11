@@ -99,7 +99,7 @@ Connecting requires only the Hub address and username, with no Hub password or v
 
 A green message confirms success and the fields become read-only. Use Edit to change the configuration, Reconnect to reuse the instance identity, or Disconnect to stop the connection while keeping the settings. Hub support is enabled in GoTTY by default, with both HTTP and HTTPS accepted. Use `--hub-disabled` to disable it, or `--hub-allow-http=false` to require HTTPS.
 
-Binding credentials are stored on the GoTTY device in `~/.gotty/hub.json`, or `~/.gotty-hub.json` when `~/.gotty` is a configuration file. GoTTY reuses its existing authentication when a password is configured; otherwise, visitors to the main GoTTY page can manage the binding. Share pages cannot manage Hub configuration.
+Binding credentials are isolated by stable listening address, port and base path in `~/.gotty/hub/<identity>.json`, or `~/.gotty-hub-bindings/<identity>.json` when `~/.gotty` is a configuration file. Concurrent use of one identity file is rejected before starting the command. Legacy shared files are preserved and require explicit selection after ownership is verified; see [migration and workspace validation](docs/WORKSPACE_RECOVERY.md). GoTTY reuses its existing authentication when a password is configured; otherwise, visitors to the main GoTTY page can manage the binding. Share pages cannot manage Hub configuration.
 
 ## Accounts and Permissions
 

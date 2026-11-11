@@ -644,14 +644,16 @@ mod tests {
     fn embedded_and_external_resources_use_identical_snapshots() {
         let home = std::env::temp_dir().join(crate::security::token());
         let embedded = Store::load(&home, None).unwrap();
-        let external = Store::load(
-            &home,
-            Some(Path::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../frontend/dist"
-            ))),
-        )
-        .unwrap();
+        // Allow a compiled test binary to run in an isolated validation host.
+        let assets = std::env::var_os("HUB_TEST_ASSETS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../frontend/dist"
+                ))
+            });
+        let external = Store::load(&home, Some(&assets)).unwrap();
         assert_eq!(embedded.generation, external.generation);
         assert_eq!(embedded.csp, external.csp);
         let html = std::str::from_utf8(&embedded.current["index.html"].data).unwrap();
