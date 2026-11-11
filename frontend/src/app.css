@@ -155,7 +155,11 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-settings-font{inline-size:100%;justify-content:flex-start;min-block-size:44px}
 .terminal-settings-font>span{display:flex;flex:1;min-inline-size:0;justify-content:space-between;gap:8px}
 .terminal-settings-font[aria-pressed=true],.terminal-settings-themes [aria-pressed=true]{border-color:var(--color-border-focus-ring);background:var(--color-background-tertiary-default)}
-.terminal-settings-preview{padding:16px;border-radius:8px;overflow-x:auto;white-space:pre;line-height:1.5;border:1px solid var(--color-separator-border)}
+.terminal-settings-preview{padding:16px;border-radius:8px;min-inline-size:0;border:1px solid var(--color-separator-border)}
+.terminal-preview-host{overflow-x:auto;min-inline-size:0}
+/* Match standalone xterm's DOM fallback as well as its canvas renderer. */
+.xterm-host,.terminal-preview-host{-webkit-font-smoothing:auto;-moz-osx-font-smoothing:auto}
+.terminal-font-notice{flex-shrink:0;padding:4px 8px;background:var(--color-background-secondary-default)}
 @media(max-width:767px){.terminal-settings-overlay{padding:8px}.terminal-settings-dialog{max-block-size:calc(var(--hub-viewport-height,100dvh) - 16px)}.terminal-toolbar{block-size:284px}.terminal-toolbar .terminal-control{min-inline-size:44px;min-block-size:44px}.terminal-toolbar .terminal-control svg{inline-size:18px;block-size:18px}.terminal-reconnect-control{inset-block-start:44px}.terminal-clear-control{inset-block-start:88px}.terminal-upload-control{inset-block-start:132px}.terminal-hub-control{inset-block-start:176px}.terminal-restart-control{inset-block-start:236px}.terminal-state{inset-block-start:300px}.terminal-settings-dialog button{min-block-size:44px}}
 @media(max-width:767px){.terminal-settings-swatch{inline-size:24px}.terminal-settings-themes button>span{gap:4px}}
 @media(max-width:359px){.terminal-settings-themes{grid-template-columns:minmax(0,1fr)}}

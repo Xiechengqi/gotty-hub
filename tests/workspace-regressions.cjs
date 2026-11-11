@@ -122,6 +122,10 @@ function installInspection() {
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  if(process.env.WORKSPACE_SUITE==='rendering'){
+    await require('./rendering-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   if(process.env.WORKSPACE_SUITE==='split'){
     await api('/me/terminal-settings',{revision:0,settings:{schemaVersion:1,theme:'paper',fontSize:24,fontId:'fira-code'}},'PUT');
     await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
@@ -136,7 +140,7 @@ function installInspection() {
     return dialog;
   }
   const fontLoaded=(target,family)=>target.evaluate(family=>[...document.fonts].some(font=>font.family.replace(/^['"]|['"]$/g,'')===family&&font.status==='loaded'),family);
-  await wait(()=>fontLoaded(page,'Source Code Pro'),'embedded default font');
+  await wait(()=>fontLoaded(page,'DejaVu Sans Mono'),'embedded default font');
   async function verifyFontMetrics(index) {
     await wait(()=>page.evaluate(index=>{
       const term=window.reviewTerm(index);if(!term)return false;
@@ -145,7 +149,7 @@ function installInspection() {
     },index),'loaded font cell metrics');
   }
   await verifyFontMetrics(1);
-  assert(fontRequests.every(url=>url.includes('source-code-pro')), 'unselected fonts downloaded at startup');
+  assert(fontRequests.every(url=>url.includes('dejavu-sans-mono')), 'unselected fonts downloaded at startup');
   assert.equal(await page.locator('.terminal-display-control').count(),0);
   let dialog=await settingsDialog();
   await page.screenshot({path:path.join(dir,'terminal-settings-desktop.png')});
@@ -156,6 +160,8 @@ function installInspection() {
   await dialog.getByRole('button',{name:'24px',exact:true}).click();
   await dialog.getByRole('button',{name:/柔和米色$/}).click();
   assert.equal(await dialog.locator('.terminal-settings-preview').evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(245, 245, 213)');
+  await dialog.locator('.terminal-preview-host[data-font-status="ready"] .xterm-screen').waitFor();
+  assert.equal(await dialog.locator('.terminal-preview-host').getAttribute('data-font-applied'),"'Fira Code', monospace");
   const originalCount=await page.evaluate(()=>{window.settingsOriginal=window.reviewTerm();window.settingsOther=window.reviewTerm(1);return window.reviewSockets.length;});
   await dialog.getByRole('button',{name:'保存并应用',exact:true}).click(); await dialog.waitFor({state:'hidden'});
   await wait(()=>page.evaluate(()=>window.reviewTerm()?.options.fontSize===24&&window.reviewTerm()?.options.fontFamily.includes('Fira Code')),'account settings applied');
@@ -300,12 +306,12 @@ function installInspection() {
   await wait(()=>fontLoaded(direct,'JetBrains Mono'),'standalone font cached reload');assert.deepEqual(directFontRequests,[]);
   assert.deepEqual(await standaloneBackground(),Array(3).fill('rgb(245, 245, 213)'),'standalone Paper background lost on reload');
   for(const width of [1280,320,375]){await direct.setViewportSize({width,height:800});await sleep(150);await direct.screenshot({path:path.join(dir,`paper-standalone-${width}.png`)});}
-  const fontURL=fontRequests.find(url=>url.includes('source-code-pro'));
+  const fontURL=fontRequests.find(url=>url.includes('dejavu-sans-mono'));
   const fontResponse=await page.request.get(fontURL);assert.match(fontResponse.headers()['cache-control'],/immutable/);assert.match(fontResponse.headers()['content-type'],/font\/woff2/);
   await direct.close(); await page.bringToFront();
   const noStorageContext=await browser.newContext();const noStorage=await noStorageContext.newPage();noStorage.on('pageerror',error=>errors.push(error.stack));
   await noStorage.addInitScript(()=>Object.defineProperty(window,'indexedDB',{get(){throw new DOMException('Storage denied','SecurityError');}}));
-  await noStorage.goto(directURL,{waitUntil:'domcontentloaded'});await wait(()=>fontLoaded(noStorage,'Source Code Pro'),'font loading without IndexedDB');
+  await noStorage.goto(directURL,{waitUntil:'domcontentloaded'});await wait(()=>fontLoaded(noStorage,'DejaVu Sans Mono'),'font loading without IndexedDB');
   await noStorage.locator('#gotty-theme-btn').click();await noStorage.locator('.font-family-item').filter({hasText:'Fira Code'}).click();await wait(()=>fontLoaded(noStorage,'Fira Code'),'optional font without IndexedDB');await noStorageContext.close();
   report('standaloneGoTTY', {vimSaved: true, replayRepliesSuppressed: true,cachedFontReload:true,storageDeniedFallback:true,paperPersisted:true,outerBackgroundMatches:true});
   await page.evaluate(() => {window.reviewOriginal = window.reviewTerm(); window.reviewOther = window.reviewTerm(1);});

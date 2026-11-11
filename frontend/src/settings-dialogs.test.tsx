@@ -6,6 +6,7 @@ import {afterEach,beforeAll,expect,it,vi} from 'vitest';
 const calls:{path:string;body:unknown;method?:string}[]=[];
 // No instance is online here, so keep xterm.js (and its canvas probe) out of jsdom.
 vi.mock('./terminal/Terminal',()=>({RealTerminal:()=>null}));
+vi.mock('./terminal/TerminalPreview',()=>({TerminalPreview:()=>null}));
 const admin=vi.hoisted(()=>({value:true}));
 vi.mock('./api',async importOriginal=>({...await importOriginal<typeof import('./api')>(),api:vi.fn(async(path:string,body?:unknown,method?:string)=>{
   calls.push({path,body,method});

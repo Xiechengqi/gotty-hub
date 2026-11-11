@@ -41,7 +41,7 @@ Each instance represents GoTTY's current shared PTY. Multiple browsers can use t
 - Split view pairs two named instances with left/right and active-pane labels. Choose either instance, swap sides, or resize with a pointer or keyboard. Sorting preserves the pair; reloads restore the layout, and narrow screens temporarily show one terminal.
 - Mouse dragging, touch-and-hold, and keyboard sorting in the sidebar and tab bar, with synchronized order saved to user preferences.
 - Status colors synchronized with GoTTY: red for active viewing, yellow for new output while not being viewed, green for output that has stopped but remains unread, and gray for no unread output. Offline instances use a separate icon.
-- xterm.js terminals with Nord, bundled Source Code Pro, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account, including the soft beige Paper theme (`#f5f5d5`).
+- xterm.js terminals with Nord, bundled DejaVu Sans Mono, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account, including the soft beige Paper theme (`#f5f5d5`).
 - Additional open-source fonts load from Hub on demand and persist in the browser across reloads. Cursor and scrollback options still come from GoTTY.
 - A terminal toolbar for connection counts, refreshing the current terminal, clearing history, file uploads, and authorized remote restart and share management. Restart uses a power icon and requires confirmation.
 - The same two-row, 16-key mobile keyboard as GoTTY when the software keyboard opens, with one-shot Ctrl / Alt / Shift and repeating navigation keys.

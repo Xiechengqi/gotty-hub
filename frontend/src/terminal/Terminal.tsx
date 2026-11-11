@@ -7,7 +7,7 @@ import {ImageAddon} from '@xterm/addon-image';
 import {WebglAddon} from '@xterm/addon-webgl';
 import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-core';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
-import {defaultDisplayOptions, displayOptions, NORD_THEME, BUILTIN_THEMES, DEFAULT_FONT_FAMILY, type Appearance} from '@gotty/terminal-core/appearance';
+import {defaultDisplayOptions, displayOptions, NORD_THEME, BUILTIN_THEMES, type Appearance} from '@gotty/terminal-core/appearance';
 import {RiDeleteBinLine, RiShutDownLine, RiRefreshLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
 import {Button} from '@/components/base/buttons/button';
 import {Input} from '@/components/base/input/input';
@@ -16,7 +16,8 @@ import {api} from '../api';
 import {terminalMessage} from './messages';
 import {createTransfer, TransferModal, FILE_LIMIT, type Transfer} from './Transfer';
 import {readAppearance, type TerminalConfig} from './appearance';
-import {applyLoadedFont, ensureFont, fontIdForFamily} from '@gotty/terminal-core/fonts';
+import {applyTerminalFont, fontDiagnostics, type FontApplication} from '@gotty/terminal-core/font-rendering';
+import {FontStatus} from './FontStatus';
 import {settingsAppearance, type TerminalSettings} from './settings';
 import {ShareManager, type Control} from './ShareManager';
 import {HubConnection} from './connection';
@@ -53,6 +54,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const [upload, setUpload] = useState<{name: string; progress: number; done?: boolean}>();
   const [dragging, setDragging] = useState(false);
   const [colors, setColors] = useState({background: NORD_THEME.background, foreground: NORD_THEME.foreground});
+  const [fontStatus, setFontStatus] = useState<FontApplication>();
   const [apiRunning, setAPIRunning] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [refreshConfirm, setRefreshConfirm] = useState(false);
@@ -77,16 +79,14 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const applyAppearance = useCallback((term: Xterm, measure: () => void) => {
     const epoch = ++appearanceEpoch.current;
     const options = displayOptions(preferences.current, BUILTIN_THEMES, appearanceRef.current);
-    Object.assign(term.options, options);
+    const {fontFamily, ...display} = options;
+    Object.assign(term.options, display);
     setColors({background: options.theme.background, foreground: options.theme.foreground});
     reportAppearance.current?.({theme: appearanceRef.current.theme || 'nord', fontSize: options.fontSize, fontFamily: options.fontFamily});
     measure();
-    const font = fontIdForFamily(options.fontFamily);
-    const current = () => aliveTerm.current === term && appearanceEpoch.current === epoch;
-    if (font) void ensureFont(font).then(() => {if (current()) {applyLoadedFont(term.options, options.fontFamily); measure();}}).catch(() => {
-      if (!current()) return;
-      void ensureFont('source-code-pro').then(() => {if (current()) {applyLoadedFont(term.options, DEFAULT_FONT_FAMILY); measure();}}).catch(() => {});
-    });
+    void applyTerminalFont({options: term.options, family: fontFamily,
+      isCurrent: () => aliveTerm.current === term && appearanceEpoch.current === epoch,
+      onChange: state => {fontDiagnostics(host.current, state); setFontStatus(state);}, onApplied: measure});
   }, []);
   useEffect(() => {const value = controller.current; if (value) applyAppearance(value.term, value.measure);}, [settings, applyAppearance]);
 
@@ -95,14 +95,19 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     let disposed = false;
     let replaying = false;
     refreshPending.current = false;
-    const term = new Xterm({...defaultDisplayOptions(), allowProposedApi: true, disableStdin: !writable});
+    const term = new Xterm({...defaultDisplayOptions(), fontFamily: 'monospace', allowProposedApi: true, disableStdin: !writable});
     aliveTerm.current = term;
     const fit = new FitAddon();
     term.loadAddon(fit); term.loadAddon(new WebLinksAddon()); term.loadAddon(new Unicode11Addon()); term.unicode.activeVersion = '11';
     try {term.loadAddon(new ImageAddon());} catch { /* Text renderer remains usable. */ }
     term.open(host.current); term.textarea?.setAttribute('autocomplete', 'off');
     setTerminal(term);
-    try {const webgl = new WebglAddon(); webgl.onContextLoss(() => webgl.dispose()); term.loadAddon(webgl);} catch { /* WebGL is optional. */ }
+    const element = host.current;
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {webgl.dispose(); element.dataset.terminalRenderer = 'dom';});
+      term.loadAddon(webgl); element.dataset.terminalRenderer = 'webgl';
+    } catch {element.dataset.terminalRenderer = 'dom';}
     let input: (data: string | Uint8Array) => void = () => {};
     let resize: (cols: number, rows: number) => void = () => {};
     let requestedSize: {cols: number; rows: number} | undefined;
@@ -267,6 +272,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     onDragLeave={event => {if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false);}}
     onDrop={event => {setDragging(false); if (writable && files && connected) {event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void startUpload(file);}}}>
     <div ref={host} className="xterm-host" dir="ltr"/>
+    {fontStatus?.status === 'fallback' && <div className="terminal-font-notice"><FontStatus value={fontStatus} locale={locale}/></div>}
     <div className="terminal-toolbar" role="toolbar" aria-label={named(zh ? 'GoTTY 终端工具' : 'GoTTY terminal controls')}>
       <ShareManager open={shareOpen} onOpenChange={setShareOpen} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={named(zh ? '连接数 / 分享管理' : 'Connections / Share manager')} aria-label={named(`${zh ? '连接数' : 'Connections'}: ${count}`)} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
       {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={named(zh ? '清理历史' : 'Clear history')} aria-label={named(zh ? '清理历史' : 'Clear history')} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}

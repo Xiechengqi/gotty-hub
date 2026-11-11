@@ -15,3 +15,10 @@ it('migrates known legacy values and validates safe catalog choices', () => {
   expect(validSettings({...DEFAULT_SETTINGS, fontSize: 8.5})).toBe(false);
   expect(validSettings({...DEFAULT_SETTINGS, theme: 'toString'})).toBe(false);
 });
+it('uses the new default only when no explicit font preference was saved', () => {
+  expect(migrateAppearance().fontId).toBe('dejavu-sans-mono');
+  expect(migrateAppearance({fontFamily: "'Source Code Pro', monospace"}).fontId).toBe('source-code-pro');
+  const settings = {...DEFAULT_SETTINGS, fontId: 'source-code-pro'};
+  rememberSettings('existing', {revision: 3, settings});
+  expect(cachedSettings('existing').settings).toEqual(settings);
+});

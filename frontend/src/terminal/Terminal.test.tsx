@@ -3,6 +3,10 @@ import {createRoot} from 'react-dom/client';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {RealTerminal} from './Terminal';
 const state=vi.hoisted(()=>({terminals:[] as any[],geometry:{cols:80,rows:24}}));
+vi.mock('@gotty/terminal-core/fonts',async original=>{
+ const actual=await original<typeof import('@gotty/terminal-core/fonts')>();
+ return {...actual,ensureFont:vi.fn(async(id:string)=>({fontFamily:actual.fontById(id)!.value,cached:true}))};
+});
 vi.mock('@xterm/xterm',()=>({Terminal:class {
  options:any;cols=80;rows=24;unicode={activeVersion:'6'};textarea=document.createElement('textarea');
  parser={registerOscHandler:()=>({dispose(){}})};clear=vi.fn();focus=vi.fn(()=>this.textarea.focus());dispose=vi.fn();write=vi.fn((_data:any,callback?:()=>void)=>callback?.());reset=vi.fn();scrollToBottom=vi.fn();resize=vi.fn((cols:number,rows:number)=>{this.cols=cols;this.rows=rows;});
@@ -38,7 +42,7 @@ it('applies wire preferences and renders GoTTY controls with real WebTTY dispatc
   sockets[0].onmessage({data:'4'+JSON.stringify({'font-size':20,'scrollback-lines':900,'hub-config':{restart_mode:'exec',mobile_keys:false,themes:{nord:{background:'#2e3440',foreground:'#d8dee9'}}}})});
   sockets[0].onmessage({data:'73'});
  });
- expect(state.terminals[0].options).toMatchObject({fontSize:20,scrollback:900,fontFamily:"'Source Code Pro', monospace"});
+ expect(state.terminals[0].options).toMatchObject({fontSize:20,scrollback:900,fontFamily:"'DejaVu Sans Mono', monospace"});
  expect(node.querySelector<HTMLElement>('.real-terminal')?.style.getPropertyValue('--color-terminal-background')).toBe('#2e3440');
  for(const label of ['清理历史','上传文件','重启 GoTTY','Hub 实例设置']) expect(node.querySelector(`button[aria-label="${label} · one"]`)).not.toBeNull();
  expect(node.querySelector('[aria-label="连接数: 3 · one"]')).not.toBeNull();

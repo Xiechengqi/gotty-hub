@@ -13,7 +13,7 @@ afterEach(()=>{connections.splice(0).forEach(connection=>connection.close());vi.
 function connection(writable=true,owner=true,controls=true){const value=new HubConnection('id-1',writable,owner,controls,()=>true,()=>true);value.ticket='ticket';connections.push(value);return value;}
 it('matches GoTTY display defaults and retains remote terminal metrics',()=>{
  const value=displayOptions({'font-size':20,'scrollback-lines':800,'cursor-style':'bar'},{nord:NORD_THEME},{});
- expect(value).toMatchObject({fontSize:20,fontFamily:"'Source Code Pro', monospace",scrollback:800,cursorStyle:'bar',theme:NORD_THEME});
+ expect(value).toMatchObject({fontSize:20,fontFamily:"'DejaVu Sans Mono', monospace",scrollback:800,cursorStyle:'bar',theme:NORD_THEME});
 });
 it('isolates saved display choices between split terminals and tolerates damaged storage',()=>{
  saveAppearance('a',{theme:'light',fontSize:24});saveAppearance('b',{theme:'nord',fontSize:12});
