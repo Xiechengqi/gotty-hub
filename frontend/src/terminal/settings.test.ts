@@ -2,8 +2,9 @@ import {beforeEach, expect, it} from 'vitest';
 import {cachedSettings, DEFAULT_SETTINGS, migrateAppearance, parseSnapshot, rememberSettings, validSettings} from './settings';
 beforeEach(() => localStorage.clear());
 it('isolates account snapshots and rejects corrupt browser data', () => {
-  rememberSettings('first', {revision: 2, settings: {...DEFAULT_SETTINGS, fontSize: 20}});
+  rememberSettings('first', {revision: 2, settings: {...DEFAULT_SETTINGS, theme: 'paper', fontSize: 20}});
   expect(cachedSettings('first').settings?.fontSize).toBe(20);
+  expect(cachedSettings('first').settings?.theme).toBe('paper');
   expect(cachedSettings('second')).toEqual({revision: 0, settings: null});
   expect(parseSnapshot({revision: -1, settings: DEFAULT_SETTINGS}).settings).toBeNull();
   expect(parseSnapshot({revision: 2, settings: {...DEFAULT_SETTINGS, fontId: 'unknown'}}).settings).toBeNull();

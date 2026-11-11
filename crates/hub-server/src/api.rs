@@ -662,7 +662,7 @@ mod tests {
                 .unwrap()
         };
         let path = "/api/v1/me/terminal-settings";
-        let settings = json!({"revision":0,"settings":{"schemaVersion":1,"theme":"nord","fontSize":18,"fontId":"fira-code"}});
+        let settings = json!({"revision":0,"settings":{"schemaVersion":1,"theme":"paper","fontSize":18,"fontId":"fira-code"}});
         let response = routes
             .clone()
             .oneshot(request(
@@ -721,6 +721,17 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         changed["settings"]["fontSize"] = json!(20);
+        changed["settings"]["theme"] = json!("unknown-theme");
+        assert_eq!(
+            routes
+                .clone()
+                .oneshot(request("first-session", path, Some(changed.clone()), true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        changed["settings"]["theme"] = json!("paper");
         changed["settings"]["fontId"] = json!("external-font");
         assert_eq!(
             routes

@@ -62,12 +62,14 @@ it('refreshes a disconnected terminal by replacing its renderer and connection w
 });
 
 it('applies account appearance without replacing either terminal or socket',async()=>{
- const render=(fontSize:number)=>root.render(<RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}} settings={{schemaVersion:1,theme:'light',fontSize,fontId:'monospace'}}/>);
+ const render=(fontSize:number,theme='light')=>root.render(<RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}} settings={{schemaVersion:1,theme,fontSize,fontId:'monospace'}}/>);
  await act(async()=>render(18));
  const term=state.terminals[0],socket=sockets[0];
  expect(term.options).toMatchObject({fontSize:18,fontFamily:'monospace',theme:{background:'#fafafa'}});
- await act(async()=>render(24));
+ await act(async()=>render(24,'paper'));
  expect(state.terminals).toHaveLength(1);expect(sockets).toHaveLength(1);expect(sockets[0]).toBe(socket);
  expect(term.dispose).not.toHaveBeenCalled();expect(term.options.fontSize).toBe(24);
+ expect(term.options.theme).toMatchObject({background:'#f5f5d5',foreground:'#333333',selectionBackground:'#d7ddbd'});
+ expect(node.querySelector<HTMLElement>('.real-terminal')?.style.getPropertyValue('--color-terminal-background')).toBe('#f5f5d5');
  expect(node.querySelector('[aria-label="显示设置"]')).toBeNull();
 });

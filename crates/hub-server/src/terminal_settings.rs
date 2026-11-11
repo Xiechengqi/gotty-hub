@@ -26,6 +26,7 @@ impl Settings {
                 "dracula",
                 "solarized-dark",
                 "monokai",
+                "paper",
                 "light",
             ]
             .contains(&self.theme.as_str())

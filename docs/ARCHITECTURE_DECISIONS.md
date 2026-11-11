@@ -8,7 +8,7 @@
 
 ## ADR-002：共享现有 webtty 与语音核心
 
-`gotty/js/packages/terminal-core` 是 GoTTY 原有 WebTTY、VoiceInput、显示偏好翻译/默认值、移动快捷键布局与编码、软件键盘视口检测的源代码归属；GoTTY 原路径仅重新导出。Hub 固定消费 `frontend/vendor/gotty-terminal-core-0.3.0.tgz`，npm lock 校验内容，独立检出不依赖相邻目录。发布新内容必须提升版本，不能替换已经对外发布的同版本 tarball。
+`gotty/js/packages/terminal-core` 是 GoTTY 原有 WebTTY、VoiceInput、显示偏好翻译/默认值、移动快捷键布局与编码、软件键盘视口检测的源代码归属；GoTTY 原路径仅重新导出。Hub 固定消费 `frontend/vendor/gotty-terminal-core-0.3.1.tgz`，npm lock 校验内容，独立检出不依赖相邻目录。发布新内容必须提升版本，不能替换已经对外发布的同版本 tarball。
 
 Hub 使用 React xterm 适配器，未嵌入远程 GoTTY 网页。文件支持原有WebTTY `7`消息的原生上传（包括拖放），也支持同一终端通道中的ZMODEM，后者上传需rz、下载需sz；文件权限继续由Hub角色及GoTTY PermitWrite双重校验。语音录音、采样与转写合并逻辑复用 GoTTY VoiceInput，增加初始化/传输注入接口。
 

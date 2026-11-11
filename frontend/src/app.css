@@ -62,6 +62,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-slot{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .terminal-slot[hidden]{display:none}
 .real-terminal{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;background:var(--color-terminal-background);color:var(--color-terminal-foreground)}
+.real-terminal .xterm .xterm-viewport{background:var(--color-terminal-background)}
 .xterm-host{position:relative;flex:1;min-height:0;overflow:hidden}
 .terminal-message{position:absolute;inset-block-start:12px;inset-inline-start:12px;padding:8px;background:var(--color-background-secondary-default);color:var(--color-text-secondary);z-index:1}
 

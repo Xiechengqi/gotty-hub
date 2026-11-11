@@ -58,7 +58,7 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
       {(error || loadError) && <p role="alert" className="text-text-error-primary">{error || errorText(loadError, locale)}</p>}
       <section className="flex flex-col gap-2"><h3 className="text-body-medium text-text-primary">{zh ? '配色主题' : 'Color theme'}</h3>
         <div className="terminal-settings-themes">{Object.entries(BUILTIN_THEMES).map(([name, theme]) => <Button key={name} variant="secondary" disabled={saving} aria-pressed={draft.theme === name} onClick={() => setDraft(value => ({...value, theme: name}))} trailingIcon={draft.theme === name ? RiCheckLine : undefined}>
-          <span className="terminal-settings-swatch" style={{background: theme.background, color: theme.foreground}}>Aa</span>{themeLabel(name)}
+          <span className="terminal-settings-swatch" style={{background: theme.background, color: theme.foreground}}>Aa</span>{themeLabel(name, locale)}
         </Button>)}</div>
       </section>
       <section className="flex flex-col gap-2"><Input label={zh ? '文字大小（8–48px）' : 'Text size (8–48px)'} aria-label={zh ? '文字大小（px）' : 'Text size (px)'} type="number" inputMode="numeric" isDisabled={saving} value={String(draft.fontSize)} onChange={value => setDraft(previous => ({...previous, fontSize: Number(value)}))}/>
@@ -72,6 +72,7 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
       <section className="flex flex-col gap-2"><h3 className="text-body-medium text-text-primary">{zh ? '预览' : 'Preview'}</h3>
         <div className="terminal-settings-preview" dir="ltr" style={{background: colors.background, color: colors.foreground, fontSize: `${validSettings(draft) ? draft.fontSize : 14}px`, fontFamily: fontById(previewFont)?.value} as CSSProperties}>
           <div>$ printf 'Hello, GoTTY Hub!'</div><div>Hello, GoTTY Hub! 中文 λ →</div><div>┌──────────────┐</div><div>│ 0123456789 Aa │</div><div>└──────────────┘</div>
+          <div><span style={{color: colors.red}}>{zh ? '错误' : 'Error'}</span>{'  '}<span style={{color: colors.yellow}}>{zh ? '警告' : 'Warning'}</span>{'  '}<span style={{color: colors.green}}>{zh ? '成功' : 'Success'}</span>{'  '}<span style={{color: colors.blue}}>{zh ? '信息' : 'Info'}</span></div>
         </div>
       </section>
     </div></ModalBody>

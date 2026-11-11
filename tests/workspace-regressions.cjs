@@ -149,18 +149,24 @@ function installInspection() {
   await dialog.getByRole('button',{name:/^Fira Code/}).click();
   await wait(()=>fontLoaded(page,'Fira Code'),'on-demand Fira Code');
   await dialog.getByRole('button',{name:'24px',exact:true}).click();
-  await dialog.getByRole('button',{name:/Light$/}).click();
+  await dialog.getByRole('button',{name:/柔和米色$/}).click();
+  assert.equal(await dialog.locator('.terminal-settings-preview').evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(245, 245, 213)');
   const originalCount=await page.evaluate(()=>{window.settingsOriginal=window.reviewTerm();window.settingsOther=window.reviewTerm(1);return window.reviewSockets.length;});
   await dialog.getByRole('button',{name:'保存并应用',exact:true}).click(); await dialog.waitFor({state:'hidden'});
   await wait(()=>page.evaluate(()=>window.reviewTerm()?.options.fontSize===24&&window.reviewTerm()?.options.fontFamily.includes('Fira Code')),'account settings applied');
   assert(await page.evaluate(()=>window.reviewTerm()===window.settingsOriginal&&window.reviewTerm(1)===window.settingsOther));
   assert.equal(await page.evaluate(()=>window.reviewSockets.length),originalCount);
+  assert(await page.evaluate(()=>[0,1].every(index=>window.reviewTerm(index).options.theme.background==='#f5f5d5')));
+  assert.equal(await page.locator('.real-terminal').first().evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(245, 245, 213)');
+  assert.equal(await page.locator('.real-terminal .xterm-viewport').first().evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(245, 245, 213)');
+  assert.equal((await api('/me/terminal-settings')).settings.theme,'paper');
   assert.equal((await api('/me/terminal-settings')).settings.fontId,'fira-code');
   await sleep(800);assert.equal((await api('/me/terminal-settings')).settings.fontSize,24,'layout autosave erased terminal settings');
   await page.route('**/*.woff2',route=>route.abort());
   const requestsBeforeReload=fontRequests.length;
   await page.reload({waitUntil:'domcontentloaded'});await ready();
   await wait(()=>fontLoaded(page,'Fira Code'),'font restored from IndexedDB');await sleep(150);
+  assert.equal(await page.evaluate(()=>window.reviewTerm().options.theme.background),'#f5f5d5','Paper theme lost after reload');
   assert.equal(fontRequests.length,requestsBeforeReload,'reload fetched font bytes instead of using IndexedDB');
   await page.unroute('**/*.woff2');
   await verifyFontMetrics(0);
@@ -203,13 +209,33 @@ function installInspection() {
   const second=await context.newPage();await second.goto(hub,{waitUntil:'domcontentloaded'});
   await wait(async()=>await second.evaluate(()=>window.reviewTerm()?.options.fontSize===24 && window.reviewSnapshot()?.text.includes('bash-')) && await second.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isEnabled(),'second tab settings');
   let secondDialog=await settingsDialog(second);await secondDialog.getByRole('button',{name:'20px',exact:true}).click();
+  await secondDialog.getByRole('button',{name:/Light$/}).click();
   await secondDialog.getByRole('button',{name:'保存并应用',exact:true}).click();await secondDialog.waitFor({state:'hidden'});
   await wait(()=>page.evaluate(()=>window.reviewTerm()?.options.fontSize===20),'settings storage-event synchronization');
+  await wait(()=>page.evaluate(()=>window.reviewTerm()?.options.theme.background==='#fafafa'),'theme storage-event synchronization');
   await second.close();await page.bringToFront();
   dialog=await settingsDialog();await dialog.getByRole('button',{name:'24px',exact:true}).click();
+  await dialog.getByRole('button',{name:/柔和米色$/}).click();
   await dialog.getByRole('button',{name:'保存并应用',exact:true}).click();await dialog.waitFor({state:'hidden'});
   await page.screenshot({path:path.join(dir,'terminal-settings-applied.png')});
-  report('terminalSettings',{accountWide:true,legacyMigration:true,noReconnect:true,cachedReloadWithoutNetwork:true,corruptCacheRecovered:true,correctFontMetrics:true,allBundledFontsLoaded:true,failedDownloadRetry:true,failedSavePreserved:true,conflictRecovery:true,crossTab:true});
+  report('terminalSettings',{accountWide:true,legacyMigration:true,noReconnect:true,cachedReloadWithoutNetwork:true,corruptCacheRecovered:true,correctFontMetrics:true,allBundledFontsLoaded:true,failedDownloadRetry:true,failedSavePreserved:true,conflictRecovery:true,crossTab:true,paperTheme:true});
+  await command("printf '\\033[0m\\033[31mPAPER_RED\\033[0m \\033[38;5;196mPAPER_256\\033[0m \\033[38;2;18;52;86mPAPER_RGB\\033[0m \\033[48;2;18;52;86mPAPER_BG\\033[0m\\n'");
+  await wait(()=>page.evaluate(()=>{
+    const term=window.reviewTerm(),buffer=term.buffer.active;
+    for(let i=buffer.length-1;i>=0;i--){const line=buffer.getLine(i);if(line?.translateToString(true).startsWith('PAPER_RED PAPER_256'))return true;}
+    return false;
+  }),'Paper ANSI output');
+  const paperColors=await page.evaluate(()=>{
+    const term=window.reviewTerm(),buffer=term.buffer.active;
+    let line;for(let i=buffer.length-1;i>=0;i--){const current=buffer.getLine(i);if(current?.translateToString(true).startsWith('PAPER_RED PAPER_256')){line=current;break;}}
+    const text=line.translateToString(true),red=line.getCell(0),indexed=line.getCell(text.indexOf('PAPER_256')),rgb=line.getCell(text.indexOf('PAPER_RGB')),background=line.getCell(text.indexOf('PAPER_BG'));
+    return {red:red.isFgPalette()&&red.getFgColor()===1,indexed:indexed.isFgPalette()&&indexed.getFgColor()===196,rgb:rgb.isFgRGB()&&rgb.getFgColor()===0x123456,background:background.isBgRGB()&&background.getBgColor()===0x123456,reset:line.getCell(text.indexOf(' ')).isBgDefault(),theme:term.options.theme};
+  });
+  for(const name of ['red','indexed','rgb','background','reset'])assert.equal(paperColors[name],true,name+' color semantics changed');
+  assert.equal(paperColors.theme.cursor,'#5f6b53');assert.equal(paperColors.theme.selectionBackground,'#d7ddbd');
+  await page.evaluate(()=>{const term=window.reviewTerm();term.select(0,term.buffer.active.cursorY+term.buffer.active.baseY-1,9);});
+  await page.screenshot({path:path.join(dir,'paper-terminal-desktop.png')});await page.evaluate(()=>window.reviewTerm().clearSelection());
+  report('paperColors',{ansi16:true,indexed256Preserved:true,trueColorPreserved:true,explicitBackgroundPreserved:true,cursorAndSelection:true});
   const restart=page.locator('.terminal-slot:not([hidden]) .terminal-restart-control');
   const beforeRestart=controlActions.length;await restart.click();
   const confirmation=page.getByRole('alertdialog');await confirmation.waitFor();
@@ -223,6 +249,7 @@ function installInspection() {
   const file = path.join(dir, 'vim.txt');
   await command(`vim -Nu NONE -n -i NONE '${file}'`);
   await wait(async () => {const s = await snapshot(); return s?.type === 'alternate' && s.pending === 0;}, 'Vim parser');
+  await page.screenshot({path:path.join(dir,'paper-vim-hub.png')});
   await page.keyboard.press('i'); await page.keyboard.insertText('vim-insert-中文🙂'); await page.keyboard.press('Escape'); await page.keyboard.type(':wq'); await page.keyboard.press('Enter');
   await wait(async () => fs.existsSync(file) && (await snapshot())?.type === 'normal' && (await snapshot())?.pending === 0, 'Vim saved and screen recovered');
   assert.equal(fs.readFileSync(file, 'utf8'), 'vim-insert-中文🙂\n');
@@ -242,10 +269,14 @@ function installInspection() {
   });
   await direct.goto(directURL, {waitUntil: 'domcontentloaded'});
   await wait(() => directReceived.join('').includes('bash-'), 'direct GoTTY terminal');
+  await direct.locator('#gotty-theme-btn').click();
+  await direct.locator('.theme-item').filter({hasText:'Paper'}).click();
+  await direct.locator('#gotty-theme-btn').click();
   await direct.locator('.xterm-helper-textarea').focus();
   const directFile = path.join(dir, 'vim-direct.txt');
   await direct.keyboard.type(`vim -Nu NONE -n -i NONE '${directFile}'`); await direct.keyboard.press('Enter');
   await wait(() => directReceived.join('').includes('[?1049h'), 'direct Vim entry'); await sleep(250);
+  await direct.screenshot({path:path.join(dir,'paper-vim-standalone.png')});
   await direct.keyboard.press('i'); await direct.keyboard.insertText('direct-中文'); await direct.keyboard.press('Escape'); await direct.keyboard.type(':wq'); await direct.keyboard.press('Enter');
   await wait(() => fs.existsSync(directFile), 'direct Vim save'); assert.equal(fs.readFileSync(directFile, 'utf8'), 'direct-中文\n');
   directSent.length = 0; directReceived.length = 0;
@@ -255,9 +286,15 @@ function installInspection() {
   await direct.locator('.font-family-item').filter({hasText:'JetBrains Mono'}).click();
   await wait(()=>fontLoaded(direct,'JetBrains Mono'),'standalone downloadable font');
   await wait(()=>direct.evaluate(()=>localStorage.getItem('gotty-font-family')==="'JetBrains Mono', monospace"),'standalone font saved');
+  await direct.locator('.theme-item').filter({hasText:'Paper'}).click();
+  const standaloneBackground=()=>direct.evaluate(()=>['body','#terminal','.xterm-viewport'].map(selector=>getComputedStyle(document.querySelector(selector)).backgroundColor));
+  assert.deepEqual(await standaloneBackground(),Array(3).fill('rgb(245, 245, 213)'));
+  assert.equal(await direct.evaluate(()=>localStorage.getItem('gotty-theme')),'paper');
   const directFontRequests=[];direct.on('request',request=>{if(request.url().endsWith('.woff2'))directFontRequests.push(request.url());});
   await direct.route('**/*.woff2',route=>route.abort());await direct.reload({waitUntil:'domcontentloaded'});
   await wait(()=>fontLoaded(direct,'JetBrains Mono'),'standalone font cached reload');assert.deepEqual(directFontRequests,[]);
+  assert.deepEqual(await standaloneBackground(),Array(3).fill('rgb(245, 245, 213)'),'standalone Paper background lost on reload');
+  for(const width of [1280,320,375]){await direct.setViewportSize({width,height:800});await sleep(150);await direct.screenshot({path:path.join(dir,`paper-standalone-${width}.png`)});}
   const fontURL=fontRequests.find(url=>url.includes('source-code-pro'));
   const fontResponse=await page.request.get(fontURL);assert.match(fontResponse.headers()['cache-control'],/immutable/);assert.match(fontResponse.headers()['content-type'],/font\/woff2/);
   await direct.close(); await page.bringToFront();
@@ -265,7 +302,7 @@ function installInspection() {
   await noStorage.addInitScript(()=>Object.defineProperty(window,'indexedDB',{get(){throw new DOMException('Storage denied','SecurityError');}}));
   await noStorage.goto(directURL,{waitUntil:'domcontentloaded'});await wait(()=>fontLoaded(noStorage,'Source Code Pro'),'font loading without IndexedDB');
   await noStorage.locator('#gotty-theme-btn').click();await noStorage.locator('.font-family-item').filter({hasText:'Fira Code'}).click();await wait(()=>fontLoaded(noStorage,'Fira Code'),'optional font without IndexedDB');await noStorageContext.close();
-  report('standaloneGoTTY', {vimSaved: true, replayRepliesSuppressed: true,cachedFontReload:true,storageDeniedFallback:true});
+  report('standaloneGoTTY', {vimSaved: true, replayRepliesSuppressed: true,cachedFontReload:true,storageDeniedFallback:true,paperPersisted:true,outerBackgroundMatches:true});
   await page.evaluate(() => {window.reviewOriginal = window.reviewTerm(); window.reviewOther = window.reviewTerm(1);});
   await page.evaluate(() => window.reviewSockets.find(socket => socket.url.includes('terminal-connections') && socket.readyState === 1)?.close());
   await wait(() => page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isDisabled(), 'transport disconnected');
@@ -309,7 +346,7 @@ function installInspection() {
     await page.locator('.session-switcher-item').click();
     await wait(async () => (await trigger.textContent()).includes('终端-12'), 'mobile session selection');
     dialog=await settingsDialog();const settingsBox=await dialog.boundingBox();assert(settingsBox.x>=0&&settingsBox.x+settingsBox.width<=width+1);
-    await dialog.getByRole('button',{name:/Solarized Dark/}).click();
+    await dialog.getByRole('button',{name:/柔和米色$/}).click();
     assert(await dialog.locator('.terminal-settings-themes button').evaluateAll(buttons=>buttons.every(button=>button.scrollWidth<=button.clientWidth+1)),'theme labels clipped on mobile');
     await page.screenshot({path:path.join(dir,`terminal-settings-${width}.png`)});await dialog.getByRole('button',{name:'取消',exact:true}).last().click();
     widths.push({width, allSessionsAccessible: true, searchAndSwitch: true});
