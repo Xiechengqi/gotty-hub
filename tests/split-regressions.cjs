@@ -1,216 +1,159 @@
-// Loaded by workspace-regressions.cjs; all instances belong to its disposable Hub.
+// Loaded by workspace-regressions.cjs; all processes and identities are disposable.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-module.exports = async function splitRegression({page, context, browser, hub, ids, devices, api, wait, sleep, dir, report, installInspection, start, errors}) {
-  const names = Object.fromEntries((await api('/instances')).map(instance => [instance.id, instance.name]));
-  const [a, b, c, d] = ids;
-  const slot = id => page.locator('.terminal-slot[data-instance-id="' + id + '"]');
-  const tab = id => page.locator('.session-tab[data-instance-id="' + id + '"] button[aria-controls]');
-  const pair = () => page.locator('.terminal-slot:not([hidden])').evaluateAll(elements => elements.map(element => ({id: element.dataset.instanceId, pane: element.dataset.pane})).sort((a, b) => a.pane.localeCompare(b.pane)));
-  const expectPair = async (left, right) => wait(async () => JSON.stringify(await pair()) === JSON.stringify([{id: left, pane: 'left'}, {id: right, pane: 'right'}]), 'stable left/right pair');
+module.exports = async function compactWorkspaceRegression({page, browser, hub, ids, devices, api, wait, sleep, dir, report, installInspection, start, errors}) {
+  const names = Object.fromEntries((await api('/instances')).map(i => [i.id, i.name]));
+  const [a,b,c,d] = ids;
+  const slot = id => page.locator('.terminal-slot[data-instance-id="'+id+'"]');
+  const tab = id => page.locator('.session-tab[data-instance-id="'+id+'"] .tab-trigger');
+  const order = () => page.locator('.session-tab').evaluateAll(elements => elements.map(e => e.dataset.instanceId));
+  const pair = () => page.locator('.terminal-slot:not([hidden])').evaluateAll(elements => elements.map(e => ({id:e.dataset.instanceId,pane:e.dataset.pane})).sort((a,b) => a.pane.localeCompare(b.pane)));
+  const expectPair = (left,right) => wait(async () => JSON.stringify(await pair()) === JSON.stringify([{id:left,pane:'left'},{id:right,pane:'right'}]),'adjacent pair '+names[left]+' / '+names[right]);
   const focused = () => page.evaluate(() => document.activeElement?.closest('.terminal-slot')?.dataset.instanceId);
-  const expectFocus = async id => wait(async () => await focused() === id && await page.locator('.session-tab.selected').getAttribute('data-instance-id') === id, 'pane and tab focus ' + names[id]);
-  async function choose(id) {
-    const dialog = page.getByRole('dialog').filter({has: page.locator('.split-instance-list')});
-    await dialog.waitFor();
-    await dialog.locator('.split-instance-option').filter({hasText: names[id]}).click();
-    await dialog.waitFor({state: 'hidden'});
+  const expectFocus = id => wait(async () => await focused()===id && await page.locator('.session-tab.selected').getAttribute('data-instance-id')===id,'terminal focus '+names[id]);
+  async function reveal() {if(await page.locator('.workspace-bar').getAttribute('aria-hidden')==='true') await page.locator('.workspace-reveal').click();}
+  async function menu(id) {await reveal(); await tab(id).scrollIntoViewIfNeeded(); await sleep(100); await tab(id).click(); const m=page.locator('.tab-actions-menu');await m.waitFor();return m;}
+  async function action(id,name) {const m=await menu(id);await m.getByRole('button',{name,exact:typeof name==='string'}).click();await m.waitFor({state:'hidden'});}
+  async function select(id) {await reveal();await tab(id).click({button:'right'});await expectFocus(id);}
+  async function terminal(id) {return page.evaluate(id => window.reviewSnapshot([...document.querySelectorAll('.real-terminal')].findIndex(e=>e.closest('.terminal-slot').dataset.instanceId===id)),id);}
+  async function identity() {assert(await page.evaluate(() => [...document.querySelectorAll('.real-terminal')].every((e,i)=>window.compactTerms[e.closest('.terminal-slot').dataset.instanceId]===window.reviewTerm(i)) && window.reviewSockets.length===window.compactSocketCount),'layout recreated terminal or WebSocket');}
+  async function track() {await page.evaluate(() => {
+    window.compactTerms=Object.fromEntries([...document.querySelectorAll('.real-terminal')].map((e,i)=>[e.closest('.terminal-slot').dataset.instanceId,window.reviewTerm(i)]));window.compactSocketCount=window.reviewSockets.length;
+    window.splitInputs=[];window.splitSizes=[];
+    for(const socket of window.reviewSockets){const send=socket.send.bind(socket);socket.send=data=>{if(typeof data==='string'&&data[0]==='1')window.splitInputs.push({url:socket.url,text:new TextDecoder().decode(Uint8Array.from(atob(data.slice(1)),c=>c.charCodeAt(0)))});if(typeof data==='string'&&data[0]==='3')window.splitSizes.push({url:socket.url,sent:data});send(data);};}
+  });}
+  async function contrast() {
+    await wait(async()=>page.locator('.workspace-bar .session-name').evaluateAll(elements=>{
+      const ctx=document.createElement('canvas').getContext('2d',{willReadFrequently:true});
+      const luminance=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);const rgb=[...ctx.getImageData(0,0,1,1).data].slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
+      return elements.every(element=>{let parent=element,background='';while(parent){background=getComputedStyle(parent).backgroundColor;if(background!=='rgba(0, 0, 0, 0)'&&background!=='transparent')break;parent=parent.parentElement;}const a=luminance(getComputedStyle(element).color),b=luminance(background);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5;});
+    }),'tab label contrast');
   }
-  async function enter(id) {await page.locator('.split-button').click(); await choose(id);}
-  async function terminal(id) {
-    return page.evaluate(id => {
-      const all = [...document.querySelectorAll('.real-terminal')];
-      const index = all.findIndex(element => element.closest('.terminal-slot').dataset.instanceId === id);
-      return window.reviewSnapshot(index);
-    }, id);
+  const me=await api('/me'), prefs=await api('/me/preferences');
+  const legacy={...prefs,opened:ids,instanceOrder:ids,active:c,split:true,toolbarPinned:true,maximized:false};delete legacy.workspace;
+  await api('/me/preferences',legacy,'PUT');
+  await page.evaluate(id=>{localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id));localStorage.removeItem('gotty-hub:layout:'+encodeURIComponent(id));},me.id);
+  await page.reload({waitUntil:'domcontentloaded'});await expectPair(a,c);await expectFocus(c);
+  assert.equal(await page.locator('.sidebar,.topbar,.terminal-pane-heading,.instance-sort-handle').count(),0);
+  assert.equal(Math.round((await page.locator('.workspace-bar').boundingBox()).height),36);
+  await action(c,'退出分屏');
+  // Undo migration's adjacency normalization, then create groups using the real menu.
+  const reset={...legacy,active:a,split:false,workspace:{schemaVersion:2,opened:ids,order:ids,active:a,groups:[]}};
+  await api('/me/preferences',reset,'PUT');await page.evaluate(id=>localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id)),me.id);
+  await page.reload({waitUntil:'domcontentloaded'});await expectFocus(a);
+  let m=await menu(ids.at(-1));assert(await m.getByRole('button',{name:/与右侧标签分屏/}).isDisabled());await page.keyboard.press('Escape');await m.waitFor({state:'hidden'});
+  await action(b,/与右侧标签分屏/);await expectPair(b,c);await expectFocus(b);
+  assert.equal(await page.locator('.workspace-tab-pair').count(),1);
+  assert((await tab(b).innerText()).includes('左'));assert((await tab(c).innerText()).includes('右'));
+  m=await menu(a);assert(await m.getByRole('button',{name:/与右侧标签分屏/}).isDisabled());await sleep(200);await page.screenshot({path:path.join(dir,'compact-tab-menu.png')});await page.keyboard.press('Escape');
+  await select(d);assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
+  await action(d,/与右侧标签分屏/);await expectPair(d,ids[4]);assert.equal(await page.locator('.workspace-tab-pair').count(),2);
+  await select(b);await expectPair(b,c);
+  await wait(async()=> (await terminal(b))?.pending===0 && (await terminal(c))?.pending===0,'pair ready');await track();
+  const file=path.join(dir,'vim-compact.txt');
+  await page.keyboard.type("vim -Nu NONE -n -i NONE '"+file+"'");await page.keyboard.press('Enter');
+  await wait(async()=>(await terminal(b))?.type==='alternate' && (await terminal(b))?.pending===0,'Vim entry');
+  await page.keyboard.press('i');await page.keyboard.insertText('split-中文-unsaved');await page.keyboard.press('Escape');
+  await wait(async()=>(await terminal(b))?.pending===0 && (await terminal(b))?.text.startsWith('split-中文-unsaved'),'Vim first row');
+  assert((await terminal(b)).cols>=60,'confirmed PTY minimum grid lost');
+  assert(await slot(b).locator('.xterm-host').evaluate(e=>{e.scrollLeft=e.scrollWidth;const ok=e.scrollWidth>e.clientWidth&&e.scrollLeft>0;e.scrollLeft=0;return ok;}),'wide PTY cannot scroll');
+  await slot(c).locator('.xterm-screen').click({position:{x:20,y:80}});await expectFocus(c);await page.keyboard.type('printf C_FOCUS_PROBE');await page.keyboard.press('Enter');
+  await wait(async()=>(await terminal(c))?.text.includes('C_FOCUS_PROBE'),'right input');
+  await select(b);await page.keyboard.press('A');await page.keyboard.insertText('-stillB');await page.keyboard.press('Escape');
+  await wait(async()=>(await terminal(b))?.text.includes('unsaved-stillB'),'left input');
+  assert(await page.evaluate(({b,c})=>{const input=id=>window.splitInputs.filter(f=>f.url.includes('/'+id+'/ws')).map(f=>f.text).join('');return input(b).includes('-stillB')&&!input(c).includes('-stillB')&&input(c).includes('C_FOCUS_PROBE')&&!input(b).includes('C_FOCUS_PROBE');},{b,c}));
+  // Cancelling a drag must not send Escape to a live Vim or persist a move.
+  const beforeCancel=await order();const inputCount=await page.evaluate(()=>window.splitInputs.length);
+  for(const cancel of ['escape','blur']){
+    await tab(b).scrollIntoViewIfNeeded();await sleep(250); // wait for the previous cancelled sort's return animation
+    const from=await tab(b).boundingBox(),to=await tab(a).boundingBox();
+    await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down({button:'right'});await page.mouse.move(to.x+8,to.y+to.height/2,{steps:10});
+    await wait(async()=>await page.locator('[data-dragging=true]').count()===1,'drag activated');
+    if(cancel==='escape')await page.keyboard.press('Escape');else await page.evaluate(()=>window.dispatchEvent(new Event('blur')));
+    await page.mouse.up({button:'right'});assert.deepEqual(await order(),beforeCancel);assert.equal(await page.locator('[data-dragging=true]').count(),0);
   }
-  async function identity() {
-    assert(await page.evaluate(() => {
-      const all = [...document.querySelectorAll('.real-terminal')];
-      return all.every((element, index) => window.splitOriginalTerms[element.closest('.terminal-slot').dataset.instanceId] === window.reviewTerm(index)) && window.reviewSockets.length === window.splitSocketCount;
-    }), 'a split operation recreated a terminal or WebSocket');
+  assert(await page.evaluate(count=>window.splitInputs.slice(count).every(frame=>/^\x1b\[[IO]$/.test(frame.text)),inputCount),'drag keystroke leaked to PTY');
+  // Entire pair moves when dragging its right member with the right button.
+  await tab(c).scrollIntoViewIfNeeded();const source=await tab(c).boundingBox(),target=await tab(a).boundingBox();
+  await page.mouse.move(source.x+source.width/2,source.y+source.height/2);await page.mouse.down({button:'right'});
+  await page.mouse.move(target.x+8,target.y+target.height/2,{steps:15});await sleep(150);await page.mouse.up({button:'right'});
+  await wait(async()=>(await order())[0]===b && (await order())[1]===c,'whole group right drag');await expectPair(b,c);await identity();
+  await action(c,'交换左右');await expectPair(c,b);await expectFocus(c);assert.deepEqual((await order()).slice(0,2),[c,b]);await identity();
+  const divider=page.getByRole('separator',{name:'调整终端分屏宽度'});
+  const bounds=await page.locator('.terminals').boundingBox(),handle=await divider.boundingBox();
+  await page.mouse.move(handle.x+handle.width/2,handle.y+100);await page.mouse.down();await page.mouse.move(bounds.x+4+(bounds.width-8)*0.6,handle.y+100,{steps:8});await page.mouse.up();
+  await wait(async()=>Number(await divider.getAttribute('aria-valuenow'))===60,'pointer resize');
+  await divider.focus();await page.keyboard.press('ArrowLeft');assert.equal(Number(await divider.getAttribute('aria-valuenow')),58);await page.keyboard.press('Enter');
+  for(const key of ['Home','End']){await page.keyboard.press(key);assert((await page.locator('.terminal-slot:not([hidden])').evaluateAll(es=>es.map(e=>e.getBoundingClientRect().width))).every(w=>w>=359.9));}await page.keyboard.press('Enter');await identity();
+  await contrast();await page.screenshot({path:path.join(dir,'compact-paper-desktop.png')});
+  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'切换主题',exact:true}).click();
+  await wait(()=>page.evaluate(()=>document.documentElement.classList.contains('dark')),'dark theme');await page.waitForFunction(()=>!document.querySelector('[data-exiting],[data-entering]'));await sleep(200);await contrast();await page.screenshot({path:path.join(dir,'compact-dark-desktop.png')});
+  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'切换主题',exact:true}).click();
+  // Unpinned navigation is an overlay; showing it and opening menus must never resize the PTY.
+  await select(b);await page.locator('.pin-toolbar').click();await page.mouse.move(500,400);await expectFocus(b);
+  await wait(async()=>await page.locator('.workspace-bar').getAttribute('aria-hidden')==='true','toolbar hides');await sleep(300);
+  const sizes=await page.evaluate(()=>window.splitSizes.length), height=(await page.locator('.terminals').boundingBox()).height;
+  await reveal();m=await menu(b);await sleep(900);assert.equal(await page.locator('.workspace-bar').getAttribute('aria-hidden'),'false');
+  assert.equal((await page.locator('.terminals').boundingBox()).height,height);assert.equal(await page.evaluate(()=>window.splitSizes.length),sizes);
+  await page.keyboard.press('Escape');await m.waitFor({state:'hidden'});await slot(b).locator('.xterm-helper-textarea').focus();await page.mouse.move(500,400);
+  await wait(async()=>await page.locator('.workspace-bar').getAttribute('aria-hidden')==='true','toolbar hides after menu');
+  await page.keyboard.press('Escape');assert(await page.locator('.app').evaluate(e=>e.classList.contains('chrome-unpinned')),'Vim Escape changed toolbar');await identity();
+  await reveal();await page.locator('.pin-toolbar').click();await select(b);
+  await page.route('**/api/v1/me/preferences',route=>route.request().method()==='PUT'?route.abort():route.continue());
+  await divider.focus();for(let i=0;i<5;i++)await page.keyboard.press('ArrowRight');
+  const cached=await page.evaluate(id=>JSON.parse(localStorage.getItem('gotty-hub:workspace:'+encodeURIComponent(id))),me.id);
+  assert(cached.pending);assert.equal(cached.workspace.schemaVersion,2);assert.equal(cached.workspace.groups.length,2);
+  assert(Math.abs(cached.workspace.groups.find(g=>g.left===c).ratio-0.6)<0.01);
+  await page.reload({waitUntil:'domcontentloaded'});await expectPair(c,b);await expectFocus(b);assert.equal(Number(await divider.getAttribute('aria-valuenow')),60);assert.deepEqual(await order(),cached.workspace.order);
+  await wait(async()=>(await terminal(b))?.type==='alternate'&&(await terminal(b))?.pending===0&&(await terminal(b))?.text.includes('unsaved'),'Vim reload');
+  await page.keyboard.press('Escape');await page.keyboard.type(':wq');await page.keyboard.press('Enter');await wait(()=>fs.existsSync(file),'Vim save');assert(fs.readFileSync(file,'utf8').includes('split-中文-unsaved-stillB'));
+  await page.unroute('**/api/v1/me/preferences');await select(c);await select(b);
+  await wait(async()=>(await api('/me/preferences')).workspace?.groups?.length===2,'group persistence');
+  for(const width of [320,375,414,768]){
+    await page.setViewportSize({width,height:844});await sleep(200);
+    assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'horizontal page overflow');
+    if(width===375){await page.locator('.session-switcher-trigger').click();await page.getByRole('textbox',{name:'搜索实例…'}).fill(names[a]);await page.locator('.instance-browser-select').click();await expectFocus(a);}
+    await page.screenshot({path:path.join(dir,'compact-'+width+'.png')});
   }
-  async function headingContrast() {
-    // BoardUI animates button text colors for 150ms when the theme changes.
-    await wait(async () => {
-      const ratios = await page.locator('.terminal-slot:not([hidden]) .terminal-pane-heading').evaluateAll(headings => {
-      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
-      const ctx = canvas.getContext('2d', {willReadFrequently: true});
-      const luminance = color => {
-        ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1);
-        const rgb = [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3).map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
-        return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
-      };
-      return headings.flatMap(heading => {
-        const background = luminance(getComputedStyle(heading).backgroundColor);
-        return [...heading.querySelectorAll('.pane-instance-trigger, .pane-position, .pane-active-label')].map(element => {
-          const foreground = luminance(getComputedStyle(element).color);
-          return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
-        });
-      });
-      });
-      return ratios.length >= 4 && ratios.every(ratio => ratio >= 4.5);
-    }, 'pane identity contrast at least 4.5:1');
-  }
-  const me = await api('/me');
-  const prefs = await api('/me/preferences');
-  const legacy = {...prefs, opened: ids, instanceOrder: ids, active: c, split: true}; delete legacy.workspace;
-  await api('/me/preferences', legacy, 'PUT');
-  await page.evaluate(id => localStorage.removeItem('gotty-hub:workspace:' + encodeURIComponent(id)), me.id);
-  await page.reload({waitUntil: 'domcontentloaded'});
-  await expectPair(a, c); await expectFocus(c);
-  assert((await slot(a).locator('.terminal-pane-heading').innerText()).includes(names[a]));
-  assert((await slot(c).locator('.terminal-pane-heading').innerText()).includes(names[c]));
-  await page.locator('.split-button').click(); await tab(b).click(); await expectFocus(b);
-  await enter(c); await expectPair(b, c); await expectFocus(b);
-  await wait(async () => (await terminal(b))?.pending === 0 && (await terminal(c))?.pending === 0, 'split parsers ready');
-  await page.evaluate(() => {
-    window.splitOriginalTerms = Object.fromEntries([...document.querySelectorAll('.real-terminal')].map((element, index) => [element.closest('.terminal-slot').dataset.instanceId, window.reviewTerm(index)]));
-    window.splitSocketCount = window.reviewSockets.length;
-    window.splitInputs = []; window.splitSizes = [];
-    for (const socket of window.reviewSockets) {
-      const original = socket.send.bind(socket);
-      socket.send = data => {if (typeof data === 'string' && data[0] === '1') window.splitInputs.push({url: socket.url, text: new TextDecoder().decode(Uint8Array.from(atob(data.slice(1)), char => char.charCodeAt(0)))}); if (typeof data === 'string' && data[0] === '3') window.splitSizes.push({url: socket.url, sent: data}); original(data);};
-      socket.addEventListener('message', event => {if (typeof event.data === 'string' && event.data[0] === '8') window.splitSizes.push({url: socket.url, received: event.data});});
-    }
-  });
-  const file = path.join(dir, 'vim-split.txt');
-  await page.keyboard.type('vim -Nu NONE -n -i NONE \'' + file + '\''); await page.keyboard.press('Enter');
-  await wait(async () => (await terminal(b))?.type === 'alternate' && (await terminal(b))?.pending === 0, 'split Vim entry');
-  await page.keyboard.press('i'); await page.keyboard.insertText('split-中文-unsaved'); await page.keyboard.press('Escape');
-  await wait(async () => (await terminal(b))?.pending === 0 && (await terminal(b))?.text.includes('split-中文-unsaved'), 'initial split Vim text');
-  assert((await terminal(b)).text.startsWith('split-中文-unsaved'), 'Vim text was drawn on the wrong row');
-  assert((await terminal(b)).cols >= 60, 'the drawing grid ignored GoTTY minimum columns');
-  assert(await slot(b).locator('.xterm-host').evaluate(element => {
-    element.scrollLeft = element.scrollWidth;
-    const scrollable = element.scrollWidth > element.clientWidth && element.scrollLeft > 0;
-    element.scrollLeft = 0;
-    return scrollable;
-  }), 'the wider PTY grid cannot be scrolled inside its pane');
-  fs.writeFileSync(path.join(dir, 'vim-first-insert.json'), JSON.stringify(await terminal(b), null, 2));
-  await slot(c).locator('.xterm-screen').click({position: {x: 20, y: 30}}); await expectFocus(c);
-  await expectPair(b, c);
-  await page.keyboard.type('printf C_FOCUS_PROBE'); await page.keyboard.press('Enter');
-  await wait(async () => (await terminal(c))?.text.includes('C_FOCUS_PROBE'), 'right shell input');
-  await tab(b).click(); await expectFocus(b);
-  await page.keyboard.press('A'); await page.keyboard.insertText('-stillB'); await page.keyboard.press('Escape');
-  await wait(async () => (await terminal(b))?.pending === 0 && (await terminal(b))?.text.includes('unsaved-stillB'), 'split Vim append');
-  assert(await page.evaluate(({b, c}) => {
-    const input = id => window.splitInputs.filter(frame => frame.url.includes('/' + id + '/ws')).map(frame => frame.text).join('');
-    return input(b).includes('-stillB') && !input(c).includes('-stillB') && input(c).includes('C_FOCUS_PROBE') && !input(b).includes('C_FOCUS_PROBE');
-  }, {b, c}), 'keyboard input went to the wrong instance');
-  const beforeSort = await page.locator('.session-tab').evaluateAll(elements => elements.map(element => element.dataset.instanceId));
-  const tabHandle = page.locator('.session-tab[data-instance-id="' + a + '"] .instance-sort-handle');
-  await tabHandle.focus(); await page.keyboard.press('Space'); await sleep(80);
-  await page.keyboard.press('ArrowRight'); await sleep(80); await page.keyboard.press('ArrowRight'); await sleep(80); await page.keyboard.press('Space');
-  assert.notDeepEqual(await page.locator('.session-tab').evaluateAll(elements => elements.map(element => element.dataset.instanceId)), beforeSort, 'tab sorting did not run');
-  await expectPair(b, c);
-  const sidebarHandle = page.locator('.sidebar .instance-nav-row[data-instance-id="' + c + '"] .instance-sort-handle');
-  const beforeSidebarSort = await page.locator('.session-tab').evaluateAll(elements => elements.map(element => element.dataset.instanceId));
-  await sidebarHandle.focus(); await page.keyboard.press('Space'); await sleep(80); await page.keyboard.press('ArrowUp'); await sleep(80); await page.keyboard.press('Space');
-  assert.notDeepEqual(await page.locator('.session-tab').evaluateAll(elements => elements.map(element => element.dataset.instanceId)), beforeSidebarSort, 'sidebar sorting did not run');
-  await expectPair(b, c); await identity();
-  await page.locator('.swap-panes-button').click(); await expectPair(c, b); await expectFocus(b); await identity();
-  const divider = page.getByRole('separator', {name: '调整终端分屏宽度'});
-  const bounds = await page.locator('.terminals').boundingBox(), handle = await divider.boundingBox();
-  await page.mouse.move(handle.x + handle.width / 2, handle.y + 100); await page.mouse.down();
-  await page.mouse.move(bounds.x + 4 + (bounds.width - 8) * 0.6, handle.y + 100, {steps: 8}); await page.mouse.up();
-  await wait(async () => Number(await divider.getAttribute('aria-valuenow')) === 60, 'drag split ratio');
-  await divider.focus(); await page.keyboard.press('ArrowLeft');
-  assert.equal(Number(await divider.getAttribute('aria-valuenow')), 58);
-  await page.keyboard.press('Enter'); assert.equal(Number(await divider.getAttribute('aria-valuenow')), 50);
-  for (const key of ['Home', 'End']) {
-    await page.keyboard.press(key);
-    const widths = await page.locator('.terminal-slot:not([hidden])').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().width));
-    assert(widths.every(width => width >= 359.9), 'a pane shrank below the minimum width');
-  }
-  await page.keyboard.press('Enter');
-  await identity();
-  await headingContrast();
-  await page.screenshot({path: path.join(dir, 'split-paper-desktop.png')});
-  const initiallyDark = await page.evaluate(() => document.documentElement.classList.contains('dark'));
-  if (!initiallyDark) await page.getByRole('button', {name: '切换主题', exact: true}).click();
-  await wait(() => page.evaluate(() => document.documentElement.classList.contains('dark')), 'dark workspace');
-  await headingContrast();
-  await page.screenshot({path: path.join(dir, 'split-dark-desktop.png')});
-  if (!initiallyDark) await page.getByRole('button', {name: '切换主题', exact: true}).click();
-  await slot(b).locator('.pane-instance-trigger').click(); await choose(d); await expectPair(c, d); await expectFocus(d);
-  assert.equal((await terminal(b)).type, 'alternate');
-  await slot(c).locator('.pane-instance-trigger').click(); await choose(b); await expectPair(b, d); await expectFocus(b); await identity();
-  assert((await terminal(b)).text.includes('unsaved'));
-  await page.locator('.split-button').click(); await expectFocus(b);
-  assert.equal(await page.locator('.terminal-slot:not([hidden])').count(), 1);
-  await identity(); await enter(d); await expectPair(b, d); await expectFocus(b);
-  await page.route('**/api/v1/me/preferences', route => route.request().method() === 'PUT' ? route.abort() : route.continue());
-  await divider.focus(); for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
-  const cached = await page.evaluate(id => JSON.parse(localStorage.getItem('gotty-hub:workspace:' + encodeURIComponent(id))), me.id);
-  assert(cached.pending); assert(Math.abs(cached.workspace.split.ratio - 0.6) < 0.01);
-  await page.reload({waitUntil: 'domcontentloaded'}); await expectPair(b, d); await expectFocus(b);
-  assert.equal(Number(await divider.getAttribute('aria-valuenow')), 60);
-  await wait(async () => (await terminal(b))?.type === 'alternate' && (await terminal(b))?.pending === 0 && (await terminal(b))?.text.includes('unsaved'), 'unsaved Vim after split reload');
-  await page.keyboard.press('Escape'); await page.keyboard.type(':wq'); await page.keyboard.press('Enter');
-  await wait(() => fs.existsSync(file), 'split Vim save');
-  assert(fs.readFileSync(file, 'utf8').includes('split-中文-unsaved-stillB'));
-  await page.unroute('**/api/v1/me/preferences');
-  await page.locator('.swap-panes-button').click(); await page.locator('.swap-panes-button').click(); await expectPair(b, d);
-  await wait(async () => Math.abs((await api('/me/preferences')).workspace?.split?.ratio - 0.6) < 0.01, 'split server persistence');
-  await tab(c).click(); await expectPair(c, d); await expectFocus(c);
-  await tab(b).click(); await expectPair(b, d); await expectFocus(b);
-  for (const width of [320, 375, 414, 768]) {
-    await page.setViewportSize({width, height: 844});
-    await wait(async () => await page.locator('.terminal-slot:not([hidden])').count() === 1, 'narrow single terminal');
-    assert(await divider.isHidden());
-    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'horizontal overflow');
-    await page.screenshot({path: path.join(dir, 'split-narrow-' + width + '.png')});
-    if (width === 375) {
-      await page.locator('.session-switcher-trigger').click();
-      await page.locator('.session-switcher-item').filter({hasText: names[a]}).click();
-      await expectFocus(a);
-    }
-  }
-  await page.setViewportSize({width: 1280, height: 800}); await expectPair(b, d);
-  assert.equal(Number(await divider.getAttribute('aria-valuenow')), 60);
-  await slot(b).locator('.xterm-screen').click({position: {x: 20, y: 30}}); await expectFocus(b);
-  // A normal disconnect keeps the named pane and its fixed position.
-  process.kill(-devices[3].child.pid, 'SIGTERM');
-  await wait(async () => !(await api('/instances')).find(instance => instance.id === d).online, 'right instance offline');
-  await expectPair(b, d);
-  assert((await slot(d).locator('.terminal-pane-heading').innerText()).includes(names[d]));
-  await wait(() => slot(d).locator('.terminal-empty').isVisible(), 'named offline pane');
-  await page.screenshot({path: path.join(dir, 'split-offline.png')});
-  await wait(() => devices[3].child.exitCode !== null, 'offline fixture stopped');
-  devices[3].child = start('gotty-split-reconnect', process.env.GOTTY_BINARY, devices[3].args);
-  await wait(async () => (await api('/instances')).find(instance => instance.id === d).online, 'right instance online');
-  await wait(() => slot(d).locator('.terminal-clear-control').isEnabled(), 'right terminal reconnected in the UI');
-  await expectPair(b, d); await sleep(150); assert.equal(await focused(), b, 'reconnecting the other pane stole focus');
-  await slot(d).locator('.pane-close').click();
-  assert.equal(await page.locator('.terminal-slot:not([hidden])').count(), 1);
-  assert.equal(await page.locator('.split-button').getAttribute('aria-label'), '分屏');
-  await page.locator('.sidebar .instance-nav-row[data-instance-id="' + d + '"] .registered-instance').click(); await expectFocus(d);
-  assert.equal(await page.locator('.terminal-slot:not([hidden])').count(), 1, 'reopening a session unexpectedly restored split');
-  await tab(a).click(); await expectFocus(a);
-
-  // Observer rights and grant revocation use a separate account/context.
-  const observer = await browser.newContext({viewport: {width: 1280, height: 800}});
-  await observer.addInitScript(installInspection);
-  await observer.addInitScript(() => localStorage.setItem('gotty-hub.locale','zh-CN'));
-  const username = 'split-observer';
-  const registration = await observer.request.post(hub + '/api/v1/auth/register', {data: {username, password: 'split-observer-password-123'}});
-  assert(registration.ok());
-  await api('/instances/' + b + '/grants', {username, role: 'observer'}, 'PUT');
-  await api('/instances/' + c + '/grants', {username, role: 'observer'}, 'PUT');
-  const observerPage = await observer.newPage(); observerPage.on('pageerror', error => errors.push(error.stack));
-  await observerPage.goto(hub, {waitUntil: 'domcontentloaded'});
-  await wait(async () => await observerPage.locator('.terminal-slot').count() === 1, 'observer initial terminal');
-  await observerPage.locator('.split-button').click();
-  await wait(async () => await observerPage.locator('.terminal-slot:not([hidden])').count() === 2, 'observer pair');
-  assert.equal(await observerPage.locator('.terminal-clear-control,.terminal-upload-control,.terminal-restart-control').count(), 0);
-  assert.equal(await observerPage.locator('.terminal-pane-heading').filter({hasText: '只读'}).count(), 2);
-  await api('/instances/' + c + '/grants/' + username, {}, 'DELETE');
-  await wait(async () => await observerPage.locator('.terminal-slot:not([hidden])').count() === 1 && await observerPage.locator('.terminal-slot[data-instance-id="' + c + '"]').count() === 0, 'revocation collapses split');
-  assert.equal(await observerPage.locator('.split-button').getAttribute('aria-label'), '分屏');
-  await observer.close(); await page.bringToFront();
-  report('splitWorkspace', {identityLabels: true, legacyMigration: true, arbitraryPair: true, focusAndInput: true, sortingStable: true, swap: true, pointerAndKeyboardResize: true, noRendererOrSocketReplacement: true, confirmedPTYSizeAndScrolling: true, unsavedVim: true, immediateReload: true, narrowRestoration: true, offlineIdentity: true, reconnectDoesNotStealFocus: true, closeAndReopen: true, observerAndRevocation: true});
+  await page.setViewportSize({width:1280,height:800});assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1,'unrelated mobile selection replaced group');
+  await select(b);await expectPair(c,b);assert.equal(Number(await divider.getAttribute('aria-valuenow')),60);
+  process.kill(-devices[2].child.pid,'SIGTERM');await wait(async()=>!(await api('/instances')).find(i=>i.id===c).online,'offline');await expectPair(c,b);
+  await wait(()=>slot(c).locator('.terminal-empty').isVisible(),'named offline pane');assert((await slot(c).innerText()).includes(names[c]));
+  await wait(()=>devices[2].child.exitCode!==null,'stopped');devices[2].child=start('gotty-compact-reconnect',process.env.GOTTY_BINARY,devices[2].args);
+  await wait(()=>slot(c).locator('.terminal-clear-control').isEnabled(),'reconnect');await expectPair(c,b);await sleep(200);assert.equal(await focused(),b,'reconnect stole focus');
+  await action(c,'关闭终端标签');assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);await expectFocus(b);
+  await page.locator('.browse-instances').click();await page.getByRole('textbox',{name:'搜索实例…'}).fill(names[c]);await page.locator('.instance-browser-select').click();await expectFocus(c);assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
+  const observer=await browser.newContext({viewport:{width:1280,height:800}});await observer.addInitScript(installInspection);await observer.addInitScript(()=>localStorage.setItem('gotty-hub.locale','zh-CN'));
+  const username='compact-observer';const registration=await observer.request.post(hub+'/api/v1/auth/register',{data:{username,password:'compact-observer-password-123'}});assert(registration.ok());
+  for(const id of [b,c])await api('/instances/'+id+'/grants',{username,role:'observer'},'PUT');
+  const op=await observer.newPage();op.on('pageerror',e=>errors.push(e.stack));await op.goto(hub,{waitUntil:'domcontentloaded'});
+  await wait(async()=>await op.locator('.terminal-slot').count()===1,'observer terminal');await op.locator('.browse-instances').click();
+  const other=await op.locator('.instance-browser-select:not([aria-current="page"])').first().getAttribute('title');await op.locator('.instance-browser-select').filter({hasText:other.split(' · ')[0]}).click();
+  await op.locator('.session-tab .tab-trigger').first().click();assert.equal(await op.locator('.tab-actions-menu').getByRole('button',{name:'重启此 GoTTY…',exact:true}).count(),0);
+  await op.locator('.tab-actions-menu').getByRole('button',{name:/与右侧标签分屏/}).click();await wait(async()=>await op.locator('.terminal-slot:not([hidden])').count()===2,'observer pair');
+  assert.equal(await op.locator('.terminal-clear-control,.terminal-upload-control,.terminal-restart-control').count(),0);
+  await api('/instances/'+c+'/grants/'+username,{},'DELETE');await wait(async()=>await op.locator('.terminal-slot:not([hidden])').count()===1&&await op.locator('.terminal-slot[data-instance-id="'+c+'"]').count()===0,'revocation dissolves group');await observer.close();await page.bringToFront();
+  // Use real browser touch events: scrolling is distinct from a deliberate hold-and-drag.
+  const touchContext=await browser.newContext({viewport:{width:375,height:844},hasTouch:true,isMobile:true});
+  await touchContext.addCookies(await page.context().cookies(hub));const touch=await touchContext.newPage();touch.on('pageerror',e=>errors.push(e.stack));
+  await touch.goto(hub,{waitUntil:'domcontentloaded'});await touch.locator('.session-switcher-trigger').click();
+  await touch.locator('.instance-browser-row').first().waitFor();await sleep(350);
+  const touchOrder=()=>touch.locator('.instance-browser-row').evaluateAll(es=>es.map(e=>e.dataset.tabId));
+  const beforeTouch=await touchOrder();const cdp=await touchContext.newCDPSession(touch);
+  const rows=touch.locator('.instance-browser-unit');const from=await rows.first().boundingBox(),to=await rows.nth(2).boundingBox();
+  const point={x:from.x+80,y:from.y+from.height/2};
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});await sleep(350);
+  await wait(async()=>await touch.locator('[data-dragging=true]').count()===1,'long-press activation');
+  for(let i=1;i<=8;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:point.x,y:point.y+(to.y+to.height/2-point.y)*i/8}]});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await wait(async()=>JSON.stringify(await touchOrder())!==JSON.stringify(beforeTouch),'touch reorder');
+  await touch.screenshot({path:path.join(dir,'compact-touch-directory.png')});await touchContext.close();await page.bringToFront();
+  // Restore a predictable workspace for the remaining full-suite checks.
+  await wait(async()=>(await api('/me/preferences')).workspace?.opened.includes(c),'reopened persisted');
+  await api('/me/preferences',reset,'PUT');await page.evaluate(id=>{localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id));localStorage.removeItem('gotty-hub:layout:'+encodeURIComponent(id));},me.id);
+  await page.reload({waitUntil:'domcontentloaded'});await expectFocus(a);
+  report('compactWorkspace',{singleToolbar:true,leftMenuRightSelect:true,cancelDragDoesNotReachPTY:true,touchLongPress:true,rightDragWholePair:true,adjacentOnly:true,multipleGroups:true,unrelatedTabPreservesGroups:true,atomicSwap:true,legacyMigration:true,focusAndInput:true,stableRenderersAndSockets:true,confirmedPTYGrid:true,unsavedVim:true,overlayDoesNotResize:true,escapePreserved:true,immediateReload:true,mobileRestoration:true,offlineIdentity:true,observerAndRevocation:true});
 };

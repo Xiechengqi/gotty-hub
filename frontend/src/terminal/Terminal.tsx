@@ -8,7 +8,7 @@ import {WebglAddon} from '@xterm/addon-webgl';
 import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-core';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
 import {defaultDisplayOptions, displayOptions, NORD_THEME, BUILTIN_THEMES, type Appearance} from '@gotty/terminal-core/appearance';
-import {RiDeleteBinLine, RiShutDownLine, RiRefreshLine, RiServerLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
+import {RiDeleteBinLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
 import {Button} from '@/components/base/buttons/button';
 import {Input} from '@/components/base/input/input';
 import {AlertDialog, Modal, ModalBody, ModalHeader} from '@/components/base/modal/modal';
@@ -25,9 +25,10 @@ import {MobileKeys} from './MobileKeys';
 import '@xterm/xterm/css/xterm.css';
 
 type Controller = {term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
-type Props = {id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
+export type TerminalActions = {dialogOpen: boolean; refresh: () => void; restart: () => void; restartAvailable: boolean; canRestart: boolean};
+type Props = {onActions?: (id: string, actions: TerminalActions | undefined) => void; id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onManage: () => void; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
 
-export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled}: Props) {
+export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onManage, onViewport, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled, onActions}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef(visible); view.current = visible;
   const controller = useRef<Controller>(undefined);
@@ -75,6 +76,17 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     setShareOpen(false);
     setRefreshGeneration(value => value + 1);
   }
+
+  useEffect(() => {
+    onActions?.(id, {
+      dialogOpen: restartConfirm || refreshConfirm || !!upload || !!transfer || shareOpen,
+      refresh: () => {if (uploadAbort.current || transfer) setRefreshConfirm(true); else refreshTerminal();},
+      restart: () => {if (owner && controls && connected && config.restart_mode && config.restart_mode !== 'disabled') {setRestartError(''); setRestartConfirm(true);}},
+      restartAvailable: owner && controls,
+      canRestart: !!(owner && controls && connected && config.restart_mode && config.restart_mode !== 'disabled'),
+    });
+    return () => onActions?.(id, undefined);
+  }, [id, onActions, owner, controls, connected, config.restart_mode, transfer, restartConfirm, refreshConfirm, upload, shareOpen]);
 
   const applyAppearance = useCallback((term: Xterm, measure: () => void) => {
     const epoch = ++appearanceEpoch.current;
@@ -277,9 +289,6 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       <ShareManager open={shareOpen} onOpenChange={setShareOpen} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={named(zh ? '连接数 / 分享管理' : 'Connections / Share manager')} aria-label={named(`${zh ? '连接数' : 'Connections'}: ${count}`)} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
       {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={named(zh ? '清理历史' : 'Clear history')} aria-label={named(zh ? '清理历史' : 'Clear history')} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}
       {writable && files && <Button className="terminal-control terminal-upload-control" variant="ghost" size="xs" iconOnly leadingIcon={RiUpload2Line} title={named(zh ? '上传文件' : 'Upload file')} aria-label={named(zh ? '上传文件' : 'Upload file')} disabled={!connected || !!uploadAbort.current} onClick={() => uploadInput.current?.click()}/>}
-      <Button className="terminal-control terminal-reconnect-control" variant="ghost" size="xs" iconOnly leadingIcon={RiRefreshLine} title={named(zh ? '刷新当前终端' : 'Refresh current terminal')} aria-label={named(zh ? '刷新当前终端' : 'Refresh current terminal')} onClick={() => {if (uploadAbort.current || transfer) setRefreshConfirm(true); else refreshTerminal();}}/>
-      <Button className="terminal-control terminal-hub-control" variant="ghost" size="xs" iconOnly leadingIcon={RiServerLine} title={named(zh ? 'Hub 实例设置' : 'Hub instance settings')} aria-label={named(zh ? 'Hub 实例设置' : 'Hub instance settings')} onClick={onManage}/>
-      {owner && controls && <Button className="terminal-control terminal-restart-control" variant="ghost" size="xs" iconOnly leadingIcon={RiShutDownLine} title={named(zh ? '重启 GoTTY' : 'Restart GoTTY')} aria-label={named(zh ? '重启 GoTTY' : 'Restart GoTTY')} disabled={!connected || !config.restart_mode || config.restart_mode === 'disabled'} onClick={() => {setRestartError(''); setRestartConfirm(true);}}/>}
     </div>
     {config.show_terminal_state && terminalState && <div className="terminal-state text-caption-1-regular" dir="ltr">{terminalState.activeCols} × {terminalState.activeRows} · {terminalState.policy}</div>}
     {apiRunning && <div className="terminal-api-indicator text-caption-1-regular" role="status">API running</div>}

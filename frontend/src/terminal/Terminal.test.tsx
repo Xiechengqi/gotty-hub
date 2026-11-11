@@ -1,7 +1,7 @@
 import {act} from 'react';
 import {createRoot} from 'react-dom/client';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {RealTerminal} from './Terminal';
+import {RealTerminal, type TerminalActions} from './Terminal';
 const state=vi.hoisted(()=>({terminals:[] as any[],geometry:{cols:80,rows:24}}));
 vi.mock('@gotty/terminal-core/fonts',async original=>{
  const actual=await original<typeof import('@gotty/terminal-core/fonts')>();
@@ -28,15 +28,17 @@ class Socket {
  constructor(){sockets.push(this);}close(){this.readyState=3;this.onclose?.(new CloseEvent('close'));}
 }
 let sockets:Socket[]=[];
+let actions:Record<string,TerminalActions>={};
+const registerActions=(id:string,value:TerminalActions|undefined)=>{if(value)actions[id]=value;else delete actions[id];};
 let node:HTMLDivElement;let root:ReturnType<typeof createRoot>;
 beforeEach(()=>{
- sockets=[];state.terminals=[];state.geometry={cols:80,rows:24};localStorage.clear();
+ sockets=[];actions={};state.terminals=[];state.geometry={cols:80,rows:24};localStorage.clear();
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('WebSocket',Socket);vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
  node=document.createElement('div');document.body.append(node);root=createRoot(node);
 });
 afterEach(async()=>{await act(async()=>root.unmount());node.remove();vi.restoreAllMocks();vi.unstubAllGlobals();});
 it('applies wire preferences and renders GoTTY controls with real WebTTY dispatch',async()=>{
- await act(async()=>root.render(<RealTerminal id="one" writable files owner controls visible locale="zh-CN" onManage={()=>{}}/>));
+ await act(async()=>root.render(<RealTerminal id="one" writable files owner controls visible locale="zh-CN" onManage={()=>{}} onActions={registerActions}/>));
  await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
  await act(async()=>{
   sockets[0].onmessage({data:'4'+JSON.stringify({'font-size':20,'scrollback-lines':900,'hub-config':{restart_mode:'exec',mobile_keys:false,themes:{nord:{background:'#2e3440',foreground:'#d8dee9'}}}})});
@@ -44,25 +46,29 @@ it('applies wire preferences and renders GoTTY controls with real WebTTY dispatc
  });
  expect(state.terminals[0].options).toMatchObject({fontSize:20,scrollback:900,fontFamily:"'DejaVu Sans Mono', monospace"});
  expect(node.querySelector<HTMLElement>('.real-terminal')?.style.getPropertyValue('--color-terminal-background')).toBe('#2e3440');
- for(const label of ['清理历史','上传文件','重启 GoTTY','Hub 实例设置']) expect(node.querySelector(`button[aria-label="${label} · one"]`)).not.toBeNull();
+ for(const label of ['清理历史','上传文件']) expect(node.querySelector(`button[aria-label="${label} · one"]`)).not.toBeNull();
+ expect(actions.one).toMatchObject({restartAvailable:true,canRestart:true,dialogOpen:false});
  expect(node.querySelector('[aria-label="连接数: 3 · one"]')).not.toBeNull();
  await act(async()=>{node.querySelector<HTMLButtonElement>('[aria-label="清理历史 · one"]')!.click();});
  expect(sockets[0].send.mock.calls.some(([data])=>data.startsWith('1')&&atob(data.slice(1))==='clear\n')).toBe(true);
 });
 it('keeps observer controls local and hides remote write and owner actions',async()=>{
- await act(async()=>root.render(<RealTerminal id="read" writable={false} files visible locale="en-US" onManage={()=>{}}/>));
+ await act(async()=>root.render(<RealTerminal id="read" writable={false} files visible locale="en-US" onManage={()=>{}} onActions={registerActions}/>));
  expect(node.querySelector('[aria-label="Display settings"]')).toBeNull();
  for(const label of ['Clear history','Upload file','Restart GoTTY']) expect(node.querySelector(`[aria-label="${label} · read"]`)).toBeNull();
+ expect(actions.read).toMatchObject({restartAvailable:false,canRestart:false,refresh:expect.any(Function)});
+ await act(async()=>actions.read.restart());
+ expect(actions.read.dialogOpen).toBe(false);
 });
 it('refreshes a disconnected terminal by replacing its renderer and connection without touching another pane',async()=>{
- await act(async()=>root.render(<><RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}}/><RealTerminal id="two" writable visible locale="zh-CN" onManage={()=>{}}/></>));
+ await act(async()=>root.render(<><RealTerminal id="one" writable visible locale="zh-CN" onManage={()=>{}} onActions={registerActions}/><RealTerminal id="two" writable visible locale="zh-CN" onManage={()=>{}} onActions={registerActions}/></>));
  expect(sockets).toHaveLength(2);
  const first=sockets[0];const second=sockets[1];const original=state.terminals[0];const other=state.terminals[1];
- const refresh=node.querySelector<HTMLButtonElement>('[aria-label="刷新当前终端 · one"]')!;
- expect(refresh.disabled).toBe(false);
- await act(async()=>refresh.click());
+ await act(async()=>actions.one.refresh());
  expect(sockets).toHaveLength(3);expect(first.readyState).toBe(3);expect(second.readyState).toBe(0);
  expect(original.dispose).toHaveBeenCalledOnce();expect(other.dispose).not.toHaveBeenCalled();expect(state.terminals).toHaveLength(3);
+ await act(async()=>root.render(null));
+ expect(actions).toEqual({});
 });
 
 it('applies account appearance without replacing either terminal or socket',async()=>{

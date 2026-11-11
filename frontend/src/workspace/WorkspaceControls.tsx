@@ -1,52 +1,9 @@
 import {useEffect, useRef, useState, type ReactNode, type RefObject, type PointerEvent} from 'react';
-import {RiArrowDownSLine, RiCloseLine} from '@remixicon/react';
-import {Button} from '@/components/base/buttons/button';
-import {Input} from '@/components/base/input/input';
-import {Modal, ModalBody, ModalHeader} from '@/components/base/modal/modal';
 import {cx} from '@/utils/cx';
 import {translate, type Locale} from '../i18n';
-import {clampRatio, DIVIDER_WIDTH, type Pane} from './state';
+import {clampRatio, DIVIDER_WIDTH} from './state';
 
 export type PaneInstance = {id: string; name: string; label: string; online: boolean; writable: boolean; icon: ReactNode};
-
-export function PaneHeading({instance, pane, focused, locale, onChoose, onClose}: {
-  instance: PaneInstance; pane?: Pane; focused: boolean; locale: Locale; onChoose: () => void; onClose: () => void;
-}) {
-  const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
-  return <header className="terminal-pane-heading">
-    <Button className="quiet-button pane-instance-trigger" variant="ghost" trailingIcon={RiArrowDownSLine} aria-label={t('replacePane') + ': ' + instance.label} title={instance.name + ' · ' + instance.id} onClick={onChoose}>
-      {pane && <span className="pane-position text-caption-1-semibold">{t(pane === 'left' ? 'leftPane' : 'rightPane')}</span>}
-      <span className="session-label">{instance.icon}<span className="session-name text-body-2-medium" dir="auto">{instance.label}</span></span>
-    </Button>
-    <div className="pane-heading-meta text-caption-1-regular">
-      {pane && focused && <span className="pane-active-label">{t('activePane')}</span>}
-      {!instance.online ? <span>{t('offline')}</span> : !instance.writable && <span>{t('readOnly')}</span>}
-      <Button className="quiet-button pane-close" variant="ghost" size="xs" iconOnly leadingIcon={RiCloseLine} aria-label={t('closeTab') + ' ' + instance.label} title={t('closeTab') + ' ' + instance.label} onClick={onClose}/>
-    </div>
-  </header>;
-}
-
-export function InstancePicker({open, title, instances, opened, other, current, locale, onClose, onSelect}: {
-  open: boolean; title: string; instances: PaneInstance[]; opened: string[]; other?: string; current?: string; locale: Locale; onClose: () => void; onSelect: (id: string) => void;
-}) {
-  const [query, setQuery] = useState('');
-  useEffect(() => {if (open) setQuery('');}, [open, title, current]);
-  const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
-  const shown = instances.filter(instance => (instance.name + ' ' + instance.id).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  return <Modal isOpen={open} onOpenChange={value => {if (!value) onClose();}} size="md" className="split-instance-picker">
-    <ModalHeader title={title} closeLabel={t('close')}/>
-    <div className="px-6"><Input aria-label={t('search')} placeholder={t('search')} value={query} onChange={setQuery}/></div>
-    <ModalBody><ul className="split-instance-list">
-      {shown.map(instance => {
-        const reason = !instance.online ? t('offline') : instance.id === other ? t('alreadyInOtherPane') : undefined;
-        return <li key={instance.id}><Button className="quiet-button split-instance-option" variant="ghost" disabled={!!reason} aria-label={t('chooseInstance') + ' ' + instance.label} aria-pressed={instance.id === current} title={reason || instance.name + ' · ' + instance.id} onClick={() => onSelect(instance.id)}>
-          <span className="session-label">{instance.icon}<span className="split-instance-name text-body-medium" dir="auto">{instance.label}</span></span>
-          <span className="text-caption-1-regular">{reason || (opened.includes(instance.id) ? t('opened') : t('online'))}</span>
-        </Button></li>;
-      })}
-    </ul>{!shown.length && <p className="text-body-regular text-text-secondary" role="status">{t('noResults')}</p>}</ModalBody>
-  </Modal>;
-}
 
 // This is a layout separator, not a second terminal host. Its siblings retain
 // their keyed React identity when a pane moves between grid columns.

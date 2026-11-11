@@ -37,9 +37,9 @@ Each instance represents GoTTY's current shared PTY. Multiple browsers can use t
 ## Features
 
 - Username / password registration and login, with a fixed `admin` account and an interactive administrator-password setup on first launch.
-- A flat sidebar of accessible instances, multiple tabs, two-pane split view, collapsible navigation, and terminal maximization.
-- Split view pairs two named instances with left/right and active-pane labels. Choose either instance, swap sides, or resize with a pointer or keyboard. Sorting preserves the pair; reloads restore the layout, and narrow screens temporarily show one terminal.
-- Mouse dragging, touch-and-hold, and keyboard sorting in the sidebar and tab bar, with synchronized order saved to user preferences.
+- One compact toolbar combines the instance browser, tabs, page refresh, settings, and pinning. Unpin it to fill the window with the terminal; reveal it at the top edge or with the reveal button. Search and filter instances in a drawer.
+- Split a tab with its immediate right neighbor. Multiple pairs retain their identities, ratios, and order; selecting an unrelated tab shows it alone. Swap sides, resize with a pointer or keyboard, and restore the layout on reload. Narrow screens show the current terminal while preserving groups.
+- Left-click a tab to select it and open its actions: refresh, instance settings, split, move, close, and authorized restart. Right-click selects; holding the right button drags the entire tab. Split pairs move together. Touch-and-hold and menu move actions are also available.
 - Status colors synchronized with GoTTY: red for active viewing, yellow for new output while not being viewed, green for output that has stopped but remains unread, and gray for no unread output. Offline instances use a separate icon.
 - xterm.js terminals with Nord, bundled DejaVu Sans Mono, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account, including the soft beige Paper theme (`#f5f5d5`).
 - Additional open-source fonts load from Hub on demand and persist in the browser across reloads. Cursor and scrollback options still come from GoTTY.
@@ -48,7 +48,7 @@ Each instance represents GoTTY's current shared PTY. Multiple browsers can use t
 - Owner, operator, and observer roles; terminal input, files, and voice follow both Hub permissions and GoTTY configuration.
 - Native uploads, drag-and-drop uploads, ZMODEM transfers, and optional ASR voice input. ZMODEM requires `rz` / `sz` on the remote device.
 - Automatic reconnect and output replay, plus device-credential rotation, disconnect, and unbinding.
-- A Settings menu at the top right: Terminal settings, Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device. Terminal settings remains accessible with the workspace maximized or navigation collapsed.
+- A Settings menu at the top right: Terminal settings, Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device. Reveal the hidden toolbar at the top to access terminal settings.
 - Single-file Linux amd64 / arm64 releases, with data stored under `~/.gotty-hub` by default.
 
 ## Quick Start

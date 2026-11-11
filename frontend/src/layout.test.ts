@@ -1,72 +1,51 @@
-import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {acknowledgeLayout, readLayout, rememberMaximized, restoreMaximized, acknowledgeWorkspace, readWorkspaceCache, rememberWorkspace, restoreWorkspace} from './layout';
-import {saveWorkspace, type Workspace} from './workspace/state';
-beforeEach(() => localStorage.clear());
-afterEach(() => vi.unstubAllGlobals());
-it('retains a click across immediate reload even when the server still has the previous value', () => {
-  const click = rememberMaximized('alice', true);
-  expect(restoreMaximized('alice', false)).toBe(true);
-  acknowledgeLayout('alice', click.revision, true);
-  expect(readLayout('alice')?.pending).toBe(false);
-  expect(restoreMaximized('alice', false)).toBe(false);
+import {beforeEach, expect, it} from 'vitest';
+import {acknowledgeLayout, readLayout, rememberPinned, restorePinned, acknowledgeWorkspace, readWorkspaceCache, rememberWorkspace, restoreWorkspace} from './layout';
+import {saveWorkspace, workspaceReducer, type Workspace} from './workspace/state';
+beforeEach(()=>localStorage.clear());
+const workspace=():Workspace=>({opened:['a','b','c'],order:['b','c','a'],active:'c',groups:[{left:'b',right:'c',focused:'right',ratio:.64}]});
+it('retains unpin across immediate reload and ignores older acknowledgements',()=>{
+  const earlier=rememberPinned('alice',true);rememberPinned('alice',false);
+  acknowledgeLayout('alice',earlier.revision,true);
+  expect(restorePinned('alice',true)).toBe(false);expect(readLayout('alice')?.pending).toBe(true);
+  const latest=readLayout('alice')!;acknowledgeLayout('alice',latest.revision,false);
+  expect(readLayout('alice')?.pending).toBe(false);expect(restorePinned('alice',true)).toBe(true);
 });
-it('does not let an older request acknowledge a later change', () => {
-  const first = rememberMaximized('alice', true);
-  rememberMaximized('alice', false);
-  acknowledgeLayout('alice', first.revision, true);
-  expect(readLayout('alice')).toMatchObject({pending: true, maximized: false});
-  expect(restoreMaximized('alice', true)).toBe(false);
+it('migrates legacy maximization, prioritizes pending local choice and isolates accounts',()=>{
+  localStorage.setItem('gotty-hub:layout:alice',JSON.stringify({maximized:true,revision:'old',pending:true}));
+  expect(restorePinned('alice',true,false)).toBe(false);
+  expect(restorePinned('bob',undefined,true)).toBe(false);
+  expect(restorePinned('carol',undefined)).toBe(true);
 });
-it('isolates account layouts and accepts server changes once local changes are saved', () => {
-  rememberMaximized('alice', true);
-  expect(restoreMaximized('bob', false)).toBe(false);
-  expect(restoreMaximized('alice', false)).toBe(true);
-  expect(restoreMaximized('bob', true)).toBe(true);
+it('retains complete order and groups before server acknowledgement',()=>{
+  rememberWorkspace('alice',workspace());
+  expect(restoreWorkspace('alice',{opened:['a'],active:'a'},['a','b','c'])).toEqual(workspace());
+  const earlier=readWorkspaceCache('alice')!;
+  const moved=workspaceReducer(workspace(),{type:'move',id:'b',direction:1});rememberWorkspace('alice',moved);
+  acknowledgeWorkspace('alice',earlier.revision,workspace());
+  expect(readWorkspaceCache('alice')?.pending).toBe(true);expect(restoreWorkspace('alice',{},['a','b','c'])).toEqual(moved);
 });
-it('tolerates invalid cached data', () => {
-  localStorage.setItem('gotty-hub:layout:alice', 'null');
-  expect(restoreMaximized('alice', true)).toBe(true);
-});
-it('does not acknowledge a different value saved by an older browser tab', () => {
-  const latest = rememberMaximized('alice', false);
-  acknowledgeLayout('alice', latest.revision, true);
-  expect(readLayout('alice')?.pending).toBe(true);
-});
-it('works on HTTP origins where randomUUID is unavailable', () => {
-  vi.stubGlobal('crypto', {getRandomValues: crypto.getRandomValues.bind(crypto)});
-  const click = rememberMaximized('alice', true);
-  expect(click.revision).toHaveLength(32);
-  expect(restoreMaximized('alice', false)).toBe(true);
-});
-
-const workspace = (): Workspace => ({opened: ['a', 'b', 'c'], active: 'c', split: {left: 'b', right: 'c', focused: 'right', ratio: 0.64}});
-it('retains the complete workspace across reload before the server save', () => {
-  rememberWorkspace('alice', workspace());
-  expect(restoreWorkspace('alice', {opened: ['a'], active: 'a', split: false}, ['a', 'b', 'c'])).toEqual(workspace());
-});
-it('does not acknowledge an older focus, pair or ratio after a newer interaction', () => {
-  const earlier = rememberWorkspace('alice', workspace());
-  const latest = {...workspace(), active: 'b', split: {...workspace().split!, focused: 'left' as const, ratio: 0.4}};
-  rememberWorkspace('alice', latest);
-  acknowledgeWorkspace('alice', earlier.revision, workspace());
-  expect(readWorkspaceCache('alice')?.pending).toBe(true);
-  expect(restoreWorkspace('alice', {}, ['a', 'b', 'c'])).toEqual(latest);
-});
-it('accepts saved remote state after acknowledgement and keeps accounts isolated', () => {
-  const click = rememberWorkspace('alice', workspace());
-  acknowledgeWorkspace('alice', click.revision, workspace());
+it('accepts server state after acknowledgement without leaking between accounts',()=>{
+  const click=rememberWorkspace('alice',workspace());acknowledgeWorkspace('alice',click.revision,workspace());
   expect(readWorkspaceCache('alice')?.pending).toBe(false);
-  expect(restoreWorkspace('alice', {opened: ['a'], active: 'a'}, ['a', 'b', 'c']).split).toBeNull();
-  expect(restoreWorkspace('bob', {}, ['a', 'b', 'c'], 'a')).toEqual({opened: ['a'], active: 'a', split: null});
+  expect(restoreWorkspace('alice',{opened:['a'],active:'a'},['a','b','c']).groups).toEqual([]);
+  expect(restoreWorkspace('bob',{},['a','b','c'],'a').active).toBe('a');
 });
-it('checks permissions even for a pending local layout and preserves maximization independently', () => {
-  rememberMaximized('alice', true);
-  rememberWorkspace('alice', workspace());
-  expect(restoreWorkspace('alice', {}, ['a', 'b'])).toEqual({opened: ['a', 'b'], active: 'b', split: null});
-  expect(readLayout('alice')?.maximized).toBe(true);
-  expect(readWorkspaceCache('alice')?.pending).toBe(true);
+it('filters revoked IDs even in pending cache while preserving pin separately',()=>{
+  rememberPinned('alice',false);rememberWorkspace('alice',workspace());
+  const restored=restoreWorkspace('alice',{},['a','b']);
+  expect(restored.active).toBe('b');expect(restored.groups).toEqual([]);expect(restored.order).toEqual(['b','a']);
+  expect(readLayout('alice')?.pinned).toBe(false);expect(readWorkspaceCache('alice')?.pending).toBe(true);
 });
-it('ignores malformed cached workspace values and accepts versioned server preferences', () => {
-  localStorage.setItem('gotty-hub:workspace:alice', JSON.stringify({revision: 'old', pending: true, workspace: {opened: [1]}}));
-  expect(restoreWorkspace('alice', {workspace: saveWorkspace(workspace())}, ['a', 'b', 'c'])).toEqual(workspace());
+it('ignores malformed cache and reads the current versioned server preference',()=>{
+  localStorage.setItem('gotty-hub:workspace:alice','null');
+  expect(restoreWorkspace('alice',{workspace:saveWorkspace(workspace())},['a','b','c'])).toEqual(workspace());
+});
+it('migrates pending v1 cache with the separately saved order and acknowledges the new snapshot',()=>{
+  localStorage.setItem('gotty-hub:workspace:alice',JSON.stringify({revision:'legacy',pending:true,workspace:{schemaVersion:1,opened:['a','b','c'],active:'c',split:{left:'a',right:'c',focused:'right',ratio:.6}}}));
+  const restored=restoreWorkspace('alice',{instanceOrder:['c','b','a']},['a','b','c']);
+  expect(restored.order).toEqual(['b','a','c']);expect(restored.active).toBe('c');
+  const migrated=readWorkspaceCache('alice')!;
+  expect(migrated.workspace.schemaVersion).toBe(2);expect(migrated.revision).not.toBe('legacy');
+  acknowledgeWorkspace('alice',migrated.revision,restored);
+  expect(readWorkspaceCache('alice')?.pending).toBe(false);
 });

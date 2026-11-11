@@ -1,66 +1,36 @@
-import {act, useState} from 'react';
+import {act,useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {InstanceSortList, InstanceSortProvider, SortableInstance} from './SortableInstances';
-
-let node:HTMLDivElement, root:ReturnType<typeof createRoot>;
-const reordered=vi.fn();
+import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import {WorkspaceSortProvider,WorkspaceSortList,SortableWorkspaceUnit} from './SortableInstances';
+let node:HTMLDivElement,root:ReturnType<typeof createRoot>;
+const moved=vi.fn();
 beforeEach(()=>{
-  vi.useFakeTimers();
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);moved.mockClear();
   vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){
-    const item=this.closest<HTMLElement>('[data-instance-id]');
-    const scope=item?.parentElement?.dataset.scope;
-    const index=item?[...item.parentElement!.children].indexOf(item):0;
-    const left=scope==='tabs'?300+index*200:0;
-    const top=scope==='tabs'?0:100+index*50;
-    const [,dx,dy]=item?.style.transform.match(/translate3d\(([-\d.]+)px,\s*([-\d.]+)px/)??[];
-    return new DOMRect(left+Number(dx||0),top+Number(dy||0),200,40);
+    const unit=this.closest<HTMLElement>('[data-sort-id]');const index=unit?[...unit.parentElement!.children].indexOf(unit):0;
+    return new DOMRect(index*150,0,150,30);
   });
   node=document.createElement('div');document.body.append(node);root=createRoot(node);
 });
-afterEach(async()=>{
-  await act(async()=>root.unmount());node.remove();
-  vi.restoreAllMocks();vi.clearAllTimers();vi.useRealTimers();vi.unstubAllGlobals();
+afterEach(async()=>{await act(async()=>root.unmount());node.remove();vi.restoreAllMocks();vi.unstubAllGlobals();});
+function Fixture(){const [order,setOrder]=useState(['a','b']);return <WorkspaceSortProvider onReorder={(id,target)=>{moved(id,target);setOrder([...order].reverse());}} onDragging={()=>{}} onFinish={()=>{}}><WorkspaceSortList scope="tabs" units={order.map(id=>[id])}>{order.map(id=><SortableWorkspaceUnit scope="tabs" id={id} key={id} className="unit"><span>{id}</span></SortableWorkspaceUnit>)}</WorkspaceSortList></WorkspaceSortProvider>;}
+const mouse=async(target:EventTarget,type:string,button:number,x:number)=>{await act(async()=>{target.dispatchEvent(new MouseEvent(type,{button,buttons:button===2?2:1,clientX:x,clientY:15,bubbles:true,cancelable:true}));});};
+it('starts from the whole tab and requires movement before sorting',async()=>{
+ await act(async()=>root.render(<Fixture/>));const first=node.querySelector('span')!;
+ await mouse(first,'mousedown',2,60);await mouse(document,'mouseup',2,60);expect(moved).not.toHaveBeenCalled();
+ await mouse(first,'mousedown',0,60);await mouse(document,'mousemove',0,220);await mouse(document,'mouseup',0,220);expect(moved).not.toHaveBeenCalled();
+ await mouse(first,'mousedown',2,60);await mouse(document,'mousemove',2,70);await mouse(document,'mousemove',2,220);await mouse(document,'mouseup',2,220);
+ expect(moved).toHaveBeenCalledWith('a','b');
 });
-function Fixture({initialOrder}:{initialOrder:string[]}){
-  const [order,setOrder]=useState(initialOrder);
-  return <InstanceSortProvider order={order} onReorder={value=>{reordered(value);setOrder(value);}} locale="zh-CN">
-    {(['sidebar','tabs'] as const).map(scope=><div data-scope={scope} key={scope}>
-      <InstanceSortList scope={scope} ids={order}>{order.map(id=><SortableInstance scope={scope} id={id} name={id} locale="zh-CN" className={scope==='tabs'?'session-tab':'instance-nav-row'} key={id}>{id}</SortableInstance>)}</InstanceSortList>
-    </div>)}
-  </InstanceSortProvider>;
-}
-async function key(target:HTMLElement,code:string){
-  await act(async()=>{target.dispatchEvent(new KeyboardEvent('keydown',{code,key:code==='Space'?' ':code,bubbles:true,cancelable:true}));});
-}
-it.each([['one','two'],['two','one']])('moves instances from either surface with the real keyboard sensor (%s, %s)',async(first,last)=>{
-  reordered.mockClear();
-  const initialOrder=[first,last];
-  await act(async()=>root.render(<Fixture initialOrder={initialOrder}/>));
-  const handle=(scope:string)=>node.querySelector<HTMLButtonElement>(`[data-scope="${scope}"] [data-instance-id="${last}"] button`)!;
-  const order=(scope:string)=>[...node.querySelectorAll<HTMLElement>(`[data-scope="${scope}"] [data-instance-id]`)].map(item=>item.dataset.instanceId);
-  await act(async()=>handle('tabs').focus());await key(handle('tabs'),'Space');
-  expect(handle('tabs').getAttribute('aria-pressed')).toBe('true');
-  // The active state renders before KeyboardSensor's deferred listener.
-  await act(async()=>vi.advanceTimersByTime(20));
-  expect(handle('tabs').parentElement!.style.transform).not.toBe('');
-  await key(handle('tabs'),'ArrowLeft');
-  expect(handle('tabs').parentElement!.style.transform).toMatch(/translate3d\(-[\d.]+px,/);
-  await key(handle('tabs'),'Space');
-  expect(handle('tabs').hasAttribute('aria-pressed')).toBe(false);
-  expect(handle('tabs').parentElement!.hasAttribute('data-dragging')).toBe(false);
-  expect(reordered).toHaveBeenLastCalledWith([last,first]);
-  expect(order('sidebar')).toEqual([last,first]);
-  expect(order('tabs')).toEqual([last,first]);
-  await act(async()=>handle('sidebar').focus());await key(handle('sidebar'),'Space');
-  await act(async()=>vi.advanceTimersByTime(20));
-  await key(handle('sidebar'),'ArrowDown');
-  expect(handle('sidebar').parentElement!.style.transform).toMatch(/translate3d\([^,]+, [\d.]+px,/);
-  await key(handle('sidebar'),'Space');
-  expect(handle('sidebar').hasAttribute('aria-pressed')).toBe(false);
-  expect(handle('sidebar').parentElement!.hasAttribute('data-dragging')).toBe(false);
-  expect(reordered).toHaveBeenLastCalledWith(initialOrder);
-  expect(order('sidebar')).toEqual(initialOrder);
-  expect(order('tabs')).toEqual(initialOrder);
+it('cancels on Escape or window blur without committing the order',async()=>{
+ await act(async()=>root.render(<Fixture/>));
+ for(const reason of ['escape','blur']){
+  const first=node.querySelector('span')!;
+  await mouse(first,'mousedown',2,60);await mouse(document,'mousemove',2,70);await mouse(document,'mousemove',2,220);
+  expect(node.querySelector('[data-dragging=true]')).not.toBeNull();
+  expect(document.activeElement?.getAttribute('data-sort-id')).toBe('a');
+  await act(async()=>{if(reason==='blur')window.dispatchEvent(new Event('blur'));else document.dispatchEvent(new KeyboardEvent('keydown',{code:'Escape',key:'Escape'}));});
+  expect(node.querySelector('[data-dragging=true]')).toBeNull();
+  await mouse(document,'mouseup',2,220);expect(moved).not.toHaveBeenCalled();
+ }
 });

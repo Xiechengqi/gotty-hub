@@ -12,7 +12,7 @@ const root = path.resolve(__dirname, '..');
 const dir = fs.mkdtempSync(path.join(process.env.TEST_ARTIFACTS || os.tmpdir(), 'hub-workspace-'));
 const children = [], results = {}, errors = [], sent = [], controlActions = [], fontRequests = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-let browser, hub, cookie, csrf;
+let browser, hub, cookie, csrf, credentials;
 async function port() {
   return new Promise(resolve => {const socket = net.createServer(); socket.listen(0, '127.0.0.1', () => {const p = socket.address().port; socket.close(() => resolve(p));});});
 }
@@ -35,8 +35,17 @@ async function api(route, body, method) {
   const value = await response.json(); assert(response.ok, JSON.stringify(value)); return value;
 }
 async function account(username) {
-  const response = await fetch(`${hub}/api/v1/auth/register`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({username, password: randomUUID()})});
+  credentials = {username, password: randomUUID()};
+  const response = await fetch(`${hub}/api/v1/auth/register`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(credentials)});
   const value = await response.json(); assert(response.ok, JSON.stringify(value)); csrf = value.csrf; cookie = response.headers.get('set-cookie').split(';')[0];
+}
+async function renewSession(context) {
+  // Each suite has its own session budget. Keep the server's 120 upgrades per
+  // five minutes limit intact despite many reloads of twelve mounted terminals.
+  const response = await fetch(`${hub}/api/v1/auth/password/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(credentials)});
+  const value = await response.json(); assert(response.ok, JSON.stringify(value));
+  csrf = value.csrf; cookie = response.headers.get('set-cookie').split(';')[0];
+  await context.addCookies([{name: 'hub_session', value: cookie.split('=')[1], url: hub}]);
 }
 // Read the actual xterm parser/buffer, without replacing or mocking it.
 function installInspection() {
@@ -67,7 +76,7 @@ function installInspection() {
   function sample() {
     const app = document.querySelector('.app'), main = document.querySelector('.main');
     if (app && main && getComputedStyle(main).visibility === 'visible') {
-      const maximized = app.classList.contains('workspace-maximized');
+      const maximized = app.classList.contains('chrome-unpinned');
       if (window.reviewVisibleLayouts.at(-1) !== maximized) window.reviewVisibleLayouts.push(maximized);
     }
     requestAnimationFrame(sample);
@@ -131,8 +140,10 @@ function installInspection() {
     await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;
   }
+  async function reveal(target = page) {if(await target.locator('.workspace-bar').getAttribute('aria-hidden')==='true')await target.locator('.workspace-reveal').click();}
+  async function terminalAction(name) {await reveal();await page.locator('.session-tab.selected .tab-trigger').click();const menu=page.locator('.tab-actions-menu');await menu.waitFor();await menu.getByRole('button',{name,exact:true}).click();await menu.waitFor({state:'hidden'});}
   async function settingsDialog(target = page) {
-    await target.bringToFront();
+    await target.bringToFront();await reveal(target);
     await target.getByRole('button', {name:'设置',exact:true}).click();
     await target.getByRole('button', {name:'终端设置',exact:true}).click();
     const dialog=target.getByRole('dialog',{name:'终端设置',exact:true}); await dialog.waitFor();
@@ -247,7 +258,7 @@ function installInspection() {
   await page.evaluate(()=>{const term=window.reviewTerm();term.select(0,term.buffer.active.cursorY+term.buffer.active.baseY-1,9);});
   await page.screenshot({path:path.join(dir,'paper-terminal-desktop.png')});await page.evaluate(()=>window.reviewTerm().clearSelection());
   report('paperColors',{ansi16:true,indexed256Preserved:true,trueColorPreserved:true,explicitBackgroundPreserved:true,cursorAndSelection:true});
-  const restart=page.locator('.terminal-slot:not([hidden]) .terminal-restart-control');
+  const restart={click:()=>terminalAction('重启此 GoTTY…')};
   const beforeRestart=controlActions.length;await restart.click();
   const confirmation=page.getByRole('alertdialog');await confirmation.waitFor();
   assert((await confirmation.textContent()).includes('终端-01'));assert.equal(controlActions.length,beforeRestart);
@@ -317,8 +328,7 @@ function installInspection() {
   await page.evaluate(() => {window.reviewOriginal = window.reviewTerm(); window.reviewOther = window.reviewTerm(1);});
   await page.evaluate(() => window.reviewSockets.find(socket => socket.url.includes('terminal-connections') && socket.readyState === 1)?.close());
   await wait(() => page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isDisabled(), 'transport disconnected');
-  assert(!(await page.locator('.terminal-slot:not([hidden]) .terminal-reconnect-control').isDisabled()));
-  await page.locator('.terminal-slot:not([hidden]) .terminal-reconnect-control').click();
+  await terminalAction('刷新此终端');
   await wait(() => page.evaluate(() => window.reviewTerm() && window.reviewTerm() !== window.reviewOriginal), 'renderer replaced'); await ready();
   assert(await page.evaluate(() => window.reviewTerm(1) === window.reviewOther));
   await command('printf "AFTER=%s\\n" "$HUB_REFRESH_PROBE"');
@@ -326,17 +336,19 @@ function installInspection() {
   await command(`vim -Nu NONE -n -i NONE '${file}'`);
   await wait(async () => {const s = await snapshot(); return s?.type === 'alternate' && s.pending === 0;}, 'second Vim session');
   await page.keyboard.press('G'); await page.keyboard.press('o'); await page.keyboard.type('unsaved-before-refresh');
-  await page.locator('.terminal-slot:not([hidden]) .terminal-reconnect-control').click();
+  await terminalAction('刷新此终端');
   await wait(async () => {const s = await snapshot(); return s?.type === 'alternate' && s.pending === 0 && s.text.includes('unsaved-before-refresh');}, 'restore active Vim');
   await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus();
   await page.keyboard.press('Escape'); await page.keyboard.type(':wq'); await page.keyboard.press('Enter');
   await wait(async () => (await snapshot())?.type === 'normal' && fs.readFileSync(file, 'utf8').includes('unsaved-before-refresh'), 'save preserved Vim session');
   report('terminalRefresh', {newRenderer: true, disconnectedRecovery: true, otherPaneUnchanged: true, shellPreserved: true, unsavedVimPreserved: true});
+  await renewSession(context); await page.reload({waitUntil:'domcontentloaded'}); await ready();
   await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
+  await renewSession(context); await page.reload({waitUntil:'domcontentloaded'}); await ready();
   assert.equal(await page.getByRole('button', {name: '刷新页面', exact: true}).count(), 1);
-  await page.locator('.maximize-button').click();
+  await page.locator('.pin-toolbar').click();
   await page.reload({waitUntil: 'domcontentloaded'}); await ready();
-  assert(await page.locator('.app').evaluate(element => element.classList.contains('workspace-maximized')));
+  assert(await page.locator('.app').evaluate(element => element.classList.contains('chrome-unpinned')));
   assert.deepEqual(await page.evaluate(() => window.reviewVisibleLayouts), [true]);
   await sleep(800);
   await page.route('**/api/v1/me/preferences', async route => {if (route.request().method() === 'GET') await sleep(800); await route.continue();});
@@ -344,7 +356,8 @@ function installInspection() {
   assert.deepEqual(await page.evaluate(() => window.reviewVisibleLayouts), [true]);
   await page.unroute('**/api/v1/me/preferences');
   dialog=await settingsDialog();await dialog.getByRole('button',{name:'取消',exact:true}).last().click();
-  report('maximize', {immediateReload: true, delayedPreferences: true, noOrdinaryLayoutFlash: true});
+  report('pinPersistence', {immediateReload: true, delayedPreferences: true, noOrdinaryLayoutFlash: true});
+  await reveal();await page.locator('.pin-toolbar').click();
   const widths = [];
   for (const width of [320, 375, 390, 430]) {
     await page.setViewportSize({width, height: 844}); await sleep(180);
@@ -352,10 +365,10 @@ function installInspection() {
     const box = await trigger.boundingBox(); assert(box.x >= 0 && box.x + box.width <= width);
     assert(await page.locator('.session-tabs-scroll').isHidden());
     await trigger.click(); await page.getByRole('dialog').waitFor();
-    assert.equal(await page.locator('.session-switcher-row').count(), 12);
+    assert.equal(await page.locator('.instance-browser-row').count(), 12);
     await page.getByRole('textbox', {name: '搜索实例…'}).fill('终端-12');
-    assert.equal(await page.locator('.session-switcher-row').count(), 1);
-    await page.locator('.session-switcher-item').click();
+    assert.equal(await page.locator('.instance-browser-row').count(), 1);
+    await page.locator('.instance-browser-select').click();
     await wait(async () => (await trigger.textContent()).includes('终端-12'), 'mobile session selection');
     dialog=await settingsDialog();const settingsBox=await dialog.boundingBox();assert(settingsBox.x>=0&&settingsBox.x+settingsBox.width<=width+1);
     await dialog.getByRole('button',{name:/柔和米色$/}).click();
@@ -368,8 +381,11 @@ function installInspection() {
   await page.locator('.session-switcher-trigger').click();
   await page.getByRole('dialog').waitFor(); await sleep(350);
   await page.screenshot({path: path.join(dir, 'mobile-sessions.png')});
-  await page.locator('.session-switcher-row').first().getByRole('button', {name: /关闭终端/}).click();
-  assert.equal(await page.locator('.session-switcher-row').count(), 11);
+  await page.locator('.instance-browser-row').first().locator('.instance-actions-trigger').click();
+  await page.locator('.tab-actions-menu').getByRole('button',{name:'关闭终端标签',exact:true}).click();
+  await page.locator('.session-switcher-trigger').click();
+  await page.getByRole('button',{name:'已打开终端',exact:true}).click();
+  assert.equal(await page.locator('.instance-browser-row').count(),11);
   await page.keyboard.press('Escape');
   await page.setViewportSize({width: 844, height: 390}); await sleep(150);
   assert(await page.locator('.session-tabs-scroll').isVisible());
@@ -379,7 +395,7 @@ function installInspection() {
   await context.addCookies([{name: 'hub_session', value: cookie.split('=')[1], url: hub}]);
   await page.reload({waitUntil: 'domcontentloaded'});
   await wait(async () => !(await page.locator('.app').evaluate(element => element.classList.contains('workspace-loading'))), 'other account layout');
-  assert(!(await page.locator('.app').evaluate(element => element.classList.contains('workspace-maximized'))));
+  assert(!(await page.locator('.app').evaluate(element => element.classList.contains('chrome-unpinned'))));
   assert.equal(await page.locator('.real-terminal').count(), 0);
   dialog=await settingsDialog();assert.equal(await dialog.getByRole('spinbutton').inputValue(),'14');await dialog.getByRole('button',{name:'取消',exact:true}).last().click();assert.equal((await api('/me/terminal-settings')).settings,null);
   assert.deepEqual(errors, []); report('accountIsolation', {layout: true, terminals: true});
