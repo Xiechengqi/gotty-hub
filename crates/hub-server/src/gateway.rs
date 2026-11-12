@@ -312,9 +312,12 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
         if device.tx.try_send(Frame::new("asr_data",&stream,json!({"binary":false,"payload":t}))).is_err(){break}continue}
                let kind=t.as_bytes().first().copied().unwrap_or(0);
                let writable=role!="observer"&&device.capabilities["write"]==true;
-               if !b"12347".contains(&kind){break}
+               if !b"123457".contains(&kind){break}
                if !writable && !b"24".contains(&kind){break}
-               if device.tx.try_send(Frame::new("data",&stream,Value::String(t))).is_err(){break}
+               if kind==b'5' && (device.capabilities["paste"]!=true || t.len()>8193){break}
+               // A bounded paste window can wait for queue space without
+               // turning transient congestion into a disconnected session.
+               if tokio::time::timeout(Duration::from_secs(2),device.tx.send(Frame::new("data",&stream,Value::String(t)))).await.map(|v|v.is_err()).unwrap_or(true){closure=(1013,"Instance input queue unavailable");break}
               },
               Some(Ok(Message::Binary(data)))=>{
                last=tokio::time::Instant::now();

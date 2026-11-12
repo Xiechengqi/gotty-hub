@@ -53,6 +53,7 @@ function installInspection() {
   window.reviewSockets = [];
   window.WebSocket = class extends NativeSocket {
     constructor(...args) {super(...args); window.reviewSockets.push(this);}
+    send(data) {if (typeof data==='string' && data[0]==='3') this.reviewResize=JSON.parse(data.slice(1));return super.send(data);}
   };
   window.reviewTerm = (index = 0) => {
     const element = document.querySelectorAll('.real-terminal')[index];
@@ -132,8 +133,20 @@ function installInspection() {
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  if(process.env.WORKSPACE_SUITE==='paste'){
+    await require('./paste-regressions.cjs')({page,context,browser,hub,ids,devices,directURL,api,wait,sleep,dir,report,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
+  if(process.env.WORKSPACE_SUITE==='upload'){
+    await require('./upload-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   if(process.env.WORKSPACE_SUITE==='overlay'){
     await require('./overlay-regressions.cjs')({page,context,browser,hub,ids,api,wait,sleep,dir,report,start,port,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
+  if(process.env.WORKSPACE_SUITE==='menu'){
+    await require('./menu-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;
   }
   if(process.env.WORKSPACE_SUITE==='dataflow'){
@@ -150,7 +163,7 @@ function installInspection() {
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;
   }
   async function reveal(target = page) {await target.locator('.workspace-bar').waitFor();}
-  async function terminalAction(name) {await reveal();await page.locator('.session-tab.selected .tab-trigger').click();const menu=page.locator('.tab-actions-menu');await menu.waitFor();await menu.getByRole('button',{name,exact:true}).click();await menu.waitFor({state:'hidden'});}
+  async function terminalAction(name) {await reveal();await page.locator('.session-tab.selected .tab-trigger').click({button:'right'});const menu=page.locator('.tab-actions-menu');await menu.waitFor();await menu.getByRole('button',{name,exact:true}).click();await menu.waitFor({state:'hidden'});}
   async function settingsDialog(target = page) {
     await target.bringToFront();await reveal(target);
     await target.getByRole('button', {name:'设置',exact:true}).click();
@@ -168,9 +181,9 @@ function installInspection() {
     },index),'loaded font cell metrics');
   }
   // Visit a second instance to test updates to retained background terminals.
-  await page.locator('.session-tab[data-instance-id="'+ids[1]+'"] .tab-trigger').click({button:'right'});
+  await page.locator('.session-tab[data-instance-id="'+ids[1]+'"] .tab-trigger').click();
   await wait(()=>page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isEnabled(),'second terminal');
-  await page.locator('.session-tab[data-instance-id="'+ids[0]+'"] .tab-trigger').click({button:'right'});
+  await page.locator('.session-tab[data-instance-id="'+ids[0]+'"] .tab-trigger').click();
   await wait(()=>fontLoaded(page,'DejaVu Sans Mono'),'embedded default font');
   await verifyFontMetrics(1);
   assert(fontRequests.every(url=>url.includes('dejavu-sans-mono')), 'unselected fonts downloaded at startup');
@@ -271,13 +284,13 @@ function installInspection() {
   await page.evaluate(()=>{const term=window.reviewTerm();term.select(0,term.buffer.active.cursorY+term.buffer.active.baseY-1,9);});
   await page.screenshot({path:path.join(dir,'paper-terminal-desktop.png')});await page.evaluate(()=>window.reviewTerm().clearSelection());
   report('paperColors',{ansi16:true,indexed256Preserved:true,trueColorPreserved:true,explicitBackgroundPreserved:true,cursorAndSelection:true});
-  const restart={click:()=>terminalAction('重启此 GoTTY…')};
+  const restart={click:()=>terminalAction('重启')};
   const beforeRestart=controlActions.length;await restart.click();
   const confirmation=page.getByRole('alertdialog');await confirmation.waitFor();
   assert((await confirmation.textContent()).includes('终端-01'));assert.equal(controlActions.length,beforeRestart);
   await confirmation.getByRole('button',{name:'取消',exact:true}).click();await confirmation.waitFor({state:'hidden'});
   assert.equal(controlActions.length,beforeRestart);
-  await restart.click();await confirmation.getByRole('button',{name:'重启此 GoTTY',exact:true}).click();
+  await restart.click();await confirmation.getByRole('button',{name:'重启',exact:true}).click();
   await wait(()=>controlActions.length===beforeRestart+1,'confirmed restart');
   assert.equal(controlActions.at(-1),'restart');await confirmation.waitFor({state:'hidden'});await sleep(1400);await ready();
   report('restartConfirmation',{cancelSendsNothing:true,confirmedExactlyOnce:true});
@@ -341,7 +354,7 @@ function installInspection() {
   await page.evaluate(() => {window.reviewOriginal = window.reviewTerm(); window.reviewOther = window.reviewTerm(1);});
   await page.evaluate(() => window.reviewSockets.find(socket => socket.url.includes('terminal-connections') && socket.readyState === 1)?.close());
   await wait(() => page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isDisabled(), 'transport disconnected');
-  await terminalAction('刷新此终端');
+  await terminalAction('刷新');
   await wait(() => page.evaluate(() => window.reviewTerm() && window.reviewTerm() === window.reviewOriginal && window.reviewSockets.at(-1)?.readyState === 1), 'renderer retained and socket reconnected'); await ready();
   assert(await page.evaluate(() => window.reviewTerm(1) === window.reviewOther));
   await command('printf "AFTER=%s\\n" "$HUB_REFRESH_PROBE"');
@@ -349,7 +362,7 @@ function installInspection() {
   await command(`vim -Nu NONE -n -i NONE '${file}'`);
   await wait(async () => {const s = await snapshot(); return s?.type === 'alternate' && s.pending === 0;}, 'second Vim session');
   await page.keyboard.press('G'); await page.keyboard.press('o'); await page.keyboard.type('unsaved-before-refresh');
-  await terminalAction('刷新此终端');
+  await terminalAction('刷新');
   await wait(async () => {const s = await snapshot(); return s?.type === 'alternate' && s.pending === 0 && s.text.includes('unsaved-before-refresh');}, 'restore active Vim');
   await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus();
   await page.keyboard.press('Escape'); await page.keyboard.type(':wq'); await page.keyboard.press('Enter');
@@ -359,6 +372,8 @@ function installInspection() {
   await require('./split-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,start,errors});
   await renewSession(context); await page.reload({waitUntil:'domcontentloaded'}); await ready();
   await require('./overlay-regressions.cjs')({page,context,browser,hub,ids,api,wait,sleep,dir,report,start,port,installInspection,errors});
+  await renewSession(context);
+  await require('./menu-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,errors});
   await account('other-review'); await api('/me/preferences', {maximized: false, locale: 'zh-CN'}, 'PUT');
   await context.addCookies([{name: 'hub_session', value: cookie.split('=')[1], url: hub}]);
   await page.reload({waitUntil: 'domcontentloaded'});

@@ -15,7 +15,7 @@ it('retains complete order and groups before server acknowledgement',()=>{
   rememberWorkspace('alice',workspace());
   expect(restoreWorkspace('alice',{opened:['a'],active:'a'},['a','b','c'])).toEqual(workspace());
   const earlier=readWorkspaceCache('alice')!;
-  const moved=workspaceReducer(workspace(),{type:'move',id:'b',direction:1});rememberWorkspace('alice',moved);
+  const moved=workspaceReducer(workspace(),{type:'reorder',id:'b',target:'a'});rememberWorkspace('alice',moved);
   acknowledgeWorkspace('alice',earlier.revision,workspace());
   expect(readWorkspaceCache('alice')?.pending).toBe(true);expect(restoreWorkspace('alice',{},['a','b','c'])).toEqual(moved);
 });

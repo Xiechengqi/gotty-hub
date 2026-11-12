@@ -23,4 +23,5 @@ export type TerminalConfig = {
   asr_hotkey?: string;
   restart_mode?: string;
   share_enabled?: boolean;
+  upload_ack?: boolean;
 };

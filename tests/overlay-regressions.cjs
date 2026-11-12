@@ -7,6 +7,16 @@ module.exports = async ({page, context, browser, hub, ids, api, wait, sleep, dir
   const selected = () => page.locator('.session-tab.selected').getAttribute('data-instance-id');
   const opacity = () => page.locator('.workspace-bar').evaluate(e => Number(getComputedStyle(e).getPropertyValue('--hub-bar-opacity')));
   async function dismiss() {await page.keyboard.press('Escape');await page.locator('.tab-actions-menu').waitFor({state:'hidden'});}
+  async function checkMenuSurface() {
+    await page.waitForFunction(()=>!document.querySelector('[data-entering],[data-exiting]'));
+    await wait(()=>page.locator('.tab-actions-menu').evaluate(e=>getComputedStyle(e).opacity==='1'),'menu entrance animation');
+    const surface=await page.evaluate(()=>{
+      const bar=getComputedStyle(document.querySelector('.workspace-bar')),menu=getComputedStyle(document.querySelector('.tab-actions-menu'));
+      return {bar:bar.backgroundColor,menu:menu.backgroundColor,barInk:bar.color,menuInk:menu.color,opacity:menu.opacity};
+    });
+    assert.equal(surface.menu,surface.bar,'context menu must share the bar background and alpha');
+    assert.equal(surface.menuInk,surface.barInk);assert.equal(surface.opacity,'1','menu text must remain opaque');
+  }
   async function settings() {
     await page.getByRole('button',{name:'设置',exact:true}).click();
     const menu=page.getByRole('dialog',{name:'设置',exact:true});
@@ -36,13 +46,23 @@ module.exports = async ({page, context, browser, hub, ids, api, wait, sleep, dir
   assert.equal(await page.locator('.session-tab').count(),ids.length);
   assert.equal(await page.locator('.real-terminal').count(),1,'unvisited tabs opened connections');
   await page.evaluate(()=>{window.overlayOriginal=window.reviewTerm();});
-  await tab(ids[1]).click();await page.locator('.tab-actions-menu').waitFor();assert.equal(await selected(),ids[1]);await dismiss();
+  await tab(ids[1]).click();assert.equal(await selected(),ids[1]);assert.equal(await page.locator('.tab-actions-menu').count(),0);
   await wait(()=>page.locator('.terminal-slot:not([hidden]) .terminal-clear-control').isEnabled(),'lazy terminal connects');
-  await tab(ids[0]).click({button:'right'});assert.equal(await page.locator('.tab-actions-menu').count(),0);
+  await tab(ids[0]).click({button:'right'});await page.locator('.tab-actions-menu').waitFor();assert.equal(await selected(),ids[0]);await checkMenuSurface();await page.screenshot({path:path.join(dir,'tab-context-default.png')});
+  // Portal events reach React ancestors, but menu gestures must not sort tabs.
+  const menuHeading=await page.locator('.tab-menu-heading').boundingBox();
+  await page.mouse.move(menuHeading.x+12,menuHeading.y+menuHeading.height/2);await page.mouse.down();
+  await page.mouse.move(menuHeading.x+45,menuHeading.y+menuHeading.height/2,{steps:5});
+  assert.equal(await page.locator('[data-dragging=true]').count(),0,'menu content must not activate tab drag');
+  await page.mouse.up();assert(await page.locator('.tab-actions-menu').isVisible());await dismiss();
+  await tab(ids[0]).focus();await page.keyboard.press('Shift+F10');await page.locator('.tab-actions-menu').waitFor();await checkMenuSurface();
+  await tab(ids[1]).click();await page.locator('.tab-actions-menu').waitFor({state:'hidden'});assert.equal(await selected(),ids[1]);
+  await tab(ids[0]).click();
   assert(await page.evaluate(()=>window.reviewTerm()===window.overlayOriginal));
   assert.equal(await page.locator('.real-terminal').count(),2);
   await checkGeometry();
   const initialOpacity=await opacity();
+  assert.equal(initialOpacity,.8,'default is 80% opaque, 20% transparent');
   await page.evaluate(()=>{window.overlayResizes=[];window.overlaySocketCount=window.reviewSockets.length;for(const socket of window.reviewSockets){const send=socket.send.bind(socket);socket.send=data=>{if(typeof data==='string'&&data[0]==='3')window.overlayResizes.push(data);send(data);};}});
   await sleep(300);const beforeSizes=await page.evaluate(()=>window.overlayResizes.length);
   let dialog=await settings(),slider=dialog.getByRole('slider');
@@ -51,24 +71,26 @@ module.exports = async ({page, context, browser, hub, ids, api, wait, sleep, dir
   await dialog.getByRole('button',{name:'取消',exact:true}).last().click();await dialog.waitFor({state:'hidden'});assert.equal(await opacity(),initialOpacity);
   dialog=await settings();slider=dialog.getByRole('slider');await slider.focus();await page.keyboard.press('Home');
   for(let n=0;n<25;n++)await page.keyboard.press('ArrowRight');
-  assert.equal(await opacity(),.75);
+  await wait(async()=>await opacity()===.75,'keyboard transparency preview');
   await dialog.getByRole('button',{name:'保存并应用',exact:true}).click();await dialog.waitFor({state:'hidden'});
   assert.equal((await api('/me/terminal-settings')).settings.tabBarTransparency,25);
   assert.equal(await page.evaluate(()=>window.reviewSockets.length),await page.evaluate(()=>window.overlaySocketCount));
   assert.equal(await page.evaluate(()=>window.overlayResizes.length),beforeSizes,'transparency resized the terminal');
   await page.reload({waitUntil:'domcontentloaded'});await wait(async()=>await opacity()===.75,'saved transparency');await checkGeometry();
+  await tab(ids[0]).click({button:'right'});await page.locator('.tab-actions-menu').waitFor();await checkMenuSurface();await dismiss();
   await page.route('**/api/v1/me/preferences',async route=>{if(route.request().method()==='GET')await sleep(700);await route.continue();});
   await page.reload({waitUntil:'domcontentloaded'});await wait(async()=>await page.locator('.workspace-bar').isVisible(),'restored workspace');await checkGeometry();await page.unroute('**/api/v1/me/preferences');
-  // Closing stays closed across repeated SSE snapshots and reload; + restores it.
-  const closed=ids[2];await tab(closed).click();await page.locator('.tab-actions-menu').getByRole('button',{name:'关闭终端标签',exact:true}).click();
-  await wait(async()=>await page.locator('.session-tab').count()===ids.length-1,'closed tab');await sleep(1200);
+  // Old clients could close tabs. Preserve and reopen those saved layouts.
+  const closed=ids[2],account=await api('/me'),preferences=await api('/me/preferences');
+  await api('/me/preferences',{...preferences,workspace:{schemaVersion:3,opened:ids.filter(id=>id!==closed),order:ids,active:ids[0],groups:[]}},'PUT');
+  await page.evaluate(id=>localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id)),account.id);
   await page.reload({waitUntil:'domcontentloaded'});await wait(async()=>await page.locator('.session-tab').count()===ids.length-1,'closed state restored');
   await page.locator('.add-instance').click();const add=page.getByRole('dialog',{name:'添加实例',exact:true});await add.waitFor();
   assert.equal(await add.getByRole('textbox').count(),2);assert.equal(await add.getByRole('textbox',{name:'用户名',exact:true}).inputValue(),(await api('/me')).username);
   await add.getByRole('button',{name:'复制Hub 地址',exact:true}).click();await add.getByRole('status').waitFor();
   await add.getByRole('button',{name:/重新打开已关闭实例/}).click();await page.getByRole('option',{name:names[closed],exact:true}).click();
   await add.waitFor({state:'hidden'});await wait(async()=>await selected()===closed,'reopened selection');
-  await tab(ids[0]).click({button:'right'});
+  await tab(ids[0]).click();
   // An actual GoTTY registration appends one tab without moving focus or opening a socket.
   const gp=await port(), url='http://127.0.0.1:'+gp;
   const args=['--config','/dev/null','--address','127.0.0.1','--port',String(gp),'--hub-state-file',path.join(dir,'overlay-new.json'),'--permit-write','bash','--noprofile','--norc'];
@@ -88,7 +110,7 @@ module.exports = async ({page, context, browser, hub, ids, api, wait, sleep, dir
   const layouts=[];
   for(const width of [320,375,414,768,1280]){
     await page.setViewportSize({width,height:844});await sleep(200);layouts.push(await checkGeometry());
-    await tab(ids.at(-1)).click();assert.equal(await selected(),ids.at(-1));await dismiss();
+    await tab(ids.at(-1)).click();assert.equal(await selected(),ids.at(-1));assert.equal(await page.locator('.tab-actions-menu').count(),0);
     await page.screenshot({path:path.join(dir,'overlay-'+width+'.png')});
     dialog=await settings();const box=await dialog.boundingBox();assert(box.x>=0 && box.x+box.width<=width+1,'settings overflow');
     assert(await dialog.locator('.terminal-settings-themes button').evaluateAll(buttons=>buttons.every(b=>b.scrollWidth<=b.clientWidth+1)),'theme labels overflow');
@@ -96,8 +118,8 @@ module.exports = async ({page, context, browser, hub, ids, api, wait, sleep, dir
     await dialog.getByRole('button',{name:'取消',exact:true}).last().click();await dialog.waitFor({state:'hidden'});
   }
   await page.setViewportSize({width:844,height:390});await sleep(200);await checkGeometry();
-  await page.setViewportSize({width:1280,height:800});await tab(ids[0]).click({button:'right'});
-  const snapshot=await api('/me/terminal-settings');await api('/me/terminal-settings',{revision:snapshot.revision,settings:{...snapshot.settings,tabBarTransparency:50}},'PUT');
-  await page.reload({waitUntil:'domcontentloaded'});await wait(async()=>await opacity()===.5,'restore default transparency');
-  report('overlayWorkspace',{equalTabs:true,fullHeight:true,lazyConnections:true,leftMenuRightSelect:true,transparencyPreviewSaveCancel:true,noResizeOrReconnect:true,closeReopen:true,newRegistration:true,languageAccountRow:true,widths:layouts.map(v=>v.width)});
+  await page.setViewportSize({width:1280,height:800});await tab(ids[0]).click();
+  const snapshot=await api('/me/terminal-settings');await api('/me/terminal-settings',{revision:snapshot.revision,settings:{...snapshot.settings,tabBarTransparency:20}},'PUT');
+  await page.reload({waitUntil:'domcontentloaded'});await wait(async()=>await opacity()===.8,'restore default transparency');
+  report('overlayWorkspace',{equalTabs:true,fullHeight:true,lazyConnections:true,leftSelectRightMenu:true,keyboardMenu:true,menuDragIsolated:true,matchingMenuSurface:true,defaultOpacity:.8,transparencyPreviewSaveCancel:true,noResizeOrReconnect:true,legacyClosedTabRecovery:true,newRegistration:true,languageAccountRow:true,widths:layouts.map(v=>v.width)});
 };

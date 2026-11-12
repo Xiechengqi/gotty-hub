@@ -4,9 +4,9 @@ import {SortableContext, useSortable, horizontalListSortingStrategy} from '@dnd-
 import {CSS} from '@dnd-kit/utilities';
 
 type Scope = 'tabs';
-export class RightMouseSensor extends MouseSensor {
+export class WorkspaceMouseSensor extends MouseSensor {
   static activators: typeof MouseSensor.activators = [{eventName: 'onMouseDown', handler: ({nativeEvent: event}, {onActivation}) => {
-    if (event.button !== 2 || (event.target instanceof Element && event.target.closest('[data-no-drag]'))) return false;
+    if (event.button !== 0 || (event.target instanceof Element && event.target.closest('[data-no-drag]'))) return false;
     onActivation?.({event}); return true;
   }}];
 }
@@ -19,7 +19,7 @@ export class WorkspaceTouchSensor extends TouchSensor {
 export function WorkspaceSortProvider({onReorder, onDragging, onFinish, children}: {
   onReorder: (id: string, target: string) => void; onDragging: (value: boolean) => void; onFinish: () => void; children: ReactNode;
 }) {
-  const sensors = useSensors(useSensor(RightMouseSensor, {activationConstraint: {distance: 5}}), useSensor(WorkspaceTouchSensor, {activationConstraint: {delay: 250, tolerance: 8}}));
+  const sensors = useSensors(useSensor(WorkspaceMouseSensor, {activationConstraint: {distance: 5}}), useSensor(WorkspaceTouchSensor, {activationConstraint: {delay: 250, tolerance: 8}}));
   const dragging = useRef(false);
   useEffect(() => {
     // dnd-kit listens for Escape on document and cleans up the active sensor.
@@ -49,5 +49,9 @@ export function WorkspaceSortList({scope, units, children}: {scope: Scope; units
 }
 export function SortableWorkspaceUnit({scope, id, className, children, weight = 1}: {scope: Scope; id: string; className: string; children: ReactNode; weight?: number}) {
   const {setNodeRef, listeners, transform, transition, isDragging} = useSortable({id: scope + ':' + id, data: {instanceId: id, scope}});
-  return <div ref={setNodeRef} {...listeners} tabIndex={-1} className={className} data-sort-id={id} data-dragging={isDragging || undefined} onContextMenu={event => event.preventDefault()} style={{transform: CSS.Transform.toString(transform), transition, flexGrow: weight}}>{children}</div>;
+  // React Aria buttons stop primary mouse events while bubbling. Capture the
+  // gesture at the sorting unit so the whole button remains draggable, but
+  // exclude portalled menu content that still shares these React ancestors.
+  const {onMouseDown, onTouchStart, ...otherListeners} = listeners ?? {};
+  return <div ref={setNodeRef} {...otherListeners} onMouseDownCapture={event => {if (event.currentTarget.contains(event.target as Node)) onMouseDown?.(event);}} onTouchStartCapture={event => {if (event.currentTarget.contains(event.target as Node)) onTouchStart?.(event);}} tabIndex={-1} className={className} data-sort-id={id} data-dragging={isDragging || undefined} onContextMenu={event => event.preventDefault()} style={{transform: CSS.Transform.toString(transform), transition, flexGrow: weight}}>{children}</div>;
 }

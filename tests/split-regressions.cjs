@@ -14,9 +14,9 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   const focused = () => page.evaluate(() => document.activeElement?.closest('.terminal-slot')?.dataset.instanceId);
   const expectFocus = id => wait(async () => await focused()===id && await page.locator('.session-tab.selected').getAttribute('data-instance-id')===id,'terminal focus '+names[id]);
   async function reveal() {await page.locator('.workspace-bar').waitFor();}
-  async function menu(id) {await reveal(); await tab(id).scrollIntoViewIfNeeded(); await sleep(100); await tab(id).click(); const m=page.locator('.tab-actions-menu');await m.waitFor();return m;}
+  async function menu(id) {await reveal(); await tab(id).scrollIntoViewIfNeeded(); await sleep(100); await tab(id).click({button:'right'}); const m=page.locator('.tab-actions-menu');await m.waitFor();return m;}
   async function action(id,name) {const m=await menu(id);await m.getByRole('button',{name,exact:typeof name==='string'}).click();await m.waitFor({state:'hidden'});}
-  async function select(id) {await reveal();await tab(id).click({button:'right'});await expectFocus(id);}
+  async function select(id) {await reveal();await tab(id).click();await expectFocus(id);}
   async function terminal(id) {return page.evaluate(id => window.reviewSnapshot([...document.querySelectorAll('.real-terminal')].findIndex(e=>e.closest('.terminal-slot').dataset.instanceId===id)),id);}
   async function identity() {assert(await page.evaluate(() => [...document.querySelectorAll('.real-terminal')].every((e,i)=>window.compactTerms[e.closest('.terminal-slot').dataset.instanceId]===window.reviewTerm(i)) && window.reviewSockets.length===window.compactSocketCount),'layout recreated terminal or WebSocket');}
   async function track() {await page.evaluate(() => {
@@ -77,17 +77,19 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   for(const cancel of ['escape','blur']){
     await tab(b).scrollIntoViewIfNeeded();await sleep(250); // wait for the previous cancelled sort's return animation
     const from=await tab(b).boundingBox(),to=await tab(a).boundingBox();
-    await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down({button:'right'});await page.mouse.move(to.x+8,to.y+to.height/2,{steps:10});
+    await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(to.x+8,to.y+to.height/2,{steps:10});
     await wait(async()=>await page.locator('[data-dragging=true]').count()===1,'drag activated');
     if(cancel==='escape')await page.keyboard.press('Escape');else await page.evaluate(()=>window.dispatchEvent(new Event('blur')));
-    await page.mouse.up({button:'right'});assert.deepEqual(await order(),beforeCancel);assert.equal(await page.locator('[data-dragging=true]').count(),0);
+    await page.mouse.up();assert.deepEqual(await order(),beforeCancel);assert.equal(await page.locator('[data-dragging=true]').count(),0);
   }
   assert(await page.evaluate(count=>window.splitInputs.slice(count).every(frame=>/^\x1b\[[IO]$/.test(frame.text)),inputCount),'drag keystroke leaked to PTY');
-  // Entire pair moves when dragging its right member with the right button.
+  // Entire pair moves when dragging its right member with the left button.
   await tab(c).scrollIntoViewIfNeeded();const source=await tab(c).boundingBox(),target=await tab(a).boundingBox();
-  await page.mouse.move(source.x+source.width/2,source.y+source.height/2);await page.mouse.down({button:'right'});
-  await page.mouse.move(target.x+8,target.y+target.height/2,{steps:15});await sleep(150);await page.mouse.up({button:'right'});
-  await wait(async()=>(await order())[0]===b && (await order())[1]===c,'whole group right drag');await expectPair(b,c);await identity();
+  await page.mouse.move(source.x+source.width/2,source.y+source.height/2);await page.mouse.down();
+  await page.mouse.move(target.x+8,target.y+target.height/2,{steps:15});await sleep(150);
+  assert(Math.abs((await tab(a).boundingBox()).x-target.x)>1,'neighbor must move while the tab is being dragged');
+  await page.mouse.up();assert.equal(await page.locator('.tab-actions-menu').count(),0,'drop must not open menu');
+  await wait(async()=>(await order())[0]===b && (await order())[1]===c,'whole group left drag');await expectPair(b,c);await identity();
   await action(c,'交换左右');await expectPair(c,b);await expectFocus(c);assert.deepEqual((await order()).slice(0,2),[c,b]);await identity();
   const divider=page.getByRole('separator',{name:'调整终端分屏宽度'});
   const bounds=await page.locator('.terminals').boundingBox(),handle=await divider.boundingBox();
@@ -126,14 +128,14 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   await wait(()=>slot(c).locator('.terminal-empty').isVisible(),'named offline pane');assert((await slot(c).innerText()).includes(names[c]));
   await wait(()=>devices[2].child.exitCode!==null,'stopped');devices[2].child=start('gotty-compact-reconnect',process.env.GOTTY_BINARY,devices[2].args);
   await wait(()=>slot(c).locator('.terminal-clear-control').isEnabled(),'reconnect');await expectPair(c,b);await sleep(200);assert.equal(await focused(),b,'reconnect stole focus');
-  await action(c,'关闭终端标签');assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);await expectFocus(b);
-  await page.locator('.add-instance').click();await page.getByRole('button',{name:/重新打开已关闭实例/}).click();await page.getByRole('option',{name:names[c],exact:true}).click();await expectFocus(c);assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);
+  await action(c,'退出分屏');assert.equal(await page.locator('.terminal-slot:not([hidden])').count(),1);await expectFocus(c);
   const observer=await browser.newContext({viewport:{width:1280,height:800}});await observer.addInitScript(installInspection);await observer.addInitScript(()=>localStorage.setItem('gotty-hub.locale','zh-CN'));
   const username='compact-observer';const registration=await observer.request.post(hub+'/api/v1/auth/register',{data:{username,password:'compact-observer-password-123'}});assert(registration.ok());
   for(const id of [b,c])await api('/instances/'+id+'/grants',{username,role:'observer'},'PUT');
   const op=await observer.newPage();op.on('pageerror',e=>errors.push(e.stack));await op.goto(hub,{waitUntil:'domcontentloaded'});
   await wait(async()=>await op.locator('.session-tab').count()===2,'observer tabs');
-  await op.locator('.session-tab .tab-trigger').first().click();assert.equal(await op.locator('.tab-actions-menu').getByRole('button',{name:'重启此 GoTTY…',exact:true}).count(),0);
+  await op.locator('.session-tab .tab-trigger').first().click({button:'right'});assert.equal(await op.locator('.tab-actions-menu').getByRole('button',{name:'重启',exact:true}).count(),0);
+  assert.equal(await op.locator('.tab-actions-menu').getByRole('button',{name:'删除',exact:true}).count(),0);
   await op.locator('.tab-actions-menu').getByRole('button',{name:/与右侧标签分屏/}).click();await wait(async()=>await op.locator('.terminal-slot:not([hidden])').count()===2,'observer pair');
   assert.equal(await op.locator('.terminal-clear-control,.terminal-upload-control,.terminal-restart-control').count(),0);
   await api('/instances/'+c+'/grants/'+username,{},'DELETE');await wait(async()=>await op.locator('.terminal-slot:not([hidden])').count()===1&&await op.locator('.terminal-slot[data-instance-id="'+c+'"]').count()===0,'revocation dissolves group');await observer.close();await page.bringToFront();
@@ -143,18 +145,30 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   await touch.goto(hub,{waitUntil:'domcontentloaded'});
   await touch.locator('.session-tab').first().waitFor();await sleep(350);
   const touchOrder=()=>touch.locator('.session-tab').evaluateAll(es=>es.map(e=>e.dataset.tabId));
-  const beforeTouch=await touchOrder();const cdp=await touchContext.newCDPSession(touch);
+  const touchTarget=touch.locator('.session-tab .tab-trigger').last();
+  const touchId=await touchTarget.locator('..').getAttribute('data-tab-id');
+  await touchTarget.tap();assert.equal(await touch.locator('.session-tab.selected').getAttribute('data-tab-id'),touchId);
+  assert.equal(await touch.locator('.tab-actions-menu').count(),0,'first touch must only switch');
+  await touchTarget.tap();await touch.locator('.tab-actions-menu').waitFor();
+  await wait(()=>touch.locator('.tab-actions-menu').evaluate(e=>getComputedStyle(e).opacity==='1'),'touch menu entrance');
+  const cdp=await touchContext.newCDPSession(touch),heading=await touch.locator('.tab-menu-heading').boundingBox();
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:heading.x+12,y:heading.y+heading.height/2}]});await sleep(350);
+  assert.equal(await touch.locator('[data-dragging=true]').count(),0,'menu touch must not activate tab drag');
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});assert(await touch.locator('.tab-actions-menu').isVisible());
+  await touch.keyboard.press('Escape');await touch.locator('.tab-actions-menu').waitFor({state:'hidden'});
+  const beforeTouch=await touchOrder();
   const rows=touch.locator('.workspace-tab-unit');const from=await rows.first().boundingBox(),to=await rows.nth(2).boundingBox();
   const point={x:from.x+from.width/2,y:from.y+from.height/2};
   await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});await sleep(350);
   await wait(async()=>await touch.locator('[data-dragging=true]').count()===1,'long-press activation');
+  assert.equal(await touch.locator('.tab-actions-menu').count(),0,'drag must not open context menu');
   for(let i=1;i<=8;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:point.x+(to.x+to.width/2-point.x)*i/8,y:point.y}]});
   await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   await wait(async()=>JSON.stringify(await touchOrder())!==JSON.stringify(beforeTouch),'touch reorder');
   await touch.screenshot({path:path.join(dir,'compact-touch-tabs.png')});await touchContext.close();await page.bringToFront();
   // Restore a predictable workspace for the remaining full-suite checks.
-  await wait(async()=>(await api('/me/preferences')).workspace?.opened.includes(c),'reopened persisted');
+  await wait(async()=>(await api('/me/preferences')).workspace?.opened.includes(c),'opened state persisted');
   await api('/me/preferences',reset,'PUT');await page.evaluate(id=>{localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id));localStorage.removeItem('gotty-hub:layout:'+encodeURIComponent(id));},me.id);
   await page.reload({waitUntil:'domcontentloaded'});await expectFocus(a);
-  report('compactWorkspace',{singleToolbar:true,leftMenuRightSelect:true,cancelDragDoesNotReachPTY:true,touchLongPress:true,rightDragWholePair:true,adjacentOnly:true,multipleGroups:true,unrelatedTabPreservesGroups:true,atomicSwap:true,legacyMigration:true,focusAndInput:true,stableRenderersAndSockets:true,confirmedPTYGrid:true,unsavedVim:true,overlayDoesNotResize:true,escapePreserved:true,immediateReload:true,mobileRestoration:true,offlineIdentity:true,observerAndRevocation:true});
+  report('compactWorkspace',{singleToolbar:true,leftSelectRightMenu:true,cancelDragDoesNotReachPTY:true,touchLongPress:true,touchMenuDragIsolated:true,leftDragWholePair:true,adjacentOnly:true,multipleGroups:true,unrelatedTabPreservesGroups:true,atomicSwap:true,legacyMigration:true,focusAndInput:true,stableRenderersAndSockets:true,confirmedPTYGrid:true,unsavedVim:true,overlayDoesNotResize:true,escapePreserved:true,immediateReload:true,mobileRestoration:true,offlineIdentity:true,observerAndRevocation:true});
 };

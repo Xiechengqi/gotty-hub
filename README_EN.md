@@ -32,23 +32,25 @@ browser
   -> local command / shell
 ```
 
-Each instance represents GoTTY's current shared PTY. Multiple browsers can use the same session; closing a Hub tab leaves the remote command running.
+Each instance represents GoTTY's current shared PTY. Multiple browsers can use the same session; switching instances does not restart remote commands.
 
 ## Features
 
 - Username / password registration and login, with a fixed `admin` account and an interactive administrator-password setup on first launch.
-- The terminal fills the browser viewport. Equal-width instance tabs overlay it on a gray background with 50% transparency; only + and Settings remain at the right. Registered instances get tabs automatically, connect on first visit, and can be reopened from + after closing.
+- The terminal fills the browser viewport. Equal-width instance tabs overlay it on a gray background with 80% opacity (20% transparency); only + and Settings remain at the right. Registered instances get tabs automatically and connect on first visit. Tabs closed in older versions can still be reopened from +.
 - Split a tab with its immediate right neighbor. Multiple pairs retain their identities, ratios, and order; selecting an unrelated tab shows it alone. Swap sides, resize with a pointer or keyboard, and restore the layout on reload. Narrow screens show the current terminal while preserving groups.
-- Left-click a tab to select it and open its actions: refresh, instance settings, split, move, close, and authorized restart. Right-click selects; holding the right button drags the entire tab. Split pairs move together. Touch-and-hold and menu move actions are also available.
+- Left-click a tab to switch terminals; drag with the left button to reorder. Split pairs move together. Right-click selects and opens Refresh, split actions, authorized Restart, and Delete, without dividers. Delete removes the Hub binding and requires owner confirmation. The menu shares the bar background and transparency. On touch, tap the selected tab again for actions and hold to drag. Shift+F10 opens actions from the keyboard.
 - Status colors synchronized with GoTTY: red for active viewing, yellow for new output while not being viewed, green for output that has stopped but remains unread, and gray for no unread output. Offline instances use a separate icon.
 - xterm.js terminals with Nord, bundled DejaVu Sans Mono, and 14px text by default. Settings → Terminal settings saves the theme, text size, and font for every terminal in your account, including the soft beige Paper theme (`#f5f5d5`) and tab background transparency (0–100%).
 - Additional open-source fonts load from Hub on demand and persist in the browser across reloads. Cursor and scrollback options still come from GoTTY.
-- Clients share a stable terminal grid; new connections and reloads do not steal size control. Take control from the tab menu. Terminal refresh retains the renderer and history; page reload restores GoTTY's in-memory history, Vim screen, and cursor, with 5000 history lines by default. See the [dataflow review](docs/TERMINAL_DATAFLOW_REVIEW.md).
-- The terminal toolbar provides connection counts, history clearing, uploads, and share management. Refresh, instance settings, and authorized restart are in the tab menu; restart uses a power icon and requires confirmation.
+- Large clipboard pastes show centered progress, the instance name, byte counts, and Stop. Supported GoTTY versions confirm PTY writes; older versions show unconfirmed send progress. Interrupted input is never automatically resent. See the [paste review](docs/TERMINAL_PASTE_REVIEW.md).
+- Clients share a stable terminal grid; new connections and reloads do not steal size control. Hub uses the automatic sizing policy. Terminal refresh retains the renderer and history; page reload restores GoTTY's in-memory history, Vim screen, and cursor, with 5000 history lines by default. See the [dataflow review](docs/TERMINAL_DATAFLOW_REVIEW.md).
+- The terminal toolbar provides connection counts, history clearing, uploads, and share management. Restart in the tab menu uses a power icon and requires confirmation. The instance details drawer, grant editor, credential rotation, tab close action, and move buttons have been removed.
 - The same two-row, 16-key mobile keyboard as GoTTY when the software keyboard opens, with one-shot Ctrl / Alt / Shift and repeating navigation keys.
 - Owner, operator, and observer roles; terminal input, files, and voice follow both Hub permissions and GoTTY configuration.
 - Native uploads, drag-and-drop uploads, ZMODEM transfers, and optional ASR voice input. ZMODEM requires `rz` / `sz` on the remote device.
-- Automatic reconnect and output replay, plus device-credential rotation, disconnect, and unbinding.
+- Native uploads show progress, transferred bytes, filenames, and retryable errors. GoTTY versions supporting upload acknowledgments confirm success after saving and clean up incomplete temporary files on cancellation or disconnection. Older versions report an unverified send. See the [upload review](docs/TERMINAL_UPLOAD_REVIEW.md).
+- Automatic reconnect and output replay, with disconnection from GoTTY or instance-binding deletion from Hub.
 - A Settings menu at the top right: Terminal settings, Console (statistics, online upgrades, restarts, and logs; `admin` only), Change password, and sign-out from this browser or every device. The account name and language switch share the first menu row.
 - Single-file Linux amd64 / arm64 releases, with data stored under `~/.gotty-hub` by default.
 
@@ -108,11 +110,11 @@ Binding credentials are isolated by stable listening address, port and base path
 
 Regular usernames contain 3–64 ASCII letters, digits, dots, hyphens, or underscores, starting with a letter or digit. Login is case-insensitive. Regular-user passwords must be 12–256 bytes; the database stores Argon2id hashes.
 
-Instance owners can grant access to other registered users in instance settings:
+Access follows the roles below, and existing grants remain effective. The web controls for editing grants and rotating device credentials have been removed:
 
 | Role | Capabilities |
 | --- | --- |
-| Owner | Use the terminal, manage access, rotate device credentials, and unbind; restart GoTTY and manage shares when supported by the device |
+| Owner | Use the terminal and delete its Hub binding; restart GoTTY and manage shares when supported by the device |
 | Operator | Use terminal input, file transfers, and enabled voice input |
 | Observer | View terminal output and adjust terminal display settings for their own account |
 

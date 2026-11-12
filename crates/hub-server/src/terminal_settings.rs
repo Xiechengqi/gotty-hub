@@ -19,7 +19,7 @@ pub struct Settings {
 }
 
 fn default_tab_transparency() -> u8 {
-    50
+    20
 }
 
 impl Settings {
@@ -106,8 +106,8 @@ mod tests {
     fn transparency_defaults_for_legacy_settings_and_validates_bounds() {
         let legacy = json!({"schemaVersion":1,"theme":"paper","fontSize":18,"fontId":"monospace"});
         let settings: Settings = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(settings.tab_bar_transparency, 50);
-        for n in [0, 50, 100] {
+        assert_eq!(settings.tab_bar_transparency, 20);
+        for n in [0, 20, 50, 100] {
             let mut value = legacy.clone();
             value["tabBarTransparency"] = json!(n);
             let settings: Settings = serde_json::from_value(value).unwrap();

@@ -6,15 +6,18 @@ import {Unicode11Addon} from '@xterm/addon-unicode11';
 import {ImageAddon} from '@xterm/addon-image';
 import {WebglAddon} from '@xterm/addon-webgl';
 import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-core';
+import {bindPaste} from '@gotty/terminal-core/paste';
+import {reportPaste} from './PasteProgress';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
 import {defaultDisplayOptions, displayOptions, NORD_THEME, BUILTIN_THEMES, type Appearance} from '@gotty/terminal-core/appearance';
 import {RiDeleteBinLine, RiUpload2Line, RiGroupLine} from '@remixicon/react';
 import {Button} from '@/components/base/buttons/button';
-import {Input} from '@/components/base/input/input';
+import {InputBase} from '@/components/base/input/input';
 import {AlertDialog, Modal, ModalBody, ModalHeader} from '@/components/base/modal/modal';
 import {api} from '../api';
 import {terminalMessage} from './messages';
-import {createTransfer, TransferModal, FILE_LIMIT, type Transfer} from './Transfer';
+import {createTransfer, TransferModal, type Transfer} from './Transfer';
+import {uploadFile, uploadBytes, type UploadProgress} from './upload';
 import {readAppearance, type TerminalConfig} from './appearance';
 import {applyTerminalFont, fontDiagnostics, type FontApplication} from '@gotty/terminal-core/font-rendering';
 import {FontStatus} from './FontStatus';
@@ -24,8 +27,9 @@ import {HubConnection} from './connection';
 import {MobileKeys} from './MobileKeys';
 import '@xterm/xterm/css/xterm.css';
 
-type Controller = {refresh: () => void; takeSizeControl: () => void; term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal) => Promise<void>};
-export type TerminalActions = {refresh: () => void; restart: () => void; restartAvailable: boolean; canRestart: boolean; takeSizeControl?: () => void; canTakeSizeControl?: boolean};
+type Controller = {refresh: () => void; term: Xterm; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal, progress: (value: UploadProgress) => void) => Promise<boolean>};
+type UploadState = UploadProgress & {file: File; status: 'uploading' | 'success' | 'sent' | 'error'; error?: string};
+export type TerminalActions = {refresh: () => void; restart: () => void; restartAvailable: boolean; canRestart: boolean};
 type Props = {onActions?: (id: string, actions: TerminalActions | undefined) => void; id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; onViewport?: (height: number) => void; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
 
 export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, onViewport, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled, onActions}: Props) {
@@ -52,7 +56,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const [terminalState, setTerminalState] = useState<TerminalStatePayload>();
   const [transfer, setTransfer] = useState<Transfer | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
-  const [upload, setUpload] = useState<{name: string; progress: number; done?: boolean}>();
+  const [upload, setUpload] = useState<UploadState>();
   const [dragging, setDragging] = useState(false);
   const [colors, setColors] = useState({background: NORD_THEME.background, foreground: NORD_THEME.foreground});
   const [fontStatus, setFontStatus] = useState<FontApplication>();
@@ -64,6 +68,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const [restartError, setRestartError] = useState('');
   const restartPending = useRef(false);
   const zh = locale === 'zh-CN';
+  const nameRef = useRef(instanceName || id); nameRef.current = instanceName || id;
   const named = (label: string) => label + ' · ' + (instanceName || id);
   const control = useCallback<Control>((action, payload = {}) => controller.current?.control(action, payload) ?? Promise.reject(Error('Terminal is disconnected')), []);
 
@@ -72,6 +77,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     refreshPending.current = true;
     setRefreshConfirm(false);
     uploadAbort.current?.abort();
+    uploadAbort.current = undefined;
     setUpload(undefined); setTransfer(null); setMessage(''); setConnected(false);
     setShareOpen(false);
     controller.current?.refresh();
@@ -83,12 +89,10 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       refresh: () => {if (uploadAbort.current || transfer) setRefreshConfirm(true); else refreshTerminal();},
       restart: () => {if (owner && controls && connected && config.restart_mode && config.restart_mode !== 'disabled') {setRestartError(''); setRestartConfirm(true);}},
       restartAvailable: owner && controls,
-      takeSizeControl: () => {if (writable && connected) controller.current?.takeSizeControl();},
-      canTakeSizeControl: writable && connected && terminalState?.sizeControl === true,
       canRestart: !!(owner && controls && connected && config.restart_mode && config.restart_mode !== 'disabled'),
     });
     return () => onActions?.(id, undefined);
-  }, [id, onActions, owner, controls, writable, connected, config.restart_mode, terminalState?.sizeControl, transfer]);
+  }, [id, onActions, owner, controls, connected, config.restart_mode, transfer]);
 
   const applyAppearance = useCallback((term: Xterm, measure: () => void) => {
     const epoch = ++appearanceEpoch.current;
@@ -123,11 +127,13 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       term.loadAddon(webgl); element.dataset.terminalRenderer = 'webgl';
     } catch {element.dataset.terminalRenderer = 'dom';}
     let input: (data: string | Uint8Array) => void = () => {};
+    let paste: (text: string, bracketed: boolean) => void = () => {};
+    const unbindPaste = bindPaste(element, () => ({enabled: writable && !replaying && !term.options.disableStdin, bracketed: term.modes.bracketedPasteMode && !term.options.ignoreBracketedPasteMode}), (text, bracketed) => {inputTransform.current?.(''); paste(text, bracketed);});
     let resize: (cols: number, rows: number) => void = () => {};
     let requestedSize: {cols: number; rows: number} | undefined;
     let serverSize: {cols: number; rows: number} | undefined;
-    let sendUpload: (message: string) => void = () => {};
     let bufferSize = 1024;
+    let uploadAcknowledged = false;
     let connection: HubConnection | null = null;
     let voice: VoiceInput | null = null;
     let messageTimer: ReturnType<typeof setTimeout> | undefined;
@@ -170,13 +176,15 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     };
     const makeTransfer = () => writable && files ? createTransfer(data => term.write(data), data => input(data), setTransfer, enabled => {term.options.disableStdin = !enabled || !writable;}) : null;
     let zmodem = makeTransfer();
-    const adapter: Terminal & {setUploadFileSender: (sender: (message: string) => void) => void; setUploadFileBufferSize: (size: number) => void} = {
+    const adapter: Terminal & {setUploadFileBufferSize: (size: number) => void} = {
+      setPasteSender: sender => {paste = sender;}, onPasteProgress: (state, cancel, dismiss) => {if (!disposed) reportPaste(id, nameRef.current, state, cancel, dismiss);},
       isVisible: () => view.current, onHistoryStatus: truncated => {if (host.current) host.current.dataset.historyTruncated = String(truncated); if (truncated) showMessage('Older output exceeded the retained history limit.', 6000);},
       info: () => ({columns: requestedSize?.cols ?? term.cols, rows: requestedSize?.rows ?? term.rows}), output: (data, replay) => {if (zmodem && !replay) zmodem.consume(data); else term.write(data);},
       flushOutput: callback => term.write(new Uint8Array(0), callback), setReplayMode: active => {replaying = active; element.dataset.replayActive = String(active);},
       showMessage, removeMessage: () => showMessage('', 0), setWindowTitle: () => {},
       setPreferences: value => {
         preferences.current = value;
+        uploadAcknowledged = !!value['hub-config'] && typeof value['hub-config'] === 'object' && (value['hub-config'] as TerminalConfig).upload_ack === true;
         if (value['hub-config'] && typeof value['hub-config'] === 'object') {configRef.current = value['hub-config'] as TerminalConfig; setConfig(configRef.current); installVoice();}
         altIsMeta = value['alt-is-meta'] === true; applyAppearance(term, measure);
       },
@@ -189,11 +197,11 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
         }
       },
       showAPIIndicator: execId => {apiExecutions.add(execId); setAPIRunning(true);}, hideAPIIndicator: execId => {apiExecutions.delete(execId); setAPIRunning(apiExecutions.size > 0);},
-      setUploadFileSender: sender => {sendUpload = sender;}, setUploadFileBufferSize: size => {bufferSize = size;},
+      setUploadFileBufferSize: size => {bufferSize = size;},
       onInput: callback => {input = callback;}, onResize: callback => {resize = callback;}, close: () => {}, reset: () => term.reset(), deactivate: () => {}, focus: () => {if (view.current && host.current?.parentElement?.contains(document.activeElement)) term.focus();}, scrollToBottom: () => term.scrollToBottom(),
     };
     const viewing = () => view.current && document.visibilityState === 'visible' && document.hasFocus() && !!host.current?.contains(document.activeElement);
-    const wt = new WebTTY(adapter, {create: () => {connection = new HubConnection(id, writable, owner, controls, viewing, () => view.current); return connection;}}, '', '', 'hub:' + id);
+    const wt = new WebTTY(adapter, {create: () => {uploadAcknowledged = false; bufferSize = 1024; connection = new HubConnection(id, writable, owner, controls, viewing, () => view.current); return connection;}}, '', '', 'hub:' + id);
     wt.onConnect = () => {if (!disposed) setConnected(true);}; wt.onDisconnect = () => {if (!disposed) {setConnected(false); setCount(0);}};
     const subscription = term.onData(data => {if (writable && !replaying) input(inputTransform.current?.(data)??data);});
     const binary = term.onBinary(data => {if (writable && !replaying) input(Uint8Array.from(data, char => char.charCodeAt(0)));});
@@ -224,31 +232,19 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     window.visualViewport?.addEventListener('resize', viewport); viewport();
     const report = () => connection?.reportView(); const interval = setInterval(report, 3000);
     document.addEventListener('visibilitychange', report); window.addEventListener('focus', report); window.addEventListener('blur', report); document.addEventListener('focusin', report);
-    controller.current = {refresh: () => {zmodem?.dispose(); zmodem=makeTransfer(); term.options.disableStdin = !writable; wt.reconnectNow(); measure();}, takeSizeControl: () => wt.takeSizeControl(), term, measure, send: data => {if (writable) input(data);}, view: () => {report(); wt.reportVisibility();},
+    controller.current = {refresh: () => {zmodem?.dispose(); zmodem=makeTransfer(); term.options.disableStdin = !writable; wt.reconnectNow(); measure();}, term, measure, send: data => {if (writable) input(data);}, view: () => {report(); wt.reportVisibility();},
       control: (action, payload) => connection?.request(action, payload) ?? Promise.reject(Error('Terminal is disconnected')),
-      upload: async (file, signal) => {
-        if (!writable || !files || !file.size || file.size > FILE_LIMIT) throw Error('Maximum file size: 64 MiB; empty files are not supported');
-        const overhead = new TextEncoder().encode(JSON.stringify({name: file.name, size: file.size, chunk: file.size, totalChunks: file.size, data: ''})).length + 1;
-        const chunkSize = Math.min(8192, Math.floor((bufferSize - overhead) / 4) * 3);
-        if (chunkSize <= 0) throw Error('Filename is too long');
-        const totalChunks = Math.ceil(file.size / chunkSize);
-        for (let chunk = 0; chunk < totalChunks; chunk++) {
-          if (signal.aborted || disposed) throw Error('Upload cancelled');
-          if (!connection || connection.closed || connection.ws.readyState !== 1) throw Error('Terminal is disconnected');
-          while (connection.ws.bufferedAmount > 256 * 1024) {await new Promise(resolve => setTimeout(resolve, 10)); if (signal.aborted || disposed || connection.closed) throw Error('Upload cancelled or disconnected');}
-          const bytes = new Uint8Array(await file.slice(chunk * chunkSize, (chunk + 1) * chunkSize).arrayBuffer());
-          if (signal.aborted || disposed) throw Error('Upload cancelled');
-          const data = btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(''));
-          sendUpload('7' + JSON.stringify({name: file.name, size: file.size, chunk, totalChunks, data}));
-          setUpload({name: file.name, progress: Math.round((chunk + 1) / totalChunks * 100)});
-        }
+      upload: async (file, signal, progress) => {
+        if (!writable || !files) throw Error('File upload requires write permission');
+        if (disposed || !connection) throw Error('Terminal is disconnected');
+        return uploadFile(file, connection, bufferSize, uploadAcknowledged, signal, progress);
       },
     };
     return () => {
-      disposed = true; if (aliveTerm.current === term) aliveTerm.current = undefined; uploadAbort.current?.abort(); clearTimeout(messageTimer); cancelAnimationFrame(fitFrame); voice?.close(); zmodem?.dispose();
+      disposed = true; if (aliveTerm.current === term) aliveTerm.current = undefined; uploadAbort.current?.abort(); uploadAbort.current = undefined; setUpload(undefined); clearTimeout(messageTimer); cancelAnimationFrame(fitFrame); voice?.close(); zmodem?.dispose();
       window.visualViewport?.removeEventListener('resize', viewport); controller.current = undefined; clearInterval(interval);
       document.removeEventListener('visibilitychange', report); window.removeEventListener('focus', report); window.removeEventListener('blur', report); document.removeEventListener('focusin', report);
-      stop(); observer.disconnect(); subscription.dispose(); binary.dispose(); selection.dispose(); osc.dispose(); term.dispose();
+      stop(); unbindPaste(); reportPaste(id, nameRef.current, undefined); observer.disconnect(); subscription.dispose(); binary.dispose(); selection.dispose(); osc.dispose(); term.dispose();
       document.fonts?.removeEventListener('loadingdone',measure);
     };
   }, [id, writable, asr, files, owner, controls, onViewport, applyAppearance]);
@@ -276,13 +272,17 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   }, [visible, focusRequest, id]);
 
   async function startUpload(file: File) {
-    if (!controller.current || uploadAbort.current) return;
-    const abort = new AbortController(); uploadAbort.current = abort; setUpload({name: file.name, progress: 0});
-    try {await controller.current.upload(file, abort.signal); if (!abort.signal.aborted) setUpload({name: file.name, progress: 100, done: true});}
-    catch (error) {if (!abort.signal.aborted) {setMessage(error instanceof Error ? error.message : String(error)); setUpload(undefined);}}
-    finally {if (uploadAbort.current === abort) uploadAbort.current = undefined;}
+    if (uploadAbort.current) return;
+    const abort = new AbortController(); uploadAbort.current = abort; setUpload({file, loaded: 0, progress: 0, status: 'uploading'});
+    try {
+      if (!controller.current) throw Error('Terminal is disconnected');
+      const verified = await controller.current.upload(file, abort.signal, value => {if (!abort.signal.aborted) setUpload({file, ...value, status: 'uploading'});});
+      if (!abort.signal.aborted) setUpload({file, loaded: file.size, progress: 100, status: verified ? 'success' : 'sent'});
+    }
+    catch (error) {if (!abort.signal.aborted) setUpload(value => value ? {...value, status: 'error', error: error instanceof Error ? error.message : String(error)} : value);}
+    finally {if (uploadAbort.current === abort) {uploadAbort.current = undefined; if (abort.signal.aborted) setUpload(undefined);}}
   }
-  const closeUpload = () => {uploadAbort.current?.abort(); setUpload(undefined); controller.current?.term.focus();};
+  const closeUpload = () => {uploadAbort.current?.abort(); uploadAbort.current = undefined; setUpload(undefined); controller.current?.term.focus();};
   return <section className="real-terminal dark" style={{'--color-terminal-background': colors.background, '--color-terminal-foreground': colors.foreground} as CSSProperties}
     onDragOver={event => {if (writable && files && connected && event.dataTransfer.types.includes('Files')) {event.preventDefault(); setDragging(true);}}}
     onDragLeave={event => {if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false);}}
@@ -298,10 +298,11 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     {apiRunning && <div className="terminal-api-indicator text-caption-1-regular" role="status">API running</div>}
     {message && <div className="terminal-message text-caption-1-regular" role="status">{terminalMessage(message, locale)}</div>}
     {dragging && <div className="terminal-drop-overlay text-body-medium">{zh ? '松开以上传文件' : 'Drop files here to upload'}</div>}
-    <div hidden><Input ref={uploadInput} type="file" aria-label={zh ? '选择上传文件' : 'Choose file to upload'} onChange={() => {const file = uploadInput.current?.files?.[0]; if (file) void startUpload(file); if (uploadInput.current) uploadInput.current.value = '';}}/></div>
+    {/* FileList must bypass TextField's controlled string value. */}
+    <div hidden><InputBase ref={uploadInput} type="file" aria-label={zh ? '选择上传文件' : 'Choose file to upload'} onChange={event => {const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void startUpload(file);}}/></div>
     <MobileKeys term={terminal} enabled={writable&&visible&&connected&&config.mobile_keys!==false} transform={setInputTransform} locale={locale}/>
     <TransferModal transfer={transfer} locale={locale} onClose={() => setTransfer(null)}/>
-    <AlertDialog isOpen={restartConfirm} onOpenChange={setRestartConfirm} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} description={zh ? `确认重启“${instanceName || id}”？此实例的连接和正在运行的命令可能中断。` : `Restart “${instanceName || id}”? Connections and running commands on this instance may be interrupted.`} confirmLabel={zh ? '重启此 GoTTY' : 'Restart this GoTTY'} cancelLabel={zh ? '取消' : 'Cancel'} pendingLabel={zh ? '发送中…' : 'Sending…'} isConfirmDisabled={!owner || !controls || !connected || !config.restart_mode || config.restart_mode === 'disabled'} onConfirm={async () => {
+    <AlertDialog isOpen={restartConfirm} onOpenChange={setRestartConfirm} title={zh ? '重启 GoTTY' : 'Restart GoTTY'} description={zh ? `确认重启“${instanceName || id}”？此实例的连接和正在运行的命令可能中断。` : `Restart “${instanceName || id}”? Connections and running commands on this instance may be interrupted.`} confirmLabel={zh ? '重启' : 'Restart'} cancelLabel={zh ? '取消' : 'Cancel'} pendingLabel={zh ? '发送中…' : 'Sending…'} isConfirmDisabled={!owner || !controls || !connected || !config.restart_mode || config.restart_mode === 'disabled'} onConfirm={async () => {
       if (restartPending.current || !owner || !controls || !connected || !config.restart_mode || config.restart_mode === 'disabled') return;
       restartPending.current = true;
       try {await control('restart'); setMessage(zh ? '已发送重启请求，正在等待 GoTTY 重连…' : 'Restart requested. Waiting for GoTTY to reconnect…');}
@@ -309,6 +310,15 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       finally {restartPending.current = false;}
     }}>{restartError && <p role="alert" className="text-text-error-primary">{restartError}</p>}</AlertDialog>
     <Modal isOpen={refreshConfirm} onOpenChange={setRefreshConfirm} size="sm"><ModalHeader title={zh ? '刷新当前终端' : 'Refresh current terminal'} closeLabel={zh ? '取消' : 'Cancel'}/><ModalBody><div className="flex flex-col gap-4"><p>{zh ? '刷新会中断当前文件传输。远端命令会继续运行。' : 'Refreshing interrupts the current file transfer. Remote commands keep running.'}</p><Button onClick={refreshTerminal}>{zh ? '中断传输并刷新' : 'Stop transfer and refresh'}</Button><Button variant="secondary" onClick={() => setRefreshConfirm(false)}>{zh ? '取消' : 'Cancel'}</Button></div></ModalBody></Modal>
-    <Modal isOpen={!!upload} onOpenChange={value => {if (!value) closeUpload();}} size="sm"><ModalHeader title={zh ? '上传文件' : 'Upload file'} closeLabel={zh ? '关闭' : 'Close'}/><ModalBody><div className="flex flex-col gap-4"><p className="break-all">{upload?.name}</p><progress className="terminal-upload-progress" value={upload?.progress || 0} max={100}/><p>{upload?.progress}%</p><Button variant="secondary" onClick={closeUpload}>{upload?.done ? (zh ? '完成' : 'Done') : (zh ? '取消' : 'Cancel')}</Button></div></ModalBody></Modal>
+    <Modal isOpen={!!upload} onOpenChange={value => {if (!value) closeUpload();}} size="sm"><ModalHeader title={zh ? '上传文件' : 'Upload file'} closeLabel={zh ? '关闭' : 'Close'}/><ModalBody>{upload && <div className="flex flex-col gap-4">
+      <p className="break-all"><bdi>{upload.file.name}</bdi></p>
+      <progress className="terminal-upload-progress" aria-label={zh ? '上传进度' : 'Upload progress'} value={upload.progress} max={100}/>
+      <p className="text-body-2-regular text-text-secondary">{upload.progress}% · {uploadBytes(upload.loaded)} / {uploadBytes(upload.file.size)}</p>
+      {upload.status === 'error' ? <p role="alert" className="text-text-error-primary">{zh ? '上传失败：' : 'Upload failed: '}{terminalMessage(upload.error || '', locale)}</p> : <p role="status" className="break-all">
+        {upload.status === 'success' ? (zh ? `上传成功：${upload.file.name}` : `Uploaded: ${upload.file.name}`) : upload.status === 'sent' ? (zh ? `已发送：${upload.file.name}。当前 GoTTY 不支持写入确认，请在终端中确认文件。` : `Sent: ${upload.file.name}. This GoTTY version cannot confirm the saved file. Check it in the terminal.`) : (zh ? '正在上传到终端当前目录…' : 'Uploading to the terminal working directory…')}
+      </p>}
+      {upload.status === 'error' && <Button disabled={!connected} onClick={() => void startUpload(upload.file)}>{zh ? '重试' : 'Retry'}</Button>}
+      <Button variant="secondary" onClick={closeUpload}>{upload.status === 'uploading' ? (zh ? '取消' : 'Cancel') : upload.status === 'error' ? (zh ? '关闭' : 'Close') : (zh ? '完成' : 'Done')}</Button>
+    </div>}</ModalBody></Modal>
   </section>;
 }

@@ -69,8 +69,8 @@ export function decodeWorkspace(value: unknown, legacyOrder?: unknown): Workspac
   return normalizeWorkspace({opened: saved.opened, active: saved.active, order, groups}, [...new Set([...order, ...saved.opened])]);
 }
 export function saveWorkspace(value: Workspace): SavedWorkspace {return {schemaVersion: 3, ...value};}
-// The order remembers closed tabs. Only genuinely new IDs open automatically;
-// repeated snapshots must not undo a user's explicit close.
+// The order remembers tabs hidden by older clients. Only new IDs open
+// automatically; repeated snapshots preserve those existing preferences.
 export function reconcileWorkspace(state: Workspace, available: readonly string[], openAll = false): Workspace {
   const added = available.filter(id => openAll || !state.order.includes(id));
   const next = normalizeWorkspace({...state, opened: [...state.opened, ...added]}, available);
@@ -94,10 +94,9 @@ export type WorkspaceAction =
   | {type: 'reconcile'; available: string[]}
   | {type: 'select' | 'focus'; id: string}
   | {type: 'start'; id: string; right: string}
-  | {type: 'close' | 'exit' | 'swap'; id: string}
+  | {type: 'exit' | 'swap'; id: string}
   | {type: 'resize'; id: string; ratio: number}
-  | {type: 'reorder'; id: string; target: string}
-  | {type: 'move'; id: string; direction: -1 | 1};
+  | {type: 'reorder'; id: string; target: string};
 export function workspaceReducer(state: Workspace, action: WorkspaceAction): Workspace {
   if (action.type === 'restore') return action.value;
   if (action.type === 'reconcile') return reconcileWorkspace(state, action.available);
@@ -116,12 +115,6 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
       next = {...state, active: action.id, groups: [...state.groups, {left: action.id, right: action.right, focused: 'left', ratio: 0.5}]};
       break;
     }
-    case 'close': {
-      const activeGroup = activeSplit(state);
-      const active = state.active === action.id || group && group === activeGroup ? (group ? group.left === action.id ? group.right : group.left : state.opened.find(id => id !== action.id) || '') : state.active;
-      next = {...state, opened: state.opened.filter(id => id !== action.id), active, groups: state.groups.filter(g => g !== group)};
-      break;
-    }
     case 'exit': next = {...state, groups: state.groups.filter(g => g !== group)}; break;
     case 'swap':
       if (group) next = {...state, order: state.order.map(id => id === group.left ? group.right : id === group.right ? group.left : id), groups: state.groups.map(g => g === group ? {...g, left: g.right, right: g.left, focused: g.focused === 'left' ? 'right' : 'left'} : g)};
@@ -129,12 +122,6 @@ export function workspaceReducer(state: Workspace, action: WorkspaceAction): Wor
     case 'resize':
       if (group) next = {...state, groups: state.groups.map(g => g === group ? {...g, ratio: clampRatio(action.ratio)} : g)};
       break;
-    case 'move': {
-      const units = navigationUnits(state, state.opened.includes(action.id));
-      const index = units.findIndex(ids => ids.includes(action.id));
-      const target = units[index + action.direction]?.[0];
-      return target ? workspaceReducer(state, {type: 'reorder', id: action.id, target}) : state;
-    }
     case 'reorder': {
       const units = navigationUnits(state);
       const from = units.findIndex(ids => ids.includes(action.id)), to = units.findIndex(ids => ids.includes(action.target));

@@ -7,7 +7,7 @@ import {Slider} from '@/components/base/slider/slider';
 import {Input} from '@/components/base/input/input';
 import {Modal, ModalBody, ModalFooter, ModalHeader} from '@/components/base/modal/modal';
 import {errorText} from '../errors';
-import {DEFAULT_SETTINGS, migrateAppearance, validSettings, type SettingsSnapshot, type TerminalSettings as Settings} from './settings';
+import {DEFAULT_SETTINGS, DEFAULT_TAB_BAR_TRANSPARENCY, migrateAppearance, validSettings, type SettingsSnapshot, type TerminalSettings as Settings} from './settings';
 import {TerminalPreview} from './TerminalPreview';
 
 export function TerminalSettings({open, onClose, snapshot, legacy, locale, loading, loadError, onSave, onPreviewTransparency}: {
@@ -35,7 +35,7 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
     return () => {++selection.current;};
   }, [open]);
   useEffect(() => {
-    if (open && previewReady) onPreviewTransparency?.(draft.tabBarTransparency ?? 50);
+    if (open && previewReady) onPreviewTransparency?.(draft.tabBarTransparency ?? DEFAULT_TAB_BAR_TRANSPARENCY);
     else if (!open) onPreviewTransparency?.(null);
   }, [open, previewReady, draft.tabBarTransparency, onPreviewTransparency]);
   useEffect(() => () => onPreviewTransparency?.(null), [onPreviewTransparency]);
@@ -63,7 +63,7 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
     <ModalBody><div className="flex flex-col gap-6">
       {(error || loadError) && <p role="alert" className="text-text-error-primary">{error || errorText(loadError, locale)}</p>}
       <section className="flex flex-col gap-2">
-        <Slider label={zh ? 'Tab 背景透明度' : 'Tab background transparency'} thumbLabel={zh ? 'Tab 背景透明度（%）' : 'Tab background transparency (%)'} minValue={0} maxValue={100} step={1} value={draft.tabBarTransparency ?? 50} formatValue={value => `${value}%`} isDisabled={saving} onChange={value => setDraft(previous => ({...previous, tabBarTransparency: value}))}/>
+        <Slider label={zh ? 'Tab 背景透明度' : 'Tab background transparency'} thumbLabel={zh ? 'Tab 背景透明度（%）' : 'Tab background transparency (%)'} minValue={0} maxValue={100} step={1} value={draft.tabBarTransparency ?? DEFAULT_TAB_BAR_TRANSPARENCY} formatValue={value => `${value}%`} isDisabled={saving} onChange={value => setDraft(previous => ({...previous, tabBarTransparency: value}))}/>
         <p className="text-caption-1-regular text-text-secondary">{zh ? '0% 不透明 · 100% 完全透明' : '0% opaque · 100% transparent'}</p>
       </section>
       <section className="flex flex-col gap-2"><h3 className="text-body-medium text-text-primary">{zh ? '配色主题' : 'Color theme'}</h3>

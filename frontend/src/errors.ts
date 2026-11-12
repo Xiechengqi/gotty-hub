@@ -16,7 +16,6 @@ export function errorText(code:string,locale:string):string{
  server_shutting_down:['Hub 正在关闭或重启，请稍后重试。','Hub is shutting down or restarting. Please try again shortly.'],
  rate_limit:['请求过于频繁，请稍后重试。','Too many requests. Please try again later.'],
  password_length:['密码需要 12 到 256 字节。','Use a password between 12 and 256 bytes.'],
- rotation_pending:['设备凭据轮换尚未完成，请等待设备确认。','Credential rotation is waiting for device confirmation.'],
  database_error:['服务暂时不可用，请稍后重试。','The service is temporarily unavailable.'],
  terminal_settings_conflict:['终端设置已在其他页面更新。请重新打开设置后再保存。','Terminal settings changed in another page. Reopen settings before saving.'],
  };

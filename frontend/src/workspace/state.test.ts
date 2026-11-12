@@ -19,7 +19,7 @@ it('keeps independent groups while selecting unrelated terminals',()=>{
 it('moves either member as a unit and never inserts another tab inside it',()=>{
   expect(workspaceReducer(paired(),{type:'reorder',id:'c',target:'e'}).order).toEqual(['a','d','e','b','c']);
   expect(workspaceReducer(paired(),{type:'reorder',id:'e',target:'c'}).order).toEqual(['a','e','b','c','d']);
-  expect(workspaceReducer(paired(),{type:'move',id:'c',direction:-1}).order).toEqual(['b','c','a','d','e']);
+  expect(workspaceReducer(paired(),{type:'reorder',id:'c',target:'a'}).order).toEqual(['b','c','a','d','e']);
 });
 it('keeps previously unopened instances outside a newly formed pair',()=>{
   const state=workspaceReducer({...initial(),opened:['a','c']},{type:'start',id:'a',right:'c'});
@@ -32,12 +32,12 @@ it('swaps both tab and pane positions while retaining the focused instance',()=>
   expect(state.active).toBe('b');expect(state.order).toEqual(['a','c','b','d','e']);
   expect(activeSplit(state)).toMatchObject({left:'c',right:'b',focused:'right'});
 });
-it('closing or revoking one member retains its survivor without selecting another pair',()=>{
-  const closed=workspaceReducer(paired(),{type:'close',id:'b'});
-  expect(closed.active).toBe('c');expect(closed.groups).toEqual([]);
+it('deleting or revoking one member retains its survivor without selecting another pair',()=>{
+  const deleted=workspaceReducer(paired(),{type:'reconcile',available:['a','c','d','e']});
+  expect(deleted.active).toBe('c');expect(deleted.groups).toEqual([]);
   expect(normalizeWorkspace(paired(),['a','c','d']).active).toBe('c');
   const away=workspaceReducer(paired(),{type:'select',id:'e'});
-  expect(workspaceReducer(away,{type:'close',id:'b'}).active).toBe('e');
+  expect(workspaceReducer(away,{type:'reconcile',available:['a','c','d','e']}).active).toBe('e');
 });
 it('exiting removes only the selected group and preserves opened terminals',()=>{
   const state=workspaceReducer(paired(),{type:'start',id:'d',right:'e'});
@@ -79,7 +79,8 @@ it('maintains adjacency, disjoint membership and valid active IDs through mixed 
 it('opens every existing instance on migration and only new IDs afterwards',()=>{
   const migrated=workspaceFromPreferences({workspace:{schemaVersion:2,...initial(),opened:['a']}},initial().order);
   expect(migrated.opened).toEqual(initial().opened);
-  const closed=workspaceReducer(migrated,{type:'close',id:'b'});
+  // Preserve tabs hidden by older clients, even though the close action is gone.
+  const closed={...migrated,opened:migrated.opened.filter(id=>id!=='b')};
   expect(workspaceFromPreferences({workspace:saveWorkspace(closed)},initial().order)).toEqual(closed);
   const added=workspaceReducer(closed,{type:'reconcile',available:[...initial().order,'f']});
   expect(added.opened).toEqual(['a','c','d','e','f']);expect(added.active).toBe('a');

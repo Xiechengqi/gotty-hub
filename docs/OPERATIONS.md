@@ -100,7 +100,7 @@ sqlite3 /private/backup/hub.db 'PRAGMA integrity_check;'
 4. 回滚先停新版本，使用升级前备份与旧版本配对恢复。不要直接让旧二进制运行新 schema。
 5. `docker buildx build --platform linux/amd64,linux/arm64 ...` 可构建多架构发布；外部 registry 推送独立执行。本次未推送镜像或改动生产。
 
-兼容矩阵：Hub0.2 / Connector协议1 / terminal-core0.3.1 / schema 0001+0002+0003（实例名唯一约束、账号终端设置）。Paper 主题不新增迁移，需配套升级前端与服务端主题白名单。未启用 Hub 的 GoTTY 继续独立工作；无 ASR 能力时降级键盘输入。默认限额和状态时序见架构决策。
+兼容矩阵：Hub0.2 / Connector协议1 / terminal-core0.5.0 / schema 0001+0002+0003（实例名唯一约束、账号终端设置）。Paper 主题不新增迁移，需配套升级前端与服务端主题白名单。粘贴写入确认需新版 Hub 与 GoTTY，旧 GoTTY 自动使用未确认的发送进度；两端均须配套发布各自前后端资源，无需新增数据库迁移。未启用 Hub 的 GoTTY 继续独立工作；无 ASR 能力时降级键盘输入。默认限额和状态时序见架构决策。
 
 账号终端设置、浏览器字体缓存和迁移/回滚说明见 [TERMINAL_SETTINGS.md](TERMINAL_SETTINGS.md)。
 

@@ -14,8 +14,18 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
   const command = async text => {await page.bringToFront();await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type(text);await page.keyboard.press('Enter');};
   const action = async (target,name) => {
     await target.bringToFront();
-    await target.locator('.session-tab.selected .tab-trigger').click();
+    await target.locator('.session-tab.selected .tab-trigger').click({button:'right'});
     const menu=target.locator('.tab-actions-menu');await menu.getByRole('button',{name,exact:true}).click();await menu.waitFor({state:'hidden'});
+  };
+  // Hub's takeover menu has been removed. Exercise protocol compatibility with
+  // the actual viewport report already sent by each real terminal connection.
+  const takeSize = async target => {
+    await target.bringToFront();
+    await target.evaluate(()=>{
+      const socket=[...window.reviewSockets].reverse().find(s=>s.readyState===1&&s.reviewResize);
+      if(!socket)throw Error('No measured terminal connection');
+      socket.send('3'+JSON.stringify({...socket.reviewResize,takeControl:true}));
+    });
   };
   await reload(page);await sleep(600);
   const initial=await snapshots(page);assert(initial.cols>=180,`desktop grid too small: ${initial.cols}`);
@@ -32,11 +42,11 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
   await wait(()=>directStates.some(state=>state.activeCols===initial.cols),'standalone viewer grid');
   await direct.reload({waitUntil:'domcontentloaded'});await sleep(500);
   assert.equal((await snapshots(page)).cols,initial.cols,'standalone refresh stole desktop grid');
-  await action(mobile,'接管终端尺寸');await wait(async()=> (await snapshots(page)).cols<=65,'mobile explicit takeover');
+  await takeSize(mobile);await wait(async()=> (await snapshots(page)).cols<=65,'mobile protocol takeover');
   assert.equal((await snapshots(page)).cols,(await snapshots(mobile)).cols);
-  await action(page,'接管终端尺寸');await wait(async()=> (await snapshots(page)).cols===initial.cols,'desktop explicit takeover');
+  await takeSize(page);await wait(async()=> (await snapshots(page)).cols===initial.cols,'desktop protocol takeover');
   await reload(page);await sleep(600);assert.equal((await snapshots(page)).cols,initial.cols,'leader refresh lost size lease');
-  report('sizeOwnership',{desktopCols:initial.cols,mobileRefreshStable:true,standaloneRefreshStable:true,explicitTakeover:true,leaderRefreshStable:true});
+  report('sizeOwnership',{desktopCols:initial.cols,mobileRefreshStable:true,standaloneRefreshStable:true,protocolTakeover:true,leaderRefreshStable:true});
 
   // A retained transcript larger than the former 512 KiB replay window.
   const history=path.join(dir,'history.ansi');
@@ -46,7 +56,7 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
   const before=await snapshots(page);fs.writeFileSync(path.join(dir,'history-before.json'),JSON.stringify(before));assert(before.text.includes('HISTORY-0000-'));
   assert(fs.statSync(history).size>512*1024);
   await page.evaluate(()=>{window.reviewOriginal=window.reviewTerm();window.reviewSocketCount=window.reviewSockets.length;});
-  await action(page,'刷新此终端');
+  await action(page,'刷新');
   await wait(()=>page.evaluate(()=>window.reviewSockets.length>window.reviewSocketCount&&window.reviewSockets.at(-1).readyState===1),'soft refresh transport');await settled(page);await sleep(200);
   assert(await page.evaluate(()=>window.reviewTerm()===window.reviewOriginal),'soft refresh replaced xterm');
   sameText((await snapshots(page)).text,before.text,'soft-refresh');
@@ -75,9 +85,9 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
   const reflow=path.join(dir,'reflow.ansi');
   fs.writeFileSync(reflow,'\x1b[0m\x1b[2J\x1b[3J\x1b[H'+Array.from({length:1400},(_,i)=>`REFLOW-${String(i).padStart(4,'0')}-${'r'.repeat(160)}\r\n`).join('')+'C'.repeat(initial.cols-1)+'中尾\r\n'+'S'.repeat(initial.cols-1)+' 中SPACE\r\nREFLOW-END\r\n');
   await command(`cat '${reflow}'`);await wait(async()=> (await snapshots(page)).text.includes('REFLOW-END'),'reflow fixture');
-  await action(mobile,'接管终端尺寸');await wait(async()=> (await snapshots(page)).cols<=65,'narrow history grid');await sleep(300);
+  await takeSize(mobile);await wait(async()=> (await snapshots(page)).cols<=65,'narrow history grid');await sleep(300);
   const narrow=await snapshots(page);await reload(page);sameText((await snapshots(page)).text,narrow.text,'narrow-history-checkpoint');
-  await action(page,'接管终端尺寸');await wait(async()=> (await snapshots(page)).cols===initial.cols,'wide history grid');await sleep(300);
+  await takeSize(page);await wait(async()=> (await snapshots(page)).cols===initial.cols,'wide history grid');await sleep(300);
   const wide=await snapshots(page);await reload(page);sameText((await snapshots(page)).text,wide.text,'wide-history-checkpoint');
   assert(wide.text.includes('REFLOW-0000-')&&wide.text.includes('REFLOW-1399-'),'logical history was lost during reflow');
   report('historyReflow',{narrowCols:narrow.cols,wideCols:wide.cols,logicalLinesPreserved:1400});

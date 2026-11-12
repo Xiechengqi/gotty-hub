@@ -3,7 +3,7 @@ import {cx} from '@/utils/cx';
 import {translate, type Locale} from '../i18n';
 import {clampRatio, DIVIDER_WIDTH} from './state';
 
-export type PaneInstance = {id: string; name: string; label: string; online: boolean; writable: boolean; icon: ReactNode};
+export type PaneInstance = {id: string; name: string; label: string; online: boolean; writable: boolean; owner: boolean; icon: ReactNode};
 
 // This is a layout separator, not a second terminal host. Its siblings retain
 // their keyed React identity when a pane moves between grid columns.

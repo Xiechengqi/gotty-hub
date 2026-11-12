@@ -118,7 +118,7 @@ export function DropdownTrigger({ className, ...props }: ComponentProps<typeof A
 /* ------------------------------------------------------------------- panel */
 
 export interface DropdownPopoverProps
-  extends Pick<ComponentProps<typeof AriaPopover>, "placement" | "offset" | "crossOffset"> {
+  extends Pick<ComponentProps<typeof AriaPopover>, "placement" | "offset" | "crossOffset" | "style"> {
   "aria-label": string;
   /** Extra classes on the panel — e.g. a width override (default w-[266px]). */
   className?: string;
@@ -132,6 +132,7 @@ export function DropdownPopover({
   placement = "bottom start",
   offset = 4,
   crossOffset,
+  style,
   className,
   dialogClassName,
   children,
@@ -144,6 +145,7 @@ export function DropdownPopover({
       placement={placement}
       offset={offset}
       crossOffset={crossOffset}
+      style={style}
       className={cx(
         MENU_POPOVER_WIDTH,
         MENU_POPOVER_SURFACE,

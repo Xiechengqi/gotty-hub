@@ -1,14 +1,16 @@
 import {act} from 'react';
+import {File as NodeFile} from 'node:buffer';
 import {createRoot} from 'react-dom/client';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {RealTerminal, type TerminalActions} from './Terminal';
+import {PasteProgress} from './PasteProgress';
 const state=vi.hoisted(()=>({terminals:[] as any[],geometry:{cols:80,rows:24}}));
 vi.mock('@gotty/terminal-core/fonts',async original=>{
  const actual=await original<typeof import('@gotty/terminal-core/fonts')>();
  return {...actual,ensureFont:vi.fn(async(id:string)=>({fontFamily:actual.fontById(id)!.value,cached:true}))};
 });
 vi.mock('@xterm/xterm',()=>({Terminal:class {
- options:any;cols=80;rows=24;unicode={activeVersion:'6'};textarea=document.createElement('textarea');
+ options:any;cols=80;rows=24;unicode={activeVersion:'6'};modes={bracketedPasteMode:true};textarea=document.createElement('textarea');
  parser={registerOscHandler:()=>({dispose(){}})};clear=vi.fn();focus=vi.fn(()=>this.textarea.focus());dispose=vi.fn();write=vi.fn((_data:any,callback?:()=>void)=>callback?.());reset=vi.fn();scrollToBottom=vi.fn();resize=vi.fn((cols:number,rows:number)=>{this.cols=cols;this.rows=rows;});
  constructor(options:any){this.options=options;state.terminals.push(this);}
  loadAddon(){}open(element:HTMLElement){element.append(this.textarea);}attachCustomKeyEventHandler(){}
@@ -20,7 +22,7 @@ vi.mock('@xterm/addon-unicode11',()=>({Unicode11Addon:class {}}));
 vi.mock('@xterm/addon-image',()=>({ImageAddon:class {}}));
 vi.mock('@xterm/addon-webgl',()=>({WebglAddon:class {onContextLoss(){}}}));
 vi.mock('./ShareManager',()=>({ShareManager:({trigger}:any)=>trigger}));
-vi.mock('./Transfer',()=>({FILE_LIMIT:64*1024*1024,createTransfer:()=>({consume(){},dispose(){}}),TransferModal:()=>null}));
+vi.mock('./Transfer',()=>({createTransfer:()=>({consume(){},dispose(){}}),TransferModal:()=>null}));
 vi.mock('../api',async importOriginal=>({...await importOriginal<typeof import('../api')>(),api:vi.fn(async()=>({ticket:'ticket'}))}));
 class Socket {
  static OPEN=1;static CONNECTING=0;static CLOSED=3;
@@ -34,6 +36,7 @@ let node:HTMLDivElement;let root:ReturnType<typeof createRoot>;
 beforeEach(()=>{
  sockets=[];actions={};state.terminals=[];state.geometry={cols:80,rows:24};localStorage.clear();
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('WebSocket',Socket);vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
+ vi.stubGlobal('CSS',{escape:(value:string)=>value});
  node=document.createElement('div');document.body.append(node);root=createRoot(node);
 });
 afterEach(async()=>{await act(async()=>root.unmount());node.remove();vi.restoreAllMocks();vi.unstubAllGlobals();});
@@ -58,6 +61,19 @@ it('keeps observer controls local and hides remote write and owner actions',asyn
  for(const label of ['Clear history','Upload file','Restart GoTTY']) expect(node.querySelector(`[aria-label="${label} · read"]`)).toBeNull();
  expect(actions.read).toMatchObject({restartAvailable:false,canRestart:false,refresh:expect.any(Function)});
  await act(async()=>actions.read.restart());
+});
+it('starts the file chooser upload and dismisses it if write permission changes during transfer',async()=>{
+ await act(async()=>root.render(<RealTerminal id="one" writable files visible locale="zh-CN"/>));
+ await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
+ await act(async()=>{sockets[0].onmessage({data:'4'+JSON.stringify({'hub-config':{upload_ack:true}})});sockets[0].onmessage({data:'616384'});});
+ const input=node.querySelector<HTMLInputElement>('input[type="file"]')!;
+ Object.defineProperty(input,'files',{value:[new NodeFile(['upload bytes'],'picker.txt')]});
+ await act(async()=>{input.dispatchEvent(new Event('change',{bubbles:true}));});
+ await vi.waitFor(()=>expect(sockets[0].send.mock.calls.some(([data])=>data[0]==='7'&&JSON.parse(data.slice(1)).name==='picker.txt')).toBe(true));
+ expect(document.querySelector('[role="dialog"]')?.textContent).toContain('正在上传');
+ await act(async()=>root.render(<RealTerminal id="one" writable={false} files visible locale="zh-CN"/>));
+ await vi.waitFor(()=>expect(document.querySelector('[role="dialog"]')).toBeNull());
+ expect(node.querySelector('.terminal-upload-control')).toBeNull();
 });
 it('refreshes a disconnected terminal by replacing its connection and retaining both renderers',async()=>{
  await act(async()=>root.render(<><RealTerminal id="one" writable visible locale="zh-CN" onActions={registerActions}/><RealTerminal id="two" writable visible locale="zh-CN" onActions={registerActions}/></>));
@@ -138,4 +154,29 @@ it('renders at the confirmed PTY size while requesting the narrow viewport witho
  await flush();
  expect([term.cols,term.rows]).toEqual([60,20]);
  expect(state.terminals).toHaveLength(1);expect(sockets).toHaveLength(1);
+});
+
+it('captures paste into the shared sender, renders a page portal and clears it on permission loss',async()=>{
+ const render=(writable:boolean)=>root.render(<><RealTerminal id="paste-one" instanceName="实例 One" writable={writable} visible locale="zh-CN"/><PasteProgress locale="zh-CN"/></>);
+ await act(async()=>render(true));
+ await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
+ await act(async()=>{sockets[0].onmessage({data:'4'+JSON.stringify({'paste-protocol':1})});sockets[0].onmessage({data:'616384'});});
+ const textarea=state.terminals[0].textarea;
+ const event=new Event('paste',{bubbles:true,cancelable:true});Object.defineProperty(event,'clipboardData',{value:{getData:()=> '中文🙂'.repeat(30000)}});
+ await act(async()=>{textarea.focus();textarea.dispatchEvent(event);});
+ await act(async()=>{await new Promise(resolve=>setTimeout(resolve,40));});
+ const chunks=sockets[0].send.mock.calls.filter(([data])=>data[0]==='5');
+ expect(chunks).toHaveLength(8);
+ expect(document.activeElement).toBe(textarea);
+ const card=document.body.querySelector('.terminal-paste-card');
+ expect(card?.textContent).toContain('实例 One');
+ expect(card?.closest('.real-terminal')).toBeNull();
+ expect(card?.querySelector('progress')?.value).toBe(0);
+ expect(event.defaultPrevented).toBe(true);
+ await act(async()=>render(false));
+ expect(document.querySelector('.terminal-paste-card')).toBeNull();
+ const before=sockets.at(-1)!.send.mock.calls.length;
+ const denied=new Event('paste',{bubbles:true,cancelable:true});Object.defineProperty(denied,'clipboardData',{value:{getData:()=> 'denied'}});
+ await act(async()=>state.terminals.at(-1).textarea.dispatchEvent(denied));
+ expect(sockets.at(-1)!.send.mock.calls).toHaveLength(before);
 });
