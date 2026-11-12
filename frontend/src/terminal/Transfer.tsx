@@ -9,7 +9,8 @@ import {FILE_LIMIT} from './upload';
 export type Transfer={session:Session;offer?:Offer};
 export function createTransfer(output:(data:Uint8Array)=>void,send:(data:Uint8Array)=>void,show:(transfer:Transfer|null)=>void,setStdin:(enabled:boolean)=>void){
  let session:Session|undefined;let disposed=false;
- const sentry=new Sentry({to_terminal:output,sender:send,on_retract:()=>{show(null);setStdin(true)},on_detect:d=>{
+ // zmodem.js emits number[]; normalize bytes before xterm or InputSender.
+ const sentry=new Sentry({to_terminal:data=>output(new Uint8Array(data)),sender:data=>send(new Uint8Array(data)),on_retract:()=>{show(null);setStdin(true)},on_detect:d=>{
   if(disposed)return;session=d.confirm();setStdin(false);const current=session;
   current.on('session_end',()=>{if(!disposed){show(null);setStdin(true)}});
   if(current.type==='send')show({session:current});else{current.on('offer',(offer:Offer)=>{if(offer.get_details().size>FILE_LIMIT){offer.skip();return}show({session:current,offer})});current.start()}

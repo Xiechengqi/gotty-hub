@@ -263,7 +263,7 @@ python3 scripts/check-core.py
 git diff --check
 ```
 
-[发布工作流](.github/workflows/build-release.yml) 在推送 `main`、推送 `v*` 标签或手动触发时运行前端测试、Rust 检查，以及隔离进程中的配置引导、HTTPS 反代、WSS / SSE、退出重启和生产页面回归。
+[发布工作流](.github/workflows/build-release.yml) 在推送 `main`、推送 `v*` 标签或手动触发时运行前端类型检查与构建、Rust 检查，以及隔离进程中的配置引导、HTTPS 反代、WSS / SSE、退出重启和静态资源 HTTP 检查。GitHub Actions 不运行 UI 测试，包括前端组件测试及浏览器测试，也不得新增这类步骤。UI 回归仅在 Actions 之外经授权的隔离测试环境中运行，不得针对正在运行的 GoTTY 或 Hub 服务执行。
 
 验证通过后构建 Linux amd64 / arm64 静态 musl 二进制及 SHA256 文件，统一更新名为 `latest`、标签为 `latest` 的 Release。下载地址保持不变，发布说明记录实际提交。真实 GoTTY 集成和负载脚本分别见 [run-integration.py](tests/run-integration.py) 与 [run-load.py](tests/run-load.py)。
 

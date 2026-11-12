@@ -19,7 +19,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci && npm test && npm run build
+      # UI/component/browser tests run outside GitHub Actions; see ../AGENTS.md.
+      - run: npm ci && npm run build
         working-directory: frontend
       - uses: actions/upload-artifact@v4
         with:

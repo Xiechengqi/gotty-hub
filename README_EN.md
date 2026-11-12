@@ -263,7 +263,7 @@ python3 scripts/check-core.py
 git diff --check
 ```
 
-The [release workflow](.github/workflows/build-release.yml) runs on pushes to `main`, `v*` tags, or manual dispatch. It runs frontend tests, Rust checks, and isolated-process regressions for configuration setup, HTTPS proxies, WSS / SSE, shutdown and restart, and the production UI.
+The [release workflow](.github/workflows/build-release.yml) runs on pushes to `main`, `v*` tags, or manual dispatch. It runs frontend type checks/builds, Rust checks, and isolated-process checks for configuration setup, HTTPS proxies, WSS / SSE, shutdown/restart, and static assets over HTTP. GitHub Actions must not run UI tests, including frontend component and browser tests; do not add such steps. Run UI regressions only in an authorized isolated test environment outside Actions, never against live GoTTY or Hub services.
 
 After validation, it builds static musl binaries and SHA256 files for Linux amd64 / arm64, then updates the Release named and tagged `latest`. Download URLs stay the same, while release notes record the actual commit. Real-GoTTY integration and load scripts are available in [run-integration.py](tests/run-integration.py) and [run-load.py](tests/run-load.py).
 
