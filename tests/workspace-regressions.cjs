@@ -95,6 +95,8 @@ function installInspection() {
   for (let i = 1; i <= 12; i++) {
     const gp = await port(), url = `http://127.0.0.1:${gp}`, state = path.join(dir, `device-${i}.json`);
     const args = ['--config', '/dev/null', '--address', '127.0.0.1', '--port', String(gp), '--hub-state-file', state, '--permit-write', '--share-enabled=false', '--close-timeout', '1', 'bash', '--noprofile', '--norc'];
+    // This suite explicitly covers the legacy manual ownership protocol.
+    if (process.env.WORKSPACE_SUITE === 'dataflow') args.unshift('--resize-policy', 'leader');
     const child = start(`gotty-${i}`, process.env.GOTTY_BINARY, args); devices.push({child, url, state, args});
     await wait(async () => (await fetch(`${url}/config.js`)).ok, 'GoTTY startup');
     const response = await fetch(`${url}/-/hub`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({URL: hub, Username: 'workspace-review', Name: `终端-${String(i).padStart(2, '0')}-长名称测试`})});
@@ -133,6 +135,10 @@ function installInspection() {
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  if(process.env.WORKSPACE_SUITE==='adaptive'){
+    await require('./adaptive-regressions.cjs')({page,context,browser,hub,ids,devices,wait,sleep,dir,report,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   if(process.env.WORKSPACE_SUITE==='swipe'){
     await require('./swipe-regressions.cjs')({page,hub,ids,api,wait,sleep,dir,report,sent});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;

@@ -7,6 +7,7 @@ import {ImageAddon} from '@xterm/addon-image';
 import {WebglAddon} from '@xterm/addon-webgl';
 import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-core';
 import {bindPaste} from '@gotty/terminal-core/paste';
+import {describeGeometry} from '@gotty/terminal-core/geometry';
 import {reportPaste} from './PasteProgress';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
 import {defaultDisplayOptions, displayOptions, NORD_THEME, BUILTIN_THEMES, type Appearance} from '@gotty/terminal-core/appearance';
@@ -54,6 +55,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
   const [connected, setConnected] = useState(false);
   const [count, setCount] = useState(0);
   const [terminalState, setTerminalState] = useState<TerminalStatePayload>();
+  const [localSize, setLocalSize] = useState<{columns: number; rows: number}>();
   const [transfer, setTransfer] = useState<Transfer | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [upload, setUpload] = useState<UploadState>();
@@ -156,6 +158,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
             // Fitting that output into a smaller grid corrupts full-screen apps.
             if (!requestedSize || size.cols !== requestedSize.cols || size.rows !== requestedSize.rows) {
               requestedSize = size;
+              setLocalSize({columns: size.cols, rows: size.rows});
               resize(size.cols, size.rows);
             }
             const grid = serverSize || size;
@@ -290,7 +293,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     <div ref={host} className="xterm-host" dir="ltr"/>
     {fontStatus?.status === 'fallback' && <div className="terminal-font-notice"><FontStatus value={fontStatus} locale={locale}/></div>}
     <div className="terminal-toolbar" role="toolbar" aria-label={named(zh ? 'GoTTY 终端工具' : 'GoTTY terminal controls')}>
-      <ShareManager open={shareOpen} onOpenChange={setShareOpen} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={named(zh ? '连接数 / 分享管理' : 'Connections / Share manager')} aria-label={named(`${zh ? '连接数' : 'Connections'}: ${count}`)} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
+      <ShareManager open={shareOpen} onOpenChange={setShareOpen} trigger={<Button className="terminal-control terminal-connections" variant="ghost" size="xs" leadingIcon={RiGroupLine} title={named(zh ? '连接数 / 分享管理' : 'Connections / Share manager') + '\n' + describeGeometry(terminalState, localSize, locale)} aria-label={named(`${zh ? '连接数' : 'Connections'}: ${count}`)} disabled={!owner || !controls || !connected}>{count}</Button>} control={control} enabled={config.share_enabled === true} locale={locale}/>
       {writable && <Button className="terminal-control terminal-clear-control" variant="ghost" size="xs" iconOnly leadingIcon={RiDeleteBinLine} title={named(zh ? '清理历史' : 'Clear history')} aria-label={named(zh ? '清理历史' : 'Clear history')} disabled={!connected} onClick={() => {controller.current?.send('clear\n'); controller.current?.term.clear(); controller.current?.term.focus();}}/>}
       {writable && files && <Button className="terminal-control terminal-upload-control" variant="ghost" size="xs" iconOnly leadingIcon={RiUpload2Line} title={named(zh ? '上传文件' : 'Upload file')} aria-label={named(zh ? '上传文件' : 'Upload file')} disabled={!connected || !!uploadAbort.current} onClick={() => uploadInput.current?.click()}/>}
     </div>

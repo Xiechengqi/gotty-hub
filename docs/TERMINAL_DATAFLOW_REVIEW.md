@@ -2,6 +2,8 @@
 
 本报告保留数据流修复时的实现与验证记录。后续 Hub 菜单已移除“接管终端尺寸”，并将“刷新此终端”简化为“刷新”；自动尺寸策略及恢复协议继续有效，当前界面见 [TAB_MENU_REVIEW.md](TAB_MENU_REVIEW.md)。
 
+当前默认策略已进一步改为 `adaptive`，补齐手机先接入、隐藏控制端和续约失效后的自动恢复；本报告中的首连接所有权与显式接管仍适用于 `leader`。最新行为见 [ADAPTIVE_GEOMETRY_REVIEW.md](ADAPTIVE_GEOMETRY_REVIEW.md)。
+
 ## 原因与修复范围
 
 | 原问题 | 归因 | 落地结果 |

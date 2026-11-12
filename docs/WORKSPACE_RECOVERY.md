@@ -62,3 +62,5 @@ HUB_BINARY=/path/to/test/gotty-hub GOTTY_BINARY=/path/to/test/gotty npm run test
 Hub 的 `build-minifier.test.ts` 覆盖 xterm 局部枚举与 `||=` 的 ES2020 压缩回归；GoTTY 共享核心测试覆盖异步回放边界、旧回调和 UTF-8。构建设置保留标识符及空白压缩，关闭会生成未声明变量的语法压缩步骤。
 
 共享尺寸控制、服务端历史快照和事件恢复见 [TERMINAL_DATAFLOW_REVIEW.md](TERMINAL_DATAFLOW_REVIEW.md)。设置 `WORKSPACE_SUITE=dataflow` 可运行专门的数据流回归。
+
+默认自适应尺寸及控制端续约见 [ADAPTIVE_GEOMETRY_REVIEW.md](ADAPTIVE_GEOMETRY_REVIEW.md)。`WORKSPACE_SUITE=adaptive` 覆盖真实浏览器的手机先连接、桌面恢复、后台让权和休眠恢复；`dataflow` 显式使用兼容的 `leader` 策略验证手动接管与历史重排。这些浏览器回归仅用于远程隔离环境，不在 GitHub Actions 执行。
