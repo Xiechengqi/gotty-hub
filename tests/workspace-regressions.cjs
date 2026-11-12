@@ -133,6 +133,10 @@ function installInspection() {
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  if(process.env.WORKSPACE_SUITE==='swipe'){
+    await require('./swipe-regressions.cjs')({page,hub,ids,api,wait,sleep,dir,report,sent});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   if(process.env.WORKSPACE_SUITE==='paste'){
     await require('./paste-regressions.cjs')({page,context,browser,hub,ids,devices,directURL,api,wait,sleep,dir,report,installInspection,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;

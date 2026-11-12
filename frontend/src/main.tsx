@@ -28,6 +28,8 @@ import {DeferredTerminal} from './terminal/DeferredTerminal';
 import {currentPreferences, forgetChromeSettings, readWorkspaceCache, rememberWorkspace, restoreWorkspace, acknowledgeWorkspace} from './layout';
 import {emptyWorkspace, workspaceReducer, saveWorkspace, clampRatio, MIN_PANE_WIDTH, DIVIDER_WIDTH, activeSplit, type Workspace, type WorkspaceAction} from './workspace/state';
 import {SplitDivider, type PaneInstance} from './workspace/WorkspaceControls';
+import {useInteractionSettings} from './workspace/interactionSettings';
+import {useTabSwipe} from './workspace/useTabSwipe';
 
 type Group = 'production' | 'development' | 'personal';
 type Instance = { status?: 'red'|'gray'|'yellow'|'green'; capabilities?: {write?:boolean;files?:boolean;asr?:boolean;controls?:boolean}; id: string; name: string; description: MessageKey; group: Group; online: boolean; role: 'owner' | 'operator' | 'observer'; host: string };
@@ -47,6 +49,8 @@ function App() {
   useLayoutEffect(()=>window.hubBoot?.complete(),[]);
   const [instances,setInstances]=useState<Instance[]>(preview?demoInstances:[]);
   const [account,setAccount]=useState<Account|null>(null);
+  const interaction = useInteractionSettings(preview ? 'preview' : account?.id);
+  const mainRef = useRef<HTMLElement>(null);
   const terminalPreferences = useTerminalSettings(account?.id);
   const [previewSettings, setPreviewSettings] = useState<SettingsSnapshot>({revision: 0, settings: null});
   const displaySnapshot = preview ? previewSettings : terminalPreferences.snapshot;
@@ -154,6 +158,9 @@ function App() {
   const split=activeSplit(workspace);
   const effectiveSplit=!!split&&canSplit;
   const active=workspace.active;
+  const swipeHint = useTabSwipe(mainRef, {account: preview ? 'preview' : account?.id,
+    enabled: interaction.tabSwipe && (preview || !!account && preferencesLoaded) && opened.length > 1,
+    workspace, expandedSplits: canSplit, onSelect: activateInstance});
   const visibleIds=new Set(effectiveSplit?[split!.left,split!.right]:[active]);
   const minimumRatio=workspaceWidth>DIVIDER_WIDTH?Math.min(0.5,Math.max(0.1,MIN_PANE_WIDTH/(workspaceWidth-DIVIDER_WIDTH))):0.5;
   const splitRatio=clampRatio(split?.ratio??0.5,minimumRatio);
@@ -264,7 +271,7 @@ function App() {
   const errorMessage = (error||apiError)&&<p className="text-body-regular text-text-error-primary" role="alert">{error?t(error):apiError}</p>;
   return <DirectionProvider locale={locale}><div className={cx("app",(authLoading||!!account&&(!preferencesLoaded||terminalPreferences.loading))&&"workspace-loading")}>
     <div className="workspace-loading-status text-body-regular" role="status">{apiError || (locale==='zh-CN'?'正在加载工作区…':'Loading workspace…')}{apiError&&<Button variant="secondary" onClick={()=>location.reload()}>{t('refreshPage')}</Button>}</div>
-    <main className="main">
+    <main ref={mainRef} className="main">
       <WorkspaceBar key={account?.id||'preview'} workspace={workspace} instances={orderedInstances.map(paneInstance)} actions={terminalActions} locale={locale} canSplit={canSplit}
         transparency={barPreview ?? displaySnapshot.settings?.tabBarTransparency ?? DEFAULT_TAB_BAR_TRANSPARENCY} lightTerminal={['paper','light'].includes(displaySnapshot.settings?.theme || reportedAppearance.current[active]?.theme || 'nord')}
         onLocale={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}
@@ -317,9 +324,10 @@ function App() {
     </Modal>
     <AddInstanceModal open={panel==='connect'} onClose={closePanel} address={account?.hub_address ?? location.origin} username={preview?'owner':account?.username ?? ''} closed={orderedInstances.filter(i=>!opened.includes(i.id)).map(paneInstance)} onReopen={activateInstance} locale={locale}/>
     <DeleteInstanceDialog key={'delete:'+(account?.id||'preview')} instance={deleteTarget} canDelete={instances.some(i=>i.id===deleteTarget?.id&&i.role==='owner')} locale={locale} onDelete={deleteInstance} onClose={()=>{setDeleteTarget(null);requestTerminalFocus(workspaceRef.current.active);}}/>
-    <TerminalSettings key={account?.id || 'preview'} open={terminalSettingsOpen && (!!account || preview)} onClose={() => setTerminalSettingsOpen(false)} onPreviewTransparency={setBarPreview} snapshot={displaySnapshot} legacy={reportedAppearance.current[active] || readAppearance(active)} locale={locale} loading={terminalPreferences.loading} loadError={terminalPreferences.error} onSave={async (settings, revision) => {if (preview) setPreviewSettings({settings, revision: revision + 1}); else await terminalPreferences.save(settings, revision);}}/>
+    <TerminalSettings key={account?.id || 'preview'} open={terminalSettingsOpen && (!!account || preview)} onClose={() => setTerminalSettingsOpen(false)} onPreviewTransparency={setBarPreview} snapshot={displaySnapshot} legacy={reportedAppearance.current[active] || readAppearance(active)} locale={locale} loading={terminalPreferences.loading} loadError={terminalPreferences.error} tabSwipe={interaction.tabSwipe} defaultTabSwipe={interaction.defaultTabSwipe} onSave={async (settings, revision, tabSwipe) => {if (preview) setPreviewSettings({settings, revision: revision + 1}); else await terminalPreferences.save(settings, revision); interaction.saveTabSwipe(tabSwipe);}}/>
     {account?.is_admin&&<AdminPanel open={adminOpen} onClose={()=>setAdminOpen(false)} locale={locale}/>}
     {notice&&<div className="notice text-body-regular" role="status">{t(notice)}</div>}
+    {swipeHint&&<div className="tab-swipe-hint rounded-xl border border-border-button-default bg-background-primary-default px-4 py-2 text-body-2-medium text-text-primary" role="status">{swipeHint.map(id=>{const instance=instances.find(item=>item.id===id);return instance?paneInstance(instance).label:'';}).filter(Boolean).join(' | ')}</div>}
   </div><PasteProgress locale={locale}/></DirectionProvider>;
 }
 const mount=()=>createRoot(document.getElementById('root')!, {

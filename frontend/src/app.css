@@ -201,3 +201,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-state{inset-block-start:calc(var(--hub-bar-height) + 132px)}
 @media(max-width:767px){.app{--hub-chrome-height:44px}.workspace-bar-actions>button>svg{inline-size:18px;block-size:18px}.tab-menu-item,.language-toggle{min-block-size:44px}.terminal-toolbar{block-size:132px}.terminal-clear-control{inset-block-start:44px}.terminal-upload-control{inset-block-start:88px}.terminal-state{inset-block-start:calc(var(--hub-bar-height) + 144px)}}
 @media(prefers-reduced-motion:reduce){.terminal-slot[data-focused=true]>.pane-identity{animation:none;opacity:0}}
+
+/* Apply to scroll containers as well as the document: overflow:clip is not one. */
+html[data-hub-tab-swipe=true],html[data-hub-tab-swipe=true] body,html[data-hub-tab-swipe=true] .xterm-host{overscroll-behavior-x:none}
+.tab-swipe-hint{position:fixed;inset-block-start:calc(var(--hub-bar-height) + 12px);inset-inline-start:50%;transform:translateX(-50%);max-inline-size:calc(100vw - 32px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;z-index:19;box-shadow:var(--shadow-lg)}

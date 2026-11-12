@@ -5,32 +5,35 @@ import {ensureFont, fontState, inspectFontCache, subscribeFonts, type FontState}
 import {Button} from '@/components/base/buttons/button';
 import {Slider} from '@/components/base/slider/slider';
 import {Input} from '@/components/base/input/input';
+import {Checkbox} from '@/components/base/checkbox/checkbox';
 import {Modal, ModalBody, ModalFooter, ModalHeader} from '@/components/base/modal/modal';
 import {errorText} from '../errors';
 import {DEFAULT_SETTINGS, DEFAULT_TAB_BAR_TRANSPARENCY, migrateAppearance, validSettings, type SettingsSnapshot, type TerminalSettings as Settings} from './settings';
 import {TerminalPreview} from './TerminalPreview';
 
-export function TerminalSettings({open, onClose, snapshot, legacy, locale, loading, loadError, onSave, onPreviewTransparency}: {
+export function TerminalSettings({open, onClose, snapshot, legacy, locale, loading, loadError, onSave, onPreviewTransparency, tabSwipe, defaultTabSwipe}: {
   open: boolean; onClose: () => void; snapshot: SettingsSnapshot; legacy?: Appearance; locale: string; loading: boolean;
   onPreviewTransparency?: (value: number | null) => void;
-  loadError: string; onSave: (settings: Settings, revision: number) => Promise<void>;
+  tabSwipe: boolean; defaultTabSwipe: boolean;
+  loadError: string; onSave: (settings: Settings, revision: number, tabSwipe: boolean) => Promise<void>;
 }) {
   const zh = locale === 'zh-CN';
   const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
+  const [draftSwipe, setDraftSwipe] = useState(tabSwipe);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [pendingFont, setPendingFont] = useState<string | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
   const [, redraw] = useState(0);
   const selection = useRef(0), revision = useRef(0);
-  const latest = useRef({snapshot, legacy}); latest.current = {snapshot, legacy};
+  const latest = useRef({snapshot, legacy, tabSwipe}); latest.current = {snapshot, legacy, tabSwipe};
   useEffect(() => subscribeFonts(() => redraw(value => value + 1)), []);
   useEffect(() => {
     ++selection.current;
     if (!open) {setPreviewReady(false); return;}
     const initial = latest.current.snapshot.settings || migrateAppearance(latest.current.legacy);
     revision.current = latest.current.snapshot.revision;
-    setDraft(initial); setPreviewReady(true); setError(''); setSaving(false); setPendingFont(null);
+    setDraft(initial); setDraftSwipe(latest.current.tabSwipe); setPreviewReady(true); setError(''); setSaving(false); setPendingFont(null);
     void inspectFontCache();
     return () => {++selection.current;};
   }, [open]);
@@ -50,7 +53,7 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
   async function save() {
     if (saving || pendingFont || !validSettings(draft)) return;
     setSaving(true); setError('');
-    try {if (fontState(draft.fontId) !== 'unavailable') await ensureFont(draft.fontId); await onSave(draft, revision.current); onClose();}
+    try {if (fontState(draft.fontId) !== 'unavailable') await ensureFont(draft.fontId); await onSave(draft, revision.current, draftSwipe); onClose();}
     catch (error) {setError(errorText(error instanceof Error ? error.message : String(error), locale));}
     finally {setSaving(false);}
   }
@@ -59,12 +62,16 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
     ? {downloadable: '点击下载', loading: '加载中…', cached: '已缓存', ready: '已加载', system: '系统字体', unavailable: '当前设备不可用', error: '下载失败，点击重试'}
     : {downloadable: 'Download', loading: 'Loading…', cached: 'Cached', ready: 'Loaded', system: 'System font', unavailable: 'Unavailable on this device', error: 'Download failed · Retry'};
   return <Modal isOpen={open} onOpenChange={value => {if (!value && !saving) onClose();}} isDismissable={!saving} isKeyboardDismissDisabled={saving} size="lg" className="terminal-settings-dialog" overlayClassName="terminal-settings-overlay">
-    <ModalHeader title={zh ? '终端设置' : 'Terminal settings'} description={zh ? '保存后应用于当前账号的全部终端。' : 'Apply to all terminals in your account.'} closeLabel={zh ? '取消' : 'Cancel'} showCloseButton={!saving}/>
+    <ModalHeader title={zh ? '终端设置' : 'Terminal settings'} description={zh ? '外观应用于当前账号的全部终端，手势设置仅用于此浏览器。' : 'Appearance applies to all terminals in your account. Gestures apply only to this browser.'} closeLabel={zh ? '取消' : 'Cancel'} showCloseButton={!saving}/>
     <ModalBody><div className="flex flex-col gap-6">
       {(error || loadError) && <p role="alert" className="text-text-error-primary">{error || errorText(loadError, locale)}</p>}
       <section className="flex flex-col gap-2">
         <Slider label={zh ? 'Tab 背景透明度' : 'Tab background transparency'} thumbLabel={zh ? 'Tab 背景透明度（%）' : 'Tab background transparency (%)'} minValue={0} maxValue={100} step={1} value={draft.tabBarTransparency ?? DEFAULT_TAB_BAR_TRANSPARENCY} formatValue={value => `${value}%`} isDisabled={saving} onChange={value => setDraft(previous => ({...previous, tabBarTransparency: value}))}/>
         <p className="text-caption-1-regular text-text-secondary">{zh ? '0% 不透明 · 100% 完全透明' : '0% opaque · 100% transparent'}</p>
+      </section>
+      <section className="flex flex-col gap-2">
+        <Checkbox isSelected={draftSwipe} onChange={setDraftSwipe} isDisabled={saving} aria-describedby="tab-swipe-description">{zh ? '横向滑动切换标签' : 'Swipe horizontally to switch tabs'}</Checkbox>
+        <p id="tab-swipe-description" className="text-caption-1-regular text-text-secondary">{zh ? '仅此浏览器。可在标签栏或终端内双指横滑；终端内容需要左右滚动时，请在标签栏滑动。' : 'Only this browser. Swipe with two fingers over the tabs or terminal. If the terminal scrolls horizontally, swipe over the tabs.'}</p>
       </section>
       <section className="flex flex-col gap-2"><h3 className="text-body-medium text-text-primary">{zh ? '配色主题' : 'Color theme'}</h3>
         <div className="terminal-settings-themes">{Object.entries(BUILTIN_THEMES).map(([name, theme]) => <Button key={name} variant="secondary" disabled={saving} aria-pressed={draft.theme === name} onClick={() => setDraft(value => ({...value, theme: name}))} trailingIcon={draft.theme === name ? RiCheckLine : undefined}>
@@ -83,6 +90,6 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
         {previewReady && <TerminalPreview settings={draft} locale={locale}/>}
       </section>
     </div></ModalBody>
-    <ModalFooter><Button variant="ghost" disabled={saving} onClick={() => {setDraft(DEFAULT_SETTINGS); void selectFont(DEFAULT_SETTINGS.fontId);}}>{zh ? '恢复默认' : 'Restore defaults'}</Button><Button variant="secondary" disabled={saving} onClick={onClose}>{zh ? '取消' : 'Cancel'}</Button><Button disabled={saving || loading || !!pendingFont || !validSettings(draft)} aria-busy={saving || undefined} onClick={() => void save()}>{saving ? (zh ? '保存中…' : 'Saving…') : (zh ? '保存并应用' : 'Save and apply')}</Button></ModalFooter>
+    <ModalFooter><Button variant="ghost" disabled={saving} onClick={() => {setDraft(DEFAULT_SETTINGS); setDraftSwipe(defaultTabSwipe); void selectFont(DEFAULT_SETTINGS.fontId);}}>{zh ? '恢复默认' : 'Restore defaults'}</Button><Button variant="secondary" disabled={saving} onClick={onClose}>{zh ? '取消' : 'Cancel'}</Button><Button disabled={saving || loading || !!pendingFont || !validSettings(draft)} aria-busy={saving || undefined} onClick={() => void save()}>{saving ? (zh ? '保存中…' : 'Saving…') : (zh ? '保存并应用' : 'Save and apply')}</Button></ModalFooter>
   </Modal>;
 }
