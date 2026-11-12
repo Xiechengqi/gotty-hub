@@ -395,6 +395,22 @@ async fn access(app: &App, s: &Session, id: &str, version: i64) -> Option<(Strin
     sqlx::query("SELECT g.role,i.version FROM grants g JOIN instances i ON i.id=g.instance JOIN sessions s ON s.user_id=g.user_id WHERE s.token=? AND s.expires>? AND i.id=? AND i.version=?").bind(&s.key).bind(now()).bind(id).bind(version).fetch_optional(&app.db).await.ok().flatten().map(|r|(r.get("role"),r.get("version")))
 }
 
+// Bind browser identity to the authenticated account, never to an asserted role.
+fn terminal_client_key(user: &str, auth: &Value) -> String {
+    match auth["client_key"].as_str() {
+        Some(key)
+            if key.len() >= 16
+                && key.len() <= 128
+                && key
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') =>
+        {
+            hash(&format!("terminal:{user}:{key}"))
+        }
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod control_tests {
     use super::*;
@@ -406,7 +422,12 @@ mod control_tests {
         assert_eq!(key.len(), 64);
         assert_eq!(key, terminal_client_key("account-a", &auth));
         assert_ne!(key, terminal_client_key("account-b", &auth));
-        for invalid in [json!({}), json!({"client_key":"short"}), json!({"client_key":"a".repeat(129)}), json!({"client_key":"invalid browser key"})] {
+        for invalid in [
+            json!({}),
+            json!({"client_key":"short"}),
+            json!({"client_key":"a".repeat(129)}),
+            json!({"client_key":"invalid browser key"}),
+        ] {
             assert!(terminal_client_key("account-a", &invalid).is_empty());
         }
     }
@@ -434,13 +455,5 @@ mod control_tests {
         ] {
             assert!(!valid_control("owner", &control));
         }
-    }
-}
-
-// Bind browser identity to the authenticated account, never to an asserted role.
-fn terminal_client_key(user: &str, auth: &Value) -> String {
-    match auth["client_key"].as_str() {
-        Some(key) if key.len() >= 16 && key.len() <= 128 && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') => hash(&format!("terminal:{user}:{key}")),
-        _ => String::new(),
     }
 }
