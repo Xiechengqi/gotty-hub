@@ -11,9 +11,11 @@ vi.mock('@gotty/terminal-core/fonts',async original=>{
 });
 vi.mock('@xterm/xterm',()=>({Terminal:class {
  options:any;cols=80;rows=24;unicode={activeVersion:'6'};modes={bracketedPasteMode:true};textarea=document.createElement('textarea');
- parser={registerOscHandler:()=>({dispose(){}})};clear=vi.fn();focus=vi.fn(()=>this.textarea.focus());dispose=vi.fn();write=vi.fn((_data:any,callback?:()=>void)=>callback?.());reset=vi.fn();scrollToBottom=vi.fn();resize=vi.fn((cols:number,rows:number)=>{this.cols=cols;this.rows=rows;});
+ buffer={active:{type:'normal',cursorX:0,cursorY:0,baseY:0,viewportY:0},onBufferChange:()=>({dispose(){}})};
+ parser={registerOscHandler:()=>({dispose(){}}),registerCsiHandler:()=>({dispose(){}}),registerEscHandler:()=>({dispose(){}})};clear=vi.fn();focus=vi.fn(()=>this.textarea.focus());dispose=vi.fn();write=vi.fn((_data:any,callback?:()=>void)=>callback?.());reset=vi.fn();scrollToBottom=vi.fn();resize=vi.fn((cols:number,rows:number)=>{this.cols=cols;this.rows=rows;});
  constructor(options:any){this.options=options;state.terminals.push(this);}
  loadAddon(){}open(element:HTMLElement){element.append(this.textarea);}attachCustomKeyEventHandler(){}
+ clearSelection(){}scrollToLine(){}onScroll(){return {dispose(){}};}onCursorMove(){return {dispose(){}};}onWriteParsed(){return {dispose(){}};}onRender(){return {dispose(){}};}onKey(){return {dispose(){}};}
  onData(){return {dispose(){}};}onBinary(){return {dispose(){}};}onResize(){return {dispose(){}};}onSelectionChange(){return {dispose(){}};}hasSelection(){return false;}
 }}));
 vi.mock('@xterm/addon-fit',()=>({FitAddon:class {proposeDimensions(){return state.geometry;}}}));

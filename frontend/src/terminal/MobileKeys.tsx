@@ -7,8 +7,8 @@ import {Button} from '@/components/base/buttons/button';
 import {cx} from '@/utils/cx';
 
 const empty = (): Modifiers => ({ctrl:false,alt:false,shift:false});
-export function MobileKeys({term, enabled, transform, locale}: {
-  term?: Terminal; enabled: boolean; transform: (value: ((data:string)=>string)|null)=>void; locale:string;
+export function MobileKeys({term, enabled, transform, locale, onInput}: {
+  term?: Terminal; enabled: boolean; transform: (value: ((data:string)=>string)|null)=>void; locale:string; onInput?:()=>void;
 }) {
   const mods=useRef(empty());
   const [armed,setArmed]=useState(empty);
@@ -16,6 +16,7 @@ export function MobileKeys({term, enabled, transform, locale}: {
   const [touch,setTouch]=useState(()=>window.matchMedia?.('(pointer: coarse)').matches??false);
   const delay=useRef<ReturnType<typeof setTimeout>>(undefined);
   const repeat=useRef<ReturnType<typeof setInterval>>(undefined);
+  const strip=useRef<HTMLDivElement>(null);
   const disarm=useCallback(()=>{mods.current=empty();setArmed(mods.current);},[]);
   const stop=useCallback(()=>{clearTimeout(delay.current);clearInterval(repeat.current);},[]);
   useEffect(()=>{
@@ -34,15 +35,23 @@ export function MobileKeys({term, enabled, transform, locale}: {
     return()=>{input.removeEventListener('touchstart',touched);unwatch();stop();transform(null);};
   },[term,enabled,transform,disarm,stop]);
   useEffect(()=>{if(!keyboard||!enabled){stop();disarm();}},[keyboard,enabled,stop,disarm]);
+  useEffect(()=>{
+    const element=strip.current, container=element?.closest<HTMLElement>('.real-terminal');
+    if(!element||!container)return;
+    const update=()=>container.style.setProperty('--terminal-keys-height',`${element.offsetHeight}px`);
+    update();const observer=new ResizeObserver(update);observer.observe(element);
+    return()=>{observer.disconnect();container.style.removeProperty('--terminal-keys-height');};
+  },[keyboard,enabled,touch]);
   function press(key:KeyDef){
     if(!enabled||!term)return;
     if(key.kind==='mod'){mods.current={...mods.current,[key.mod]:!mods.current[key.mod]};setArmed(mods.current);return;}
+    onInput?.();
     if(key.kind==='char'){term.input(key.name,true);return;}
     const data=encodeSpecial(key.name,mods.current,term.modes.applicationCursorKeysMode);
     disarm();term.input(data,true);
   }
   if(!enabled||!keyboard||!touch)return null;
-  return <div className="terminal-mobile-keys" role="group" aria-label={locale==='zh-CN'?'终端快捷键':'Terminal shortcut keys'}>
+  return <div ref={strip} className="terminal-mobile-keys" role="group" aria-label={locale==='zh-CN'?'终端快捷键':'Terminal shortcut keys'}>
     {ROWS.map((row,index)=><div className="terminal-mobile-key-row" key={index}>
       {row.map(key=>{
         const repeats=key.kind==='special'&&key.repeat;

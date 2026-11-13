@@ -63,7 +63,21 @@ module.exports = async ({page, context, browser, hub, ids, api, wait, sleep, dir
   await checkGeometry();
   const initialOpacity=await opacity();
   assert.equal(initialOpacity,.8,'default is 80% opaque, 20% transparent');
-  await page.evaluate(()=>{window.overlayResizes=[];window.overlaySocketCount=window.reviewSockets.length;for(const socket of window.reviewSockets){const send=socket.send.bind(socket);socket.send=data=>{if(typeof data==='string'&&data[0]==='3')window.overlayResizes.push(data);send(data);};}});
+  await page.evaluate(()=>{
+    window.overlayResizes=[];window.overlaySocketCount=window.reviewSockets.length;
+    for(const socket of window.reviewSockets){
+      const send=socket.send.bind(socket);
+      let previous=JSON.stringify([socket.reviewResize?.columns,socket.reviewResize?.rows]);
+      socket.send=data=>{
+        if(typeof data==='string'&&data[0]==='3'){
+          const size=JSON.parse(data.slice(1)),current=JSON.stringify([size.columns,size.rows]);
+          if(current!==previous)window.overlayResizes.push(data);
+          previous=current;
+        }
+        send(data);
+      };
+    }
+  });
   await sleep(300);const beforeSizes=await page.evaluate(()=>window.overlayResizes.length);
   let dialog=await settings(),slider=dialog.getByRole('slider');
   await slider.focus();await page.keyboard.press('Home');await wait(async()=>await opacity()===1,'opaque preview');

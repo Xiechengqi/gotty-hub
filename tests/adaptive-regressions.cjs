@@ -84,6 +84,14 @@ module.exports = async function adaptiveRegression({page, context, browser, hub,
     await wait(async()=> (await snapshot(page)).text.includes('未保存 adaptive'),'Vim unsaved text');
     const vim=await snapshot(page);
     await page.reload({waitUntil:'domcontentloaded'});await select(page);
+    // Replay parsing can finish before fonts, the double-frame fit and the
+    // adaptive candidate window. Compare the restored screen on the settled
+    // desktop grid, rather than a temporary initial 80x24 client request.
+    await wait(async()=>{
+      const current=await state(), restored=await snapshot(page);
+      return current.leaderDevice==='desktop' && equalGrid(current,beforeRefresh) &&
+        restored?.cols===beforeRefresh.activeCols && restored?.rows===beforeRefresh.activeRows && restored?.pending===0;
+    },'Vim restored to the settled desktop grid');
     const restored=await snapshot(page);assert.equal(restored.text,vim.text);assert.deepEqual(restored.cursor,vim.cursor);
     await select(page,ids[0]);await wait(async()=> (await state()).leaderDevice==='mobile','Vim mobile fallback');
     await select(page);await wait(async()=> (await state()).leaderDevice==='desktop','Vim desktop restoration');

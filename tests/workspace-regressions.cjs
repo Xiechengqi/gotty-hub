@@ -135,6 +135,10 @@ function installInspection() {
   async function type(text) {await page.locator('.terminal-slot:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.type(text, {delay: 5});}
   async function command(text) {await type(text); await page.keyboard.press('Enter');}
   await ready();
+  if(process.env.WORKSPACE_SUITE==='viewport'){
+    await require('./viewport-regressions.cjs')({page,context,browser,hub,ids,devices,api,wait,sleep,dir,report,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   if(process.env.WORKSPACE_SUITE==='adaptive'){
     await require('./adaptive-regressions.cjs')({page,context,browser,hub,ids,devices,wait,sleep,dir,report,installInspection,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;

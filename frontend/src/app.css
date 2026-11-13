@@ -26,7 +26,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-slot[hidden]{display:none}
 .real-terminal{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;background:var(--color-terminal-background);color:var(--color-terminal-foreground)}
 .real-terminal .xterm .xterm-viewport{background:var(--color-terminal-background)}
-.xterm-host{position:relative;flex:1;min-height:0;overflow:auto}
+.xterm-host{position:relative;flex:1;min-height:0;overflow:auto;overflow-anchor:none;padding-block-end:env(safe-area-inset-bottom);box-sizing:border-box}
 .terminal-message{position:absolute;inset-block-start:12px;inset-inline-start:12px;padding:8px;background:var(--color-background-secondary-default);color:var(--color-text-secondary);z-index:1}
 
 .gotty-voice-btn{position:absolute;inset-inline-end:16px;inset-block-end:64px;border:1px solid var(--color-border-button-default);border-radius:50%;padding:12px;background:var(--color-background-secondary-default);color:var(--color-text-primary)}
@@ -71,14 +71,14 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-popover .terminal-font-options{gap:0;margin:0}.terminal-popover button:disabled{opacity:.4}
 .terminal-share-popover form{padding:0 10px 8px;gap:8px}.terminal-share-popover input{min-block-size:28px;color:var(--color-terminal-panel-text);background:var(--color-terminal-option-background)}
 .terminal-share-row{padding:8px 10px;border-color:var(--color-terminal-panel-border)}
-.terminal-mobile-keys{position:absolute;inset-inline:0;inset-block-end:0;z-index:5;display:flex;flex-direction:column;flex-shrink:0;gap:4px;padding:4px;background:var(--color-terminal-panel-background);backdrop-filter:blur(8px);border-block-start:1px solid var(--color-terminal-panel-border);user-select:none;touch-action:none}
+.terminal-mobile-keys{position:relative;z-index:5;display:flex;flex-direction:column;flex-shrink:0;gap:4px;padding:4px 4px calc(4px + env(safe-area-inset-bottom));background:var(--color-terminal-panel-background);backdrop-filter:blur(8px);border-block-start:1px solid var(--color-terminal-panel-border);user-select:none;touch-action:none}
 .terminal-mobile-key-row{display:flex;gap:4px}
 .terminal-mobile-key{flex:1 1 0;min-inline-size:0;block-size:40px;padding:0;border:1px solid var(--color-terminal-option-active);border-radius:6px;background:var(--color-terminal-option-background);color:var(--color-terminal-panel-text);box-shadow:none;touch-action:none}
 .terminal-mobile-key>span{padding:0}.terminal-mobile-key:active{background:var(--color-terminal-option-active)}
 .terminal-mobile-key.armed{background:var(--color-terminal-key-armed);border-color:var(--color-terminal-key-armed-border)}
 @media(max-height:500px){.terminal-mobile-key{block-size:32px}}.session-tab[data-dragging=true]{z-index:10;background:var(--color-background-tertiary-default);box-shadow:var(--shadow-md);border-radius:6px}
-.real-terminal:has(.terminal-mobile-keys) .gotty-voice-btn{inset-block-end:109px}
-@media(max-height:500px){.real-terminal:has(.terminal-mobile-keys) .gotty-voice-btn{inset-block-end:93px}}
+.real-terminal .gotty-voice-btn{inset-block-end:calc(var(--terminal-keys-height,0px) + 16px)}
+.terminal-return-input{position:absolute;inset-inline-start:50%;inset-block-end:calc(var(--terminal-keys-height,0px) + 12px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:4;white-space:nowrap}
 .terminal-share-form{display:grid}.terminal-expiry-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .terminal-share-options{display:flex;flex-wrap:wrap;gap:8px}
 .terminal-share-options span{color:var(--color-terminal-panel-text)}
@@ -149,11 +149,11 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 /* Hallmark · component: full-height terminal workspace · existing BoardUI system.
  * Pre-emit critique: P5 H5 E4 S5 R5 V4. Equal tabs over a translucent gray surface. */
 :root{--color-workspace-bar-background:var(--color-neutral-500);--color-workspace-bar-ink:var(--color-neutral-950);--color-workspace-bar-inverse-ink:var(--color-white)}
-.app{--hub-chrome-height:32px;--hub-bar-height:calc(var(--hub-chrome-height) + env(safe-area-inset-top));height:var(--hub-viewport-height,100dvh);min-height:0;overflow:clip}
+.app{position:fixed;inset-inline:0;top:var(--hub-viewport-top,0px);--hub-chrome-height:32px;--hub-bar-height:calc(var(--hub-chrome-height) + env(safe-area-inset-top));height:var(--hub-viewport-height,100dvh);min-height:0;overflow:clip}
 .app>.main{margin-inline-start:0;inline-size:100%;min-block-size:0}
 .app .workspace{height:100%;min-height:0;margin:0}
 .workspace-surface{--workspace-surface-background:color-mix(in srgb,var(--color-workspace-bar-background) calc(var(--hub-bar-opacity,.8)*100%),transparent);background:var(--workspace-surface-background);color:var(--bar-ink)}
-.workspace-bar{--bar-ink:var(--color-workspace-bar-inverse-ink);position:fixed;inset-block-start:0;inset-inline:0;block-size:var(--hub-bar-height);padding-block-start:env(safe-area-inset-top);padding-inline:env(safe-area-inset-left) env(safe-area-inset-right);display:flex;align-items:center;z-index:20}
+.workspace-bar{--bar-ink:var(--color-workspace-bar-inverse-ink);position:fixed;inset-block-start:var(--hub-viewport-top,0px);inset-inline:0;block-size:var(--hub-bar-height);padding-block-start:env(safe-area-inset-top);padding-inline:env(safe-area-inset-left) env(safe-area-inset-right);display:flex;align-items:center;z-index:20}
 .workspace-bar[data-light-terminal=true]{--bar-ink:var(--color-workspace-bar-ink)}
 .workspace-bar .quiet-button,.workspace-bar .settings-trigger{color:var(--bar-ink);background:transparent;min-block-size:0;min-inline-size:0;block-size:var(--hub-chrome-height);padding:0;border-radius:0;box-shadow:none}
 .workspace-bar .quiet-button:hover,.workspace-bar .settings-trigger:hover{background:color-mix(in srgb,var(--bar-ink) 10%,transparent)}
@@ -199,7 +199,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-clear-control{inset-block-start:32px}.terminal-upload-control{inset-block-start:64px}
 .real-terminal .terminal-message{inset-block-start:calc(var(--hub-bar-height) + 8px)}
 .terminal-state{inset-block-start:calc(var(--hub-bar-height) + 132px)}
-@media(max-width:767px){.app{--hub-chrome-height:44px}.workspace-bar-actions>button>svg{inline-size:18px;block-size:18px}.tab-menu-item,.language-toggle{min-block-size:44px}.terminal-toolbar{block-size:132px}.terminal-clear-control{inset-block-start:44px}.terminal-upload-control{inset-block-start:88px}.terminal-state{inset-block-start:calc(var(--hub-bar-height) + 144px)}}
+@media(max-width:767px){.app{position:fixed;inset-inline:0;top:var(--hub-viewport-top,0px);--hub-chrome-height:44px}.workspace-bar-actions>button>svg{inline-size:18px;block-size:18px}.tab-menu-item,.language-toggle{min-block-size:44px}.terminal-toolbar{block-size:132px}.terminal-clear-control{inset-block-start:44px}.terminal-upload-control{inset-block-start:88px}.terminal-state{inset-block-start:calc(var(--hub-bar-height) + 144px)}}
 @media(prefers-reduced-motion:reduce){.terminal-slot[data-focused=true]>.pane-identity{animation:none;opacity:0}}
 
 /* Apply to scroll containers as well as the document: overflow:clip is not one. */

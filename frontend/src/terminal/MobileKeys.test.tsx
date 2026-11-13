@@ -45,3 +45,14 @@ it('repeats navigation while held and stops on pointer cancellation',async()=>{
  await act(async()=>up.dispatchEvent(new Event('pointercancel',{bubbles:true})));
  await act(async()=>vi.advanceTimersByTime(1000));expect(written.length).toBe(4);
 });
+it('reports the measured strip height for overlays and resumes the input only for sent keys',async()=>{
+ node.className='real-terminal';const onInput=vi.fn();let resized:()=>void=()=>{};
+ vi.stubGlobal('ResizeObserver',class{constructor(callback:()=>void){resized=callback;}observe(){}disconnect(){}});
+ await act(async()=>root.render(<MobileKeys term={term} enabled transform={transform} locale="zh-CN" onInput={onInput}/>));
+ await open();const strip=node.querySelector<HTMLElement>('.terminal-mobile-keys')!;
+ Object.defineProperty(strip,'offsetHeight',{value:93});resized();
+ expect(node.style.getPropertyValue('--terminal-keys-height')).toBe('93px');
+ await click('Ctrl');expect(onInput).not.toHaveBeenCalled();
+ await click('Home');expect(onInput).toHaveBeenCalledOnce();
+ await render(false);expect(node.style.getPropertyValue('--terminal-keys-height')).toBe('');
+});

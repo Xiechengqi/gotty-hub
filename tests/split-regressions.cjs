@@ -22,7 +22,20 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   async function track() {await page.evaluate(() => {
     window.compactTerms=Object.fromEntries([...document.querySelectorAll('.real-terminal')].map((e,i)=>[e.closest('.terminal-slot').dataset.instanceId,window.reviewTerm(i)]));window.compactSocketCount=window.reviewSockets.length;
     window.splitInputs=[];window.splitSizes=[];
-    for(const socket of window.reviewSockets){const send=socket.send.bind(socket);socket.send=data=>{if(typeof data==='string'&&data[0]==='1')window.splitInputs.push({url:socket.url,text:new TextDecoder().decode(Uint8Array.from(atob(data.slice(1)),c=>c.charCodeAt(0)))});if(typeof data==='string'&&data[0]==='3')window.splitSizes.push({url:socket.url,sent:data});send(data);};}
+    for(const socket of window.reviewSockets){
+      const send=socket.send.bind(socket);
+      let previous=JSON.stringify([socket.reviewResize?.columns,socket.reviewResize?.rows]);
+      socket.send=data=>{
+        if(typeof data==='string'&&data[0]==='1')window.splitInputs.push({url:socket.url,text:new TextDecoder().decode(Uint8Array.from(atob(data.slice(1)),c=>c.charCodeAt(0)))});
+        if(typeof data==='string'&&data[0]==='3'){
+          const size=JSON.parse(data.slice(1)), current=JSON.stringify([size.columns,size.rows]);
+          // Adaptive presence renewals carry unchanged dimensions every 3s.
+          if(current!==previous)window.splitSizes.push({url:socket.url,sent:data});
+          previous=current;
+        }
+        send(data);
+      };
+    }
   });}
   async function contrast() {
     await wait(async()=>page.locator('.workspace-bar .session-name').evaluateAll(elements=>{

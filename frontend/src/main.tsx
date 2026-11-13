@@ -96,12 +96,17 @@ function App() {
   useEffect(()=>{const query=matchMedia('(max-width: 767px)');const update=()=>setMobile(query.matches);query.addEventListener('change',update);return()=>query.removeEventListener('change',update)},[]);
   // Track the visual viewport app-wide so the workspace stays correctly sized
   // when mobile browser chrome collapses, even before any terminal mounts.
-  const applyViewportHeight=useCallback((height:number)=>{document.documentElement.style.setProperty('--hub-viewport-height',`${height}px`)},[]);
   useEffect(()=>{
     const vv=window.visualViewport;if(!vv)return;
-    const update=()=>applyViewportHeight(vv.height);
-    update();vv.addEventListener('resize',update);return()=>vv.removeEventListener('resize',update);
-  },[applyViewportHeight]);
+    const update=()=>{
+      if(Math.abs(vv.scale-1)>0.01)return;
+      const style=document.documentElement.style;
+      style.setProperty('--hub-viewport-height',`${vv.height}px`);
+      style.setProperty('--hub-viewport-top',`${vv.offsetTop}px`);
+    };
+    update();vv.addEventListener('resize',update);vv.addEventListener('scroll',update);
+    return()=>{vv.removeEventListener('resize',update);vv.removeEventListener('scroll',update);};
+  },[]);
   function acceptAccount(value:Account|null){
     if(activeAccount.current!==(value?.id??null)){
       preferenceRevision.current++;
@@ -258,7 +263,7 @@ function App() {
       const url=new URL(location.href);url.searchParams.delete('auth');history.replaceState(null,'',url);
     }catch(error){fail(error)}finally{setBusy(false)}
   }
-  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onActions={registerActions} visible={visibleIds.has(i.id)} focusRequest={focusTarget?.id===i.id?focusTarget.request:0} onFocusHandled={focusHandled} locale={locale} onViewport={applyViewportHeight} settings={displaySnapshot.settings} instanceName={i.name} onAppearance={value => {reportedAppearance.current[i.id] = value;}}/>;return <section className="terminal-panel dark" key={i.id}>
+  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onActions={registerActions} visible={visibleIds.has(i.id)} focusRequest={focusTarget?.id===i.id?focusTarget.request:0} onFocusHandled={focusHandled} locale={locale} settings={displaySnapshot.settings} instanceName={i.name} onAppearance={value => {reportedAppearance.current[i.id] = value;}}/>;return <section className="terminal-panel dark" key={i.id}>
     <div className="terminal-heading text-caption-1-regular"><span className="terminal-host"><span className="status-dot"/>{i.host}</span><span>{t(i.role==='observer'?'readOnly':'writable')} · {t('demo')}</span></div>
     <div className="terminal-output" dir="ltr"><p className="text-text-tertiary">{t('connectedDemo')}</p><p className="text-text-tertiary">{t('terminalPreview')}</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span>gotty --version</p><p>GoTTY · web terminal</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span><span className="cursor"/></p></div>
     <div className="terminal-keys">{['Esc','Ctrl','Tab','↑','↓','←','→','⌨'].map(k=><Button key={k} variant="secondary" onClick={()=>setNotice('keyNotice')}>{k}</Button>)}</div>
