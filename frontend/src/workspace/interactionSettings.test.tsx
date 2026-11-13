@@ -11,10 +11,12 @@ beforeEach(() => {
 });
 afterEach(async () => {await act(async () => root.unmount()); node.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
-it('defaults on for desktop Macs and off for iPads and other platforms', () => {
+it('defaults on for Macs and touchscreens, preserving the opt-in on other desktops', () => {
   expect(defaultTabSwipe({platform: 'MacIntel', userAgent: 'Macintosh', maxTouchPoints: 0})).toBe(true);
-  expect(defaultTabSwipe({platform: 'MacIntel', userAgent: 'Macintosh', maxTouchPoints: 5})).toBe(false);
-  expect(defaultTabSwipe({platform: 'iPad', userAgent: 'iPad', maxTouchPoints: 5})).toBe(false);
+  expect(defaultTabSwipe({platform: 'MacIntel', userAgent: 'Macintosh', maxTouchPoints: 5})).toBe(true);
+  expect(defaultTabSwipe({platform: 'iPad', userAgent: 'iPad', maxTouchPoints: 5})).toBe(true);
+  expect(defaultTabSwipe({platform: 'iPhone', userAgent: 'iPhone', maxTouchPoints: 5})).toBe(true);
+  expect(defaultTabSwipe({platform: 'Linux armv8l', userAgent: 'Android', maxTouchPoints: 5})).toBe(true);
   expect(defaultTabSwipe({platform: 'Linux x86_64', userAgent: 'Linux', maxTouchPoints: 0})).toBe(false);
 });
 

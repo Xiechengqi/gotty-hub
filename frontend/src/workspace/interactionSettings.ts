@@ -2,9 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 
 export const interactionSettingsKey = (account: string) => `gotty-hub:interaction:${encodeURIComponent(account)}`;
 export function defaultTabSwipe(device: Pick<Navigator, 'platform' | 'userAgent' | 'maxTouchPoints'> = navigator): boolean {
-  return /Mac/.test(device.platform + ' ' + device.userAgent)
-    && !/iPad|iPhone|iPod/.test(device.userAgent)
-    && !(device.platform === 'MacIntel' && device.maxTouchPoints > 1);
+  return /Mac/.test(device.platform + ' ' + device.userAgent) || device.maxTouchPoints > 0;
 }
 export function readTabSwipe(account: string | undefined): boolean {
   try {

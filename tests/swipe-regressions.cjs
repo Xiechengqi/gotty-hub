@@ -59,6 +59,19 @@ module.exports = async function swipeRegression({page, ids, api, wait, sleep, di
   await wait(() => page.evaluate(() => document.documentElement.dataset.hubTabSwipe === 'true'), 'persisted browser setting');
   report('swipeSettings', {cancel: true, save: true, failedSaveAtomic: true, reload: true, browserOnly: true});
 
+  // Keep feeding inertia with no silent gap, then introduce a fresh gesture.
+  // The former implementation swallowed all of this until the wheel stopped.
+  await page.mouse.move(120, 16); await page.mouse.wheel(90, 0);
+  for (const delta of [40, 32, 24, 16, 10, 6, 4, 2, 1, 1, 1]) {await sleep(16); await page.mouse.wheel(delta, 0);}
+  assert.equal(await active(), b, 'momentum repeated the switch');
+  await page.mouse.wheel(30, 0); await page.mouse.wheel(60, 0);
+  await wait(async () => await active() === c, 'second swipe during inertia');
+  for (let i = 0; i < 10; i++) {await sleep(16); await page.mouse.wheel(2, 0);}
+  await page.mouse.wheel(-40, 0); await page.mouse.wheel(-45, 0);
+  await wait(async () => await active() === b, 'reverse swipe during inertia');
+  report('swipeRearm', {sameDirection: true, reverse: true, momentumDoesNotRepeat: true});
+  await select(a); await sleep(260);
+
   await page.evaluate(() => {window.swipeOriginalTerm = window.reviewTerm(0); window.swipeOriginalSocket = window.reviewSockets.find(socket => socket.readyState === 1);});
   await slot(a).locator('.xterm-helper-textarea').focus();
   await sleep(100);

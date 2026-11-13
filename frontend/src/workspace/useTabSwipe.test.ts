@@ -22,6 +22,17 @@ function wheel(x: number, y = 0, target: Element = screen, extra: WheelEventInit
   const event = new WheelEvent('wheel', {bubbles: true, cancelable: true, deltaX: x, deltaY: y, ...extra});
   target.dispatchEvent(event); return event;
 }
+function touchPoint(x: number, y: number, target: Element, identifier = 1): Touch {
+  return {identifier, clientX: x, clientY: y, target, pageX: x, pageY: y, screenX: x, screenY: y,
+    force: 1, radiusX: 1, radiusY: 1, rotationAngle: 0};
+}
+function touchEvent(type: string, x: number, y = 200, target: Element = screen, extra: TouchEventInit = {}) {
+  now += 16;
+  const point = touchPoint(x, y, target);
+  const event = new TouchEvent(type, {bubbles: true, cancelable: true,
+    touches: type === 'touchend' || type === 'touchcancel' ? [] : [point], changedTouches: [point], ...extra});
+  target.dispatchEvent(event); return event;
+}
 
 it('captures horizontal events before xterm, and passes vertical events through unchanged', () => {
   expect(wheel(30, 2).defaultPrevented).toBe(true);
@@ -98,4 +109,63 @@ it('ignores Safari pinch gestures and removes the listener on disposal', () => {
   expect(wheel(200).defaultPrevented).toBe(false);
   screen.dispatchEvent(new Event('gestureend', {bubbles: true}));
   now += 300; stop(); expect(wheel(200).defaultPrevented).toBe(false); expect(select).not.toHaveBeenCalled();
+});
+
+it('commits touchscreen navigation only on lift, suppresses terminal moves, and repeats immediately', () => {
+  const move = vi.fn(); screen.addEventListener('touchmove', move);
+  touchEvent('touchstart', 300);
+  expect(touchEvent('touchmove', 275).defaultPrevented).toBe(true);
+  touchEvent('touchmove', 180); expect(select).not.toHaveBeenCalled();
+  expect(touchEvent('touchend', 180).defaultPrevented).toBe(true);
+  expect(select).toHaveBeenCalledExactlyOnceWith('b'); expect(move).not.toHaveBeenCalled();
+  workspace = {...workspace, active: 'b'};
+  touchEvent('touchstart', 100); touchEvent('touchmove', 200); touchEvent('touchend', 200);
+  expect(select).toHaveBeenLastCalledWith('a'); expect(select).toHaveBeenCalledTimes(2);
+});
+
+it('keeps native vertical scrolling, horizontal content overflow, taps and long presses', () => {
+  touchEvent('touchstart', 300);
+  expect(touchEvent('touchmove', 300, 100).defaultPrevented).toBe(false);
+  touchEvent('touchend', 300, 100);
+  touchEvent('touchstart', 300); expect(touchEvent('touchend', 300).defaultPrevented).toBe(false);
+  touchEvent('touchstart', 300); now += 260;
+  expect(touchEvent('touchmove', 100).defaultPrevented).toBe(false); touchEvent('touchend', 100);
+  Object.defineProperties(host, {scrollWidth: {value: 1200}, clientWidth: {value: 500}});
+  touchEvent('touchstart', 300); expect(touchEvent('touchmove', 100).defaultPrevented).toBe(false);
+  touchEvent('touchend', 100); expect(select).not.toHaveBeenCalled();
+  touchEvent('touchstart', 300, 16, tabs); touchEvent('touchmove', 100, 16, tabs); touchEvent('touchend', 100, 16, tabs);
+  expect(select).toHaveBeenCalledExactlyOnceWith('b');
+});
+
+it('does not switch for a pinch, cancellation, disabled setting or an invalidated touch', () => {
+  const second = touchPoint(200, 200, screen, 2);
+  touchEvent('touchstart', 300); touchEvent('touchmove', 270);
+  touchEvent('touchstart', 300, 200, screen, {touches: [second, second]});
+  expect(touchEvent('touchmove', 100).defaultPrevented).toBe(false); touchEvent('touchend', 100);
+  touchEvent('touchstart', 300); touchEvent('touchmove', 180); touchEvent('touchcancel', 180); touchEvent('touchend', 180);
+  touchEvent('touchstart', 300); touchEvent('touchmove', 180); window.dispatchEvent(new Event('blur')); touchEvent('touchend', 180);
+  touchEvent('touchstart', 300); touchEvent('touchmove', 180); workspace = {...workspace, order: ['a', 'c', 'b']}; touchEvent('touchend', 180);
+  enabled = false; touchEvent('touchstart', 300); touchEvent('touchmove', 180); touchEvent('touchend', 180);
+  expect(select).not.toHaveBeenCalled();
+});
+
+it('keeps existing selection, modal controls and terminal buttons out of touch navigation', () => {
+  const selection = document.createElement('div'); selection.className = 'xterm-selection'; selection.innerHTML = '<div></div>'; host.append(selection);
+  touchEvent('touchstart', 300); touchEvent('touchmove', 100); touchEvent('touchend', 100); selection.remove();
+  const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); document.body.append(dialog);
+  touchEvent('touchstart', 300); touchEvent('touchmove', 100); touchEvent('touchend', 100); dialog.remove();
+  const button = document.createElement('button'); host.append(button);
+  touchEvent('touchstart', 300, 200, button); touchEvent('touchmove', 100, 200, button); touchEvent('touchend', 100, 200, button);
+  expect(select).not.toHaveBeenCalled();
+  stop(); touchEvent('touchstart', 300); touchEvent('touchmove', 100); touchEvent('touchend', 100);
+  expect(select).not.toHaveBeenCalled();
+});
+
+it('remembers a menu at pointer-down even when the outside press dismisses it before touch-start', () => {
+  const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); document.body.append(dialog);
+  const dismiss = () => dialog.remove(); document.addEventListener('pointerdown', dismiss, {capture: true, once: true});
+  const down = new Event('pointerdown', {bubbles: true}); Object.assign(down, {pointerType: 'touch', pointerId: 1}); screen.dispatchEvent(down);
+  expect(dialog.isConnected).toBe(false);
+  touchEvent('touchstart', 300); expect(touchEvent('touchmove', 100).defaultPrevented).toBe(false); touchEvent('touchend', 100);
+  expect(select).not.toHaveBeenCalled();
 });

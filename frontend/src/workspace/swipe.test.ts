@@ -24,6 +24,33 @@ it('never converts a vertical, ambiguous or ineligible burst into a tab switch',
   }
 });
 
+it('accepts a renewed same-direction swipe while the previous inertia is still arriving', () => {
+  const gesture = new TabSwipeGesture();
+  expect(gesture.push(sample(90))).toEqual({consume: true, direction: 1});
+  for (const [at, x] of [[16, 60], [48, 36], [80, 20], [112, 12], [144, 5], [176, 2]]) {
+    expect(gesture.push(sample(x, 0, at))).toEqual({consume: true});
+  }
+  expect(gesture.push(sample(25, 0, 192, {context: 'b'}))).toEqual({consume: true});
+  expect(gesture.push(sample(60, 0, 208, {context: 'b'}))).toEqual({consume: true, direction: 1});
+  for (let at = 224; at <= 1200; at += 16) expect(gesture.push(sample(25, 0, at))).toEqual({consume: true});
+});
+
+it('accepts a deliberate reversal without waiting for silence, but ignores tiny rebound noise', () => {
+  const gesture = new TabSwipeGesture(); gesture.push(sample(90));
+  for (const at of [30, 60, 90, 120, 150, 180]) expect(gesture.push(sample(-1, 0, at))).toEqual({consume: true});
+  expect(gesture.push(sample(-40, 0, 196))).toEqual({consume: true});
+  expect(gesture.push(sample(-45, 0, 212))).toEqual({consume: true, direction: -1});
+});
+
+it('does not restart on long decaying momentum, early acceleration or after cancellation', () => {
+  const gesture = new TabSwipeGesture(); gesture.push(sample(90));
+  gesture.push(sample(5, 0, 16));
+  expect(gesture.push(sample(120, 0, 32))).toEqual({consume: true});
+  for (let at = 48; at < 1800; at += 16) expect(gesture.push(sample(110 * Math.exp(-at / 250), 0, at))).toEqual({consume: true});
+  gesture.cancel();
+  expect(gesture.push(sample(90, 0, 1800))).toEqual({consume: true});
+});
+
 it('cancels a pending switch when its origin, direction or eligibility changes', () => {
   for (const next of [sample(70, 0, 16, {context: 'reordered'}), sample(-70, 0, 16), sample(70, 0, 16, {eligible: false}), sample(1, 30, 16)]) {
     const gesture = new TabSwipeGesture(); gesture.push(sample(30));

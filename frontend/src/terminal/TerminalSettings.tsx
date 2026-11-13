@@ -71,7 +71,7 @@ export function TerminalSettings({open, onClose, snapshot, legacy, locale, loadi
       </section>
       <section className="flex flex-col gap-2">
         <Checkbox isSelected={draftSwipe} onChange={setDraftSwipe} isDisabled={saving} aria-describedby="tab-swipe-description">{zh ? '横向滑动切换标签' : 'Swipe horizontally to switch tabs'}</Checkbox>
-        <p id="tab-swipe-description" className="text-caption-1-regular text-text-secondary">{zh ? '仅此浏览器。可在标签栏或终端内双指横滑；终端内容需要左右滚动时，请在标签栏滑动。' : 'Only this browser. Swipe with two fingers over the tabs or terminal. If the terminal scrolls horizontally, swipe over the tabs.'}</p>
+        <p id="tab-swipe-description" className="text-caption-1-regular text-text-secondary">{zh ? '仅此浏览器。触控板双指、触屏单指左右滑动可切换标签；终端内容需要左右滚动时，请在标签栏滑动。触屏长按标签可拖拽排序。' : 'Only this browser. Swipe with two fingers on a trackpad or one finger on a touchscreen. If the terminal scrolls horizontally, swipe over the tabs. Touch and hold a tab to reorder it.'}</p>
       </section>
       <section className="flex flex-col gap-2"><h3 className="text-body-medium text-text-primary">{zh ? '配色主题' : 'Color theme'}</h3>
         <div className="terminal-settings-themes">{Object.entries(BUILTIN_THEMES).map(([name, theme]) => <Button key={name} variant="secondary" disabled={saving} aria-pressed={draft.theme === name} onClick={() => setDraft(value => ({...value, theme: name}))} trailingIcon={draft.theme === name ? RiCheckLine : undefined}>
