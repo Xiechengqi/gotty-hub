@@ -149,7 +149,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 /* Hallmark · component: full-height terminal workspace · existing BoardUI system.
  * Pre-emit critique: P5 H5 E4 S5 R5 V4. Equal tabs over a translucent gray surface. */
 :root{--color-workspace-bar-background:var(--color-neutral-500);--color-workspace-bar-ink:var(--color-neutral-950);--color-workspace-bar-inverse-ink:var(--color-white)}
-.app{position:fixed;inset-inline:0;top:var(--hub-viewport-top,0px);--hub-chrome-height:28px;--hub-bar-height:calc(var(--hub-chrome-height) + env(safe-area-inset-top));height:var(--hub-viewport-height,100dvh);min-height:0;overflow:clip}
+.app{position:fixed;inset-inline:0;top:var(--hub-viewport-top,0px);--hub-chrome-height:24px;--hub-bar-height:calc(var(--hub-chrome-height) + env(safe-area-inset-top));height:var(--hub-viewport-height,100dvh);min-height:0;overflow:clip}
 .app>.main{margin-inline-start:0;inline-size:100%;min-block-size:0}
 .app .workspace{height:100%;min-height:0;margin:0}
 .workspace-surface{--workspace-surface-background:color-mix(in srgb,var(--color-workspace-bar-background) calc(var(--hub-bar-opacity,.8)*100%),transparent);background:var(--workspace-surface-background);color:var(--bar-ink)}
@@ -169,7 +169,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .workspace-tab-pair{box-shadow:inset 0 2px var(--bar-ink)}
 .workspace-bar .session-tab{container-type:inline-size;display:flex;align-items:center;flex:1 1 0;min-inline-size:0;max-inline-size:none;block-size:100%;padding:0;border:0;border-radius:0;box-shadow:inset -1px 0 color-mix(in srgb,var(--bar-ink) 20%,transparent)}
 .workspace-bar .session-tab.selected{background:color-mix(in srgb,var(--bar-ink) 10%,transparent);box-shadow:inset 0 -2px var(--bar-ink)}
-.workspace-bar .tab-trigger{flex:1;inline-size:100%;max-inline-size:none;min-inline-size:0;padding-inline:8px;text-align:start}
+.workspace-bar .tab-trigger{display:flex;align-items:center;flex:1;inline-size:100%;max-inline-size:none;min-inline-size:0;padding-inline:8px;text-align:start}
 .workspace-bar .session-label{display:flex;inline-size:100%;gap:4px;min-inline-size:0;overflow:hidden}
 .workspace-bar .session-name{min-inline-size:0;max-inline-size:none;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-bar .terminal-status,.workspace-bar .terminal-offline{inline-size:12px;block-size:12px;color:var(--bar-ink)}
@@ -199,7 +199,7 @@ html,body{margin:0;overflow-x:clip}body{background:var(--color-background-primar
 .terminal-clear-control{inset-block-start:32px}.terminal-upload-control{inset-block-start:64px}
 .real-terminal .terminal-message{inset-block-start:calc(var(--hub-bar-height) + 8px)}
 .terminal-state{inset-block-start:calc(var(--hub-bar-height) + 132px)}
-@media(max-width:767px){.app{position:fixed;inset-inline:0;top:var(--hub-viewport-top,0px);--hub-chrome-height:40px}.workspace-bar-actions>button>svg{inline-size:18px;block-size:18px}.tab-menu-item,.language-toggle{min-block-size:44px}.terminal-toolbar{block-size:132px}.terminal-clear-control{inset-block-start:44px}.terminal-upload-control{inset-block-start:88px}.terminal-state{inset-block-start:calc(var(--hub-bar-height) + 144px)}}
+@media(max-width:767px){.app{position:fixed;inset-inline:0;top:var(--hub-viewport-top,0px);--hub-chrome-height:28px}.workspace-bar-actions>button>svg{inline-size:18px;block-size:18px}.tab-menu-item,.language-toggle{min-block-size:44px}.terminal-toolbar{block-size:132px}.terminal-clear-control{inset-block-start:44px}.terminal-upload-control{inset-block-start:88px}.terminal-state{inset-block-start:calc(var(--hub-bar-height) + 144px)}}
 @media(prefers-reduced-motion:reduce){.terminal-slot[data-focused=true]>.pane-identity{animation:none;opacity:0}}
 
 /* Apply to scroll containers as well as the document: overflow:clip is not one. */

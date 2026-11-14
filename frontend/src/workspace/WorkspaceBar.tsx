@@ -41,7 +41,7 @@ export function WorkspaceBar(props: Props) {
         else props.onChange({type: action, id: instance.id});
         if (action !== 'delete') props.onFocus();
       }}>
-      <span className="session-label">{instance.icon}<span className="session-name text-body-2-medium" dir="auto">{instance.label}</span><span className="session-number text-caption-1-semibold" aria-hidden="true">{opened.indexOf(instance.id) + 1}</span>{pair && <span className="pane-tab-label text-caption-1-semibold">{t(pair.left === instance.id ? 'leftPane' : 'rightPane')}</span>}{!instance.writable && <span className="tab-readonly text-caption-1-regular">{t('readOnly')}</span>}</span>
+      <span className="session-label">{instance.icon}<span className="session-name text-caption-1-medium" dir="auto">{instance.label}</span><span className="session-number text-caption-1-semibold" aria-hidden="true">{opened.indexOf(instance.id) + 1}</span>{pair && <span className="pane-tab-label text-caption-1-semibold">{t(pair.left === instance.id ? 'leftPane' : 'rightPane')}</span>}{!instance.writable && <span className="tab-readonly text-caption-1-regular">{t('readOnly')}</span>}</span>
     </TabActionsMenu>;
   };
   const leftPress = (event: React.MouseEvent) => {
