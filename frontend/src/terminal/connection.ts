@@ -96,7 +96,7 @@ export class HubConnection implements Connection {
     if (!this.writable && !['2', '4'].includes(data[0])) return false;
     if (data[0] === '3' && !this.visible()) {
       const size = JSON.parse(data.slice(1));
-      this.ws.send('3' + JSON.stringify({...size, visible: false, takeControl: false})); return true;
+      this.ws.send('3' + JSON.stringify({...size, visible: false, paneVisible: false, takeControl: false})); return true;
     }
     this.ws.send(data);
     return true;

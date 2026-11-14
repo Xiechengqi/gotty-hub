@@ -9,6 +9,7 @@ import {WebTTY, type Terminal, type TerminalStatePayload} from '@gotty/terminal-
 import {bindPaste} from '@gotty/terminal-core/paste';
 import {describeGeometry} from '@gotty/terminal-core/geometry';
 import {ViewportFollow} from '@gotty/terminal-core/viewport-follow';
+import {InitialPresentation} from '@gotty/terminal-core/presentation';
 import {reportPaste} from './PasteProgress';
 import {VoiceInput} from '@gotty/terminal-core/voice-input';
 import {defaultDisplayOptions, displayOptions, NORD_THEME, BUILTIN_THEMES, type Appearance} from '@gotty/terminal-core/appearance';
@@ -125,6 +126,8 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     try {term.loadAddon(new ImageAddon());} catch { /* Text renderer remains usable. */ }
     term.open(host.current); term.textarea?.setAttribute('autocomplete', 'off');
     const viewport = new ViewportFollow(term, host.current, setFollowing);
+    const presentation = new InitialPresentation(host.current, writable, viewport.layout);
+    const parsed = term.onWriteParsed(presentation.outputParsed);
     setTerminal(term);
     const element = host.current;
     try {
@@ -150,13 +153,20 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       clearTimeout(messageTimer); if (disposed) return; setMessage(text);
       if (timeout > 0) messageTimer = setTimeout(() => {if (!disposed) setMessage('');}, timeout);
     };
+    const readSize = () => {
+      if (disposed || document.hidden || !view.current || !host.current?.clientWidth || !host.current?.clientHeight) return requestedSize;
+      const size = fit.proposeDimensions();
+      if (!size || !Number.isInteger(size.cols) || size.cols <= 0 || !Number.isInteger(size.rows) || size.rows <= 0) return requestedSize;
+      presentation.measured(size.cols, size.rows);
+      return size;
+    };
     const measure = () => {
       cancelAnimationFrame(fitFrame);
       fitFrame = requestAnimationFrame(() => {fitFrame = requestAnimationFrame(() => {
         if (!disposed && view.current && host.current?.clientWidth && host.current?.clientHeight) {
           try {
-            const size = fit.proposeDimensions();
-            if (!size || !Number.isFinite(size.cols) || !Number.isFinite(size.rows)) return;
+            const size = readSize();
+            if (!size) return;
             // Request the viewport size independently from the rendering grid.
             // GoTTY may enforce a minimum or use another client as PTY leader.
             // Fitting that output into a smaller grid corrupts full-screen apps.
@@ -166,7 +176,8 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
               resize(size.cols, size.rows);
             }
             const grid = serverSize || size;
-            viewport.changeLayout(() => term.resize(grid.cols, grid.rows));
+            if (term.cols !== grid.cols || term.rows !== grid.rows) viewport.changeLayout(() => term.resize(grid.cols, grid.rows));
+            else viewport.layout();
           } catch { /* Hidden pane or unavailable font metrics. */ }
         }
       });});
@@ -186,8 +197,18 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
     const adapter: Terminal & {setUploadFileBufferSize: (size: number) => void} = {
       setPasteSender: sender => {paste = sender;}, onPasteProgress: (state, cancel, dismiss) => {if (!disposed) reportPaste(id, nameRef.current, state, cancel, dismiss);},
       isVisible: () => view.current, onHistoryStatus: truncated => {if (host.current) host.current.dataset.historyTruncated = String(truncated); if (truncated) showMessage('Older output exceeded the retained history limit.', 6000);},
-      info: () => ({columns: requestedSize?.cols ?? term.cols, rows: requestedSize?.rows ?? term.rows}), output: (data, replay) => {if (zmodem && !replay) zmodem.consume(data); else term.write(data);},
-      flushOutput: callback => term.write(new Uint8Array(0), callback), setReplayMode: active => {replaying = active; viewport.setReplayMode(active); element.dataset.replayActive = String(active);},
+      info: () => {
+        // Visibility reports precede the deferred font/ResizeObserver fit.
+        // Offer a real current measurement, never xterm's initial grid.
+        try {
+          const size = readSize();
+          if (size && (!requestedSize || requestedSize.cols !== size.cols || requestedSize.rows !== size.rows)) {
+            requestedSize = size; setLocalSize({columns: size.cols, rows: size.rows});
+          }
+        } catch { /* Await valid font metrics. */ }
+        return {columns: requestedSize?.cols ?? 0, rows: requestedSize?.rows ?? 0};
+      }, output: (data, replay) => {if (zmodem && !replay) zmodem.consume(data); else term.write(data);},
+      flushOutput: callback => term.write(new Uint8Array(0), callback), setReplayMode: active => {replaying = active; viewport.setReplayMode(active); presentation.replay(active); element.dataset.replayActive = String(active);},
       showMessage, removeMessage: () => showMessage('', 0), setWindowTitle: () => {},
       setPreferences: value => {
         preferences.current = value;
@@ -197,11 +218,14 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       },
       updateConnectionCount: value => setCount(value), updateTerminalState: value => {
         setTerminalState(value);
+        element.dataset.terminalGeometry = JSON.stringify({columns: value.activeCols, rows: value.activeRows, policy: value.policy,
+          source: value.leaderDevice, pageVisible: value.leaderPageVisible, paneVisible: value.leaderPaneVisible, retained: value.leaderRetained});
         const {activeCols: cols, activeRows: rows} = value;
         if (Number.isInteger(cols) && cols > 0 && cols <= 4096 && Number.isInteger(rows) && rows > 0 && rows <= 4096) {
           serverSize = {cols, rows};
-          viewport.changeLayout(() => term.resize(cols, rows));
+          if (term.cols !== cols || term.rows !== rows) viewport.changeLayout(() => term.resize(cols, rows));
         }
+        presentation.geometry(value);
       },
       showAPIIndicator: execId => {apiExecutions.add(execId); setAPIRunning(true);}, hideAPIIndicator: execId => {apiExecutions.delete(execId); setAPIRunning(apiExecutions.size > 0);},
       setUploadFileBufferSize: size => {bufferSize = size;},
@@ -252,7 +276,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       disposed = true; if (aliveTerm.current === term) aliveTerm.current = undefined; uploadAbort.current?.abort(); uploadAbort.current = undefined; setUpload(undefined); clearTimeout(messageTimer); cancelAnimationFrame(fitFrame); voice?.close(); zmodem?.dispose();
       window.visualViewport?.removeEventListener('resize', viewportChanged); window.visualViewport?.removeEventListener('scroll', viewportChanged); controller.current = undefined; clearInterval(interval);
       document.removeEventListener('visibilitychange', report); window.removeEventListener('focus', report); window.removeEventListener('blur', report); document.removeEventListener('focusin', report);
-      stop(); unbindPaste(); reportPaste(id, nameRef.current, undefined); observer.disconnect(); subscription.dispose(); binary.dispose(); selection.dispose(); osc.dispose(); viewport.dispose(); term.dispose();
+      stop(); unbindPaste(); reportPaste(id, nameRef.current, undefined); observer.disconnect(); subscription.dispose(); binary.dispose(); selection.dispose(); osc.dispose(); parsed.dispose(); presentation.dispose(); viewport.dispose(); term.dispose();
       document.fonts?.removeEventListener('loadingdone',measure);
     };
   }, [id, writable, asr, files, owner, controls, applyAppearance]);

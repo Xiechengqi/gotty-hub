@@ -30,9 +30,24 @@ module.exports = async function adaptiveRegression({page, context, browser, hub,
     await mobile.goto(hub,{waitUntil:'domcontentloaded'});await select(mobile);
     await wait(async()=> (await state()).leaderDevice==='mobile','phone elected first');
     const phoneGrid = await state(); assert(phoneGrid.activeCols <= 65);
+    await page.evaluate(id=>{
+      window.firstDrawingFrames=[];window.firstDrawingWatching=true;
+      function sample(){
+        if(!window.firstDrawingWatching)return;
+        const nodes=[...document.querySelectorAll('.real-terminal')];
+        const index=nodes.findIndex(node=>node.closest('.terminal-slot').dataset.instanceId===id);
+        const h=nodes[index]?.querySelector('.xterm-host'),t=window.reviewTerm(index),s=h?.querySelector('.xterm-screen');
+        if(t&&h.clientHeight&&s&&getComputedStyle(s).visibility==='visible')window.firstDrawingFrames.push([t.cols,t.rows]);
+        requestAnimationFrame(sample);
+      }sample();
+    },id);
     await select(page);
     await wait(async()=> (await state()).leaderDevice==='desktop' && (await state()).activeCols>phoneGrid.activeCols,'desktop automatically replaces mobile');
     const desktopGrid = await state();
+    await wait(()=>slot(page).locator('.xterm-host').getAttribute('data-terminal-presented').then(value=>value==='true'),'first desktop drawing ready');await sleep(120);
+    const firstFrames=await page.evaluate(()=>{window.firstDrawingWatching=false;return window.firstDrawingFrames;});
+    assert(firstFrames.length>0,'first desktop drawing was never presented');
+    for(const frame of firstFrames)assert.deepEqual(frame,[desktopGrid.activeCols,desktopGrid.activeRows],'first desktop drawing exposed the phone grid');
     const equalGrid = (a,b) => a.activeCols===b.activeCols && a.activeRows===b.activeRows;
     await wait(async()=> (await snapshot(page)).cols===desktopGrid.activeCols && (await snapshot(mobile)).cols===desktopGrid.activeCols,'both render confirmed grid');
     const hint = await slot(page).locator('.terminal-connections').getAttribute('title');
@@ -45,27 +60,40 @@ module.exports = async function adaptiveRegression({page, context, browser, hub,
     assert.equal(mobileRequest.inputClass,'coarse');assert.equal(mobileRequest.deviceClass,'mobile');
     await mobile.setViewportSize({width:390,height:320});await sleep(900);
     assert(equalGrid(await state(),desktopGrid),'short mobile viewport changed desktop grid');
-    report('adaptiveMobileFirst',{phoneCols:phoneGrid.activeCols,desktopCols:desktopGrid.activeCols,mobileRefresh:true,landscape:true,shortViewport:true,diagnostics:true});
+    report('adaptiveMobileFirst',{phoneCols:phoneGrid.activeCols,desktopCols:desktopGrid.activeCols,firstDrawingFrames:firstFrames.length,noSmallFirstDrawing:true,mobileRefresh:true,landscape:true,shortViewport:true,diagnostics:true});
 
-    // Actual Hub tab visibility drives release, while the socket stays alive.
+    // Internal Hub tab switches renew the existing geometry lease. They do
+    // not resize another device's renderer, including after the presence TTL.
     const originalClient = desktopGrid.leaderClientId;
     await select(page,ids[0]);await sleep(500);
     assert.equal((await state()).leaderClientId,originalClient,'brief tab transition lost lease');
-    await wait(async()=> (await state()).leaderDevice==='mobile','hidden desktop yields');
-    await select(page);await wait(async()=> (await state()).leaderDevice==='desktop','visible desktop returns');
+    for(let i=0;i<6;i++){
+      await sleep(2800);const retained=await state();
+      assert.equal(retained.leaderClientId,originalClient);assert(equalGrid(retained,desktopGrid));
+      assert.equal(retained.leaderRetained,true);assert.equal(retained.leaderPageVisible,true);assert.equal(retained.leaderPaneVisible,false);
+    }
+    await select(page);assert(equalGrid(await state(),desktopGrid));
     await page.getByRole('button',{name:'设置',exact:true}).click();await sleep(3200);
     assert.equal((await state()).leaderDevice,'desktop','settings/focus loss relinquished control');
     await page.keyboard.press('Escape');
-    report('adaptiveVisibility',{hiddenTabYields:true,returnRecovers:true,settingsKeepControl:true});
+    report('adaptiveVisibility',{hiddenTabRetainsBeyondTTL:true,returnDoesNotResize:true,settingsKeepControl:true});
 
-    // No browser user-input path is replaced. Suppress only dimension presence
-    // packets to model a frozen page with an open transport.
+    // Foreground Chromium may ignore CDP's freeze request. Exercise the
+    // lifecycle event explicitly, then independently model a silent suspension
+    // with a connected transport. Neither replaces terminal user input.
+    await page.evaluate(()=>document.dispatchEvent(new Event('freeze')));
+    await wait(async()=> (await state()).leaderPageVisible===false,'freeze stops foreground presence');
+    await wait(async()=> (await state()).controlReason==='adaptive-expired' && (await state()).leaderDevice==='mobile','lifecycle lease expires',22000);
+    await page.evaluate(()=>document.dispatchEvent(new Event('resume')));
+    await wait(async()=> (await state()).leaderDevice==='desktop','lifecycle resume recovers');
+    report('adaptiveLifecycle',{freezeStopsPresence:true,backgroundExpires:true,resumeRecovers:true});
+
     await page.evaluate(id=>{
       const socket=window.reviewSockets.find(socket=>socket.url.includes(id)&&socket.readyState===1);
       const original=socket.send.bind(socket);window.resumePresence=()=>{socket.send=original;};
       socket.send=data=>{if(typeof data==='string'&&data[0]==='3')return;return original(data);};
     },id);
-    await wait(async()=> (await state()).controlReason==='adaptive-expired' && (await state()).leaderDevice==='mobile','frozen desktop lease expires',22000);
+    await wait(async()=> (await state()).controlReason==='adaptive-expired' && (await state()).leaderDevice==='mobile','silent suspension lease expires',22000);
     await page.evaluate(()=>window.resumePresence());
     await wait(async()=> (await state()).leaderDevice==='desktop','renewed desktop returns');
     report('adaptivePresence',{frozenOpenSocketExpires:true,renewalRecovers:true});
@@ -93,8 +121,13 @@ module.exports = async function adaptiveRegression({page, context, browser, hub,
         restored?.cols===beforeRefresh.activeCols && restored?.rows===beforeRefresh.activeRows && restored?.pending===0;
     },'Vim restored to the settled desktop grid');
     const restored=await snapshot(page);assert.equal(restored.text,vim.text);assert.deepEqual(restored.cursor,vim.cursor);
-    await select(page,ids[0]);await wait(async()=> (await state()).leaderDevice==='mobile','Vim mobile fallback');
-    await select(page);await wait(async()=> (await state()).leaderDevice==='desktop','Vim desktop restoration');
+    await select(page,ids[0]);await sleep(3100);assert(equalGrid(await state(),beforeRefresh),'Vim internal tab changed shared grid');
+    await select(page);
+    const desktopViewport=page.viewportSize();
+    await page.setViewportSize({width:1000,height:700});
+    await wait(async()=> !equalGrid(await state(),beforeRefresh),'actual desktop resize');
+    await page.setViewportSize(desktopViewport);
+    await wait(async()=> equalGrid(await state(),beforeRefresh),'desktop resize restoration');
     await wait(async()=> (await snapshot(page)).text.includes('未保存 adaptive'),'Vim text after adaptive resize');
     await input().focus();await page.keyboard.insertText('继续');await page.keyboard.press('Escape');await page.keyboard.type(':wq');await page.keyboard.press('Enter');
     await wait(()=>fs.existsSync(file),'Vim save');assert.equal(fs.readFileSync(file,'utf8'),'未保存 adaptive🙂继续\n');

@@ -57,6 +57,68 @@ module.exports = async function viewportRegression({page, context, browser, hub,
     await wait(async()=>(await snapshot(mobile)).text.includes('MORE-LINES-100'),'new live output');await visible(mobile,'live bottom');
     report('viewportLive',{desktopGrid,mobileOuterScroll:initial.outer,initialReplay:true,reload:true,orientation:true,clear:true});
 
+    // Inspect every presented frame during desktop tab switches. Eventual
+    // convergence alone misses the small-grid frame and the phone's jump.
+    const observe=target=>target.evaluate(id=>{
+      window.crossDeviceFrames=[];window.crossDeviceObserving=true;
+      function sample(){
+        if(!window.crossDeviceObserving)return;
+        const nodes=[...document.querySelectorAll('.real-terminal')];
+        const index=nodes.findIndex(node=>node.closest('.terminal-slot').dataset.instanceId===id);
+        const t=window.reviewTerm(index),h=nodes[index]?.querySelector('.xterm-host');
+        if(t&&h&&h.clientHeight)window.crossDeviceFrames.push({cols:t.cols,rows:t.rows,outer:h.scrollTop,following:h.dataset.viewportFollowing});
+        requestAnimationFrame(sample);
+      }sample();
+    },id);
+    const takeFrames=target=>target.evaluate(()=>{window.crossDeviceObserving=false;return window.crossDeviceFrames;});
+    await observe(page);await observe(mobile);
+    const live=await metrics(mobile);
+    for(let i=0;i<2;i++){
+      await page.locator(`.session-tab[data-instance-id="${ids[1]}"] .tab-trigger`).click();await sleep(3200);
+      assert.deepEqual(grid(await state()),desktopGrid);assert.equal((await state()).leaderRetained,true);
+      await page.locator(tab).click();await sleep(800);
+    }
+    const desktopFrames=await takeFrames(page),mobileFrames=await takeFrames(mobile);
+    assert(desktopFrames.length>20&&mobileFrames.length>20);
+    for(const f of [...desktopFrames,...mobileFrames])assert.deepEqual([f.cols,f.rows],desktopGrid,'intermediate frame changed grid');
+    for(const f of mobileFrames){assert.equal(f.following,'true');assert(Math.abs(f.outer-live.outer)<=1,'phone jumped during desktop tab switch');}
+    await visible(mobile,'mobile remains at live bottom after desktop tab switches');
+    report('viewportCrossDeviceSwitch',{desktopFrames:desktopFrames.length,mobileFrames:mobileFrames.length,stableGrid:true,mobileNoJump:true});
+
+    // A touch against the bottom boundary is a no-op, not history intent.
+    const touchCDP=await mobileContext.newCDPSession(mobile);
+    const swipe=async(from,to)=>{
+      await touchCDP.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:180,y:from,id:1}]});
+      for(let i=1;i<=8;i++){
+        await touchCDP.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:180,y:from+(to-from)*i/8,id:1}]});await sleep(20);
+      }
+      await touchCDP.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    };
+    await swipe(300,180);
+    await command(page,"printf 'BOUNDARY-TOUCH-OUTPUT\\n'");
+    await wait(async()=>(await snapshot(mobile)).text.includes('BOUNDARY-TOUCH-OUTPUT'),'boundary output parsed');
+    await visible(mobile,'boundary touch keeps live following');assert.equal((await metrics(mobile)).following,'true');
+    report('viewportBoundaryTouch',{noOpKeepsFollowing:true});
+
+    // Sustained hidden-cursor repaint (Codex-style) must align content without
+    // following a redraw cursor left at the top of the shared screen.
+    const repaint=path.join(dir,'hidden-cursor.py');
+    fs.writeFileSync(repaint,"import os,sys,time\nrows=os.get_terminal_size().lines\nfor frame in range(10):\n sys.stdout.write('\\x1b[?25l\\x1b[2J\\x1b[H')\n for row in range(rows):\n  sys.stdout.write('\\x1b[%d;1HREPAINT-%d-%d' % (row+1,frame,row))\n sys.stdout.write('\\x1b[H');sys.stdout.flush();time.sleep(.12)\ntime.sleep(2)\nsys.stdout.write('\\x1b[?25h\\x1b[%d;1H' % rows);sys.stdout.flush()\n");
+    await command(page,`python3 '${repaint}'`);
+    await wait(async()=>JSON.parse(await mobile.locator(host).getAttribute('data-viewport-state')).cursorVisible===false,'hidden redraw active');
+    await wait(async()=>{const m=await metrics(mobile);return m.following==='true'&&m.outer>=m.screenHeight-m.hostHeight-2;},'hidden live content bottom');
+    await page.locator(`.session-tab[data-instance-id="${ids[1]}"] .tab-trigger`).click();await sleep(600);
+    await page.locator(tab).click();
+    await wait(async()=>JSON.parse(await mobile.locator(host).getAttribute('data-viewport-state')).cursorVisible===true,'redraw cursor restored');
+    await visible(mobile,'live after hidden-cursor redraw');
+    report('viewportHiddenCursor',{contentBottom:true,tabSwitchStable:true,restoresVisibleCursor:true});
+
+    await swipe(180,350);
+    await wait(async()=>(await metrics(mobile)).following==='false','native touch pauses history following');
+    await sleep(400);
+    await mobile.getByRole('button',{name:'回到输入位置',exact:true}).click();await visible(mobile,'return after native touch');
+    report('viewportNativeTouch',{historyPauses:true,returnResumes:true});
+
     // Real wheel navigation pauses following; output and tab focus do not pull
     // the phone out of history. Soft refresh retains both scroll layers.
     await mobile.mouse.move(180,250);await mobile.mouse.wheel(0,-400);

@@ -58,7 +58,7 @@ module.exports = async function compactWorkspaceRegression({page, browser, hub, 
   await page.evaluate(id=>{localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id));localStorage.removeItem('gotty-hub:layout:'+encodeURIComponent(id));},me.id);
   await page.reload({waitUntil:'domcontentloaded'});await expectPair(a,c);await expectFocus(c);
   assert.equal(await page.locator('.sidebar,.topbar,.terminal-pane-heading,.instance-sort-handle').count(),0);
-  assert.equal(Math.round((await page.locator('.workspace-bar').boundingBox()).height),32);
+  assert.equal(Math.round((await page.locator('.workspace-bar').boundingBox()).height),24);
   await action(c,'退出分屏');
   // Undo migration's adjacency normalization, then create groups using the real menu.
   const reset={...legacy,active:a,split:false,workspace:{schemaVersion:3,opened:ids,order:ids,active:a,groups:[]}};

@@ -144,17 +144,39 @@ it('renders at the confirmed PTY size while requesting the narrow viewport witho
  const flush=async()=>{for(let i=0;i<4;i++)await act(async()=>{const pending=[...frames.values()];frames.clear();for(const callback of pending)callback(performance.now());});};
  state.geometry={cols:36,rows:18};
  await act(async()=>root.render(<RealTerminal id="narrow" writable visible locale="zh-CN"/>));
- await flush();
+ // The socket can open before the deferred two-frame fit completes.
  await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
  expect(sockets[0].send.mock.calls.some(([frame])=>frame[0]==='3'&&JSON.parse(frame.slice(1)).columns===36)).toBe(true);
+ await flush();
  const sent=sockets[0].send.mock.calls.length;
  await act(async()=>{sockets[0].onmessage({data:'8'+JSON.stringify({activeCols:60,activeRows:20,policy:'leader'})});});
  const term=state.terminals[0];
  expect([term.cols,term.rows]).toEqual([60,20]);
  expect(sockets[0].send.mock.calls).toHaveLength(sent);
+ const resizes=term.resize.mock.calls.length;
+ await act(async()=>{sockets[0].onmessage({data:'8'+JSON.stringify({activeCols:60,activeRows:20,policy:'adaptive',leaderRetained:true,leaderDevice:'desktop'})});});
+ expect(term.resize.mock.calls).toHaveLength(resizes);
+ expect(JSON.parse(node.querySelector<HTMLElement>('.xterm-host')!.dataset.terminalGeometry!)).toMatchObject({columns:60,rows:20,retained:true,source:'desktop'});
  await act(async()=>root.render(<RealTerminal id="narrow" writable visible locale="zh-CN" settings={{schemaVersion:1,theme:'paper',fontSize:24,fontId:'monospace'}}/>));
  await flush();
  expect([term.cols,term.rows]).toEqual([60,20]);
+ expect(state.terminals).toHaveLength(1);expect(sockets).toHaveLength(1);
+});
+
+it('waits for visible measurements and retains the last measured size on internal pane switches',async()=>{
+ vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(500);
+ vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(600);
+ const render=(visible:boolean)=>root.render(<RealTerminal id="lease" writable visible={visible} locale="zh-CN"/>);
+ await act(async()=>render(false));
+ await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
+ const requests=()=>sockets[0].send.mock.calls.filter(([frame])=>frame[0]==='3').map(([frame])=>JSON.parse(frame.slice(1)));
+ expect(requests()).toHaveLength(0);
+ state.geometry={cols:140,rows:48};
+ await act(async()=>render(true));
+ expect(requests().at(-1)).toMatchObject({columns:140,rows:48,visible:true,pageVisible:true,paneVisible:true});
+ state.geometry={cols:2,rows:1};
+ await act(async()=>render(false));
+ expect(requests().at(-1)).toMatchObject({columns:140,rows:48,visible:false,pageVisible:true,paneVisible:false});
  expect(state.terminals).toHaveLength(1);expect(sockets).toHaveLength(1);
 });
 
