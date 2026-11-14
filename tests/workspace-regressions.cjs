@@ -155,6 +155,10 @@ function installInspection() {
     await require('./touch-swipe-regressions.cjs')({page,context,browser,hub,wait,sleep,dir,report,installInspection,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;
   }
+  if(process.env.WORKSPACE_SUITE==='touch-scroll'){
+    await require('./touch-scroll-regressions.cjs')({context,browser,hub,ids,directURL,wait,sleep,dir,report,installInspection,errors});
+    assert.deepEqual(errors,[]);report('browserErrors',errors);return;
+  }
   if(process.env.WORKSPACE_SUITE==='paste'){
     await require('./paste-regressions.cjs')({page,context,browser,hub,ids,devices,directURL,api,wait,sleep,dir,report,installInspection,errors});
     assert.deepEqual(errors,[]);report('browserErrors',errors);return;
