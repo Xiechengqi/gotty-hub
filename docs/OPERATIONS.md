@@ -68,9 +68,13 @@ HTML 及无 hash 文件使用 `no-cache, must-revalidate`；`assets/*-[hash].*` 
 
 CSP 的 `script-src` 允许本站脚本、bootstrap 的精确 SHA256 和 `wasm-unsafe-eval`，后者用于 xterm 图片插件的 SIXEL WebAssembly 解码器；JavaScript `unsafe-eval` 和任意内联脚本仍被禁止。代理额外添加的 CSP 会与 Hub 的策略同时生效，也应允许此 WebAssembly 权限，否则浏览器会报告 `WebAssembly.instantiate()` 被 CSP 拒绝。
 
+`connect-src` 在 `'self'` 外显式列出经来源校验的当前地址对应的 WS/WSS，以兼容不能用 `'self'` 匹配 WebSocket 的 WebKit。HTTPS 地址仅列出同地址 WSS；HTTP 地址列出同地址 WS/WSS，兼容保留 Host 但未转发协议的 TLS 代理；仍禁止通配主机和任意 WebSocket 目的地。代理若另外下发 CSP，也必须允许实际使用的 WS/WSS 地址。页面明确收到 `SecurityError` 或匹配当前连接的 CSP 拦截事件时，会显示浏览器安全策略原因并停止自动重连；手动“刷新”可重试。WS 1006 不等同于 CSP 拦截，不据此建议降低浏览器安全设置。
+
 响应携带 `X-Hub-Revision` 和 `X-Hub-Assets`，静态文件另有 `X-Hub-Asset-Generation`。`Static response` 日志包含路径、状态、耗时、字节数和 `body_complete`，不包含 query、密码、Cookie 或终端负载。`body_complete=true` 仅表示 HTTP server 消费了完整响应体，不能证明后续 TLS/CDN/代理已向浏览器完整交付。请求未到 Hub 的 DNS/TLS 故障需检查代理和浏览器网络日志；整页无样式不能仅凭 WS 1006 归因于终端连接。
 
 浏览器终端 WS 每 15 秒 Ping，45 秒无入站消息断开，发送等待最多 10 秒。代理需放行 Upgrade 和 Ping/Pong，超时应覆盖心跳间隔。断线诊断区分凭据/授权失效、实例离线与网络/握手失败；1006 本身不提供确定根因。服务端记录握手状态、关闭原因和持续时间，普通退出仍用 1001，后台重启用 1012。
+
+`Terminal WebSocket rejected` 包含请求/升级阶段、状态码和固定错误码；进入连接处理后，日志包含独立的 `connection_id`、实例标识及 `authenticating` / `streaming` 阶段。认证前关闭也会记录原因，避免只有成功连接才能追查；不记录票据、Cookie、设备凭据或终端内容。浏览器策略在请求发出前拦截时，Hub 不会收到对应升级请求，需结合页面提示与浏览器控制台判断。
 
 ## 停止与重启
 

@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, Mutex};
+use tracing::Instrument;
 #[derive(Clone)]
 pub struct Device {
     pub tx: mpsc::Sender<Frame>,
@@ -196,19 +197,28 @@ pub async fn browser_upgrade(
             "server_shutting_down",
         ));
     }
-    origin.check(&h, true)?;
-    let s = session(&app, &h).await?;
-    limit(&app, format!("upgrade:{}", s.key), 120).await?;
+    let connection_id = token();
+    let rejected = |error: Error| {
+        tracing::warn!(%connection_id, instance=%id, phase="upgrade", status=error.0.as_u16(), reason=error.1, "Terminal WebSocket rejected");
+        error
+    };
+    origin.check(&h, true).map_err(&rejected)?;
+    let s = session(&app, &h).await.map_err(&rejected)?;
+    limit(&app, format!("upgrade:{}", s.key), 120)
+        .await
+        .map_err(rejected)?;
+    let span = tracing::info_span!("terminal_connection", %connection_id, instance=%id, phase=tracing::field::Empty);
     let tracked = app.shutdown.tasks().token();
     Ok(ws
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
         .on_upgrade(move |socket| async move {
             let _tracked = tracked;
-            browser(app, id, s, socket).await;
+            browser(app, id, s, socket).instrument(span).await;
         }))
 }
 async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
+    tracing::Span::current().record("phase", "authenticating");
     let hello = app
         .shutdown
         .until_stopped(tokio::time::timeout(Duration::from_secs(5), socket.recv()))
@@ -276,13 +286,16 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
     let started = tokio::time::Instant::now();
     let mut last = started;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
-    let mut closure = (1000, "Instance stream closed");
+    tracing::Span::current().record("phase", "streaming");
+    tracing::info!("Terminal WebSocket authorized");
+    let mut closure = (1011, "Terminal transport interrupted");
+    let mut peer_close_code = None;
     let mut audio_bytes = 0usize;
     app.shutdown.until_stopped(async {
     loop {
         tokio::select! {
              _=check.tick()=>{
-              if asr&&started.elapsed()>Duration::from_secs(120){break}
+              if asr&&started.elapsed()>Duration::from_secs(120){closure=(1000,"Voice session time limit reached");break}
               if access(&app,&s,&id,version).await.is_none(){closure=(1008,"Authentication or instance access denied");break}
               if app.devices.lock().await.get(&id).map(|d|d.generation.clone())!=Some(device.generation.clone()){closure=(1013,"Instance offline");break}
               if device.tx.is_closed(){closure=(1013,"Instance offline");break}
@@ -291,9 +304,9 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
               if last.elapsed()>Duration::from_secs(45){closure=(1001,"Heartbeat timed out");break}
               if tokio::time::timeout(Duration::from_secs(10),sink.send(Message::Ping(vec![]))).await.map(|v|v.is_err()).unwrap_or(true){break}
              },
-             message=rx.recv()=>{let Some(message)=message else{break};
+             message=rx.recv()=>{let Some(message)=message else{closure=(1000,"Instance stream closed");break};
               let control_result=matches!(&message,Message::Text(text) if text.starts_with("{\"control_result\":"));
-              if control_result&&access(&app,&s,&id,version).await.is_none(){break}
+              if control_result&&access(&app,&s,&id,version).await.is_none(){closure=(1008,"Authentication or instance access denied");break}
               if tokio::time::timeout(Duration::from_secs(10),sink.send(message)).await.map(|v|v.is_err()).unwrap_or(true){break}},
              incoming=source.next()=>match incoming{
               Some(Ok(Message::Text(t)))=>{
@@ -302,32 +315,34 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
                if let Ok(v)=serde_json::from_str::<Value>(&t){
                 if v["viewing"].is_boolean(){let _=device.tx.try_send(Frame::new("view",&stream,json!({"viewing":v["viewing"]})));continue}
                 if let Some(control)=v.get("control"){
-                 if asr||device.capabilities["controls"]!=true||!valid_control(&role,control){break}
-                 if limit(&app,format!("control:{}",s.key),60).await.is_err(){break}
-                 if device.tx.try_send(Frame::new("control",&stream,control.clone())).is_err(){break}
+                 if asr||device.capabilities["controls"]!=true||!valid_control(&role,control){closure=(1008,"Terminal action not allowed");break}
+                 if limit(&app,format!("control:{}",s.key),60).await.is_err(){closure=(1013,"Hub connection rate limit reached");break}
+                 if device.tx.try_send(Frame::new("control",&stream,control.clone())).is_err(){closure=(1013,"Instance input queue unavailable");break}
                  continue
                 }
                }
-               if asr{if t!="Done"{break}
+               if asr{if t!="Done"{closure=(1008,"Terminal action not allowed");break}
         if device.tx.try_send(Frame::new("asr_data",&stream,json!({"binary":false,"payload":t}))).is_err(){break}continue}
                let kind=t.as_bytes().first().copied().unwrap_or(0);
                let writable=role!="observer"&&device.capabilities["write"]==true;
-               if !b"123457".contains(&kind){break}
-               if !writable && !b"24".contains(&kind){break}
-               if kind==b'5' && (device.capabilities["paste"]!=true || t.len()>8193){break}
+               if !b"123457".contains(&kind){closure=(1008,"Terminal action not allowed");break}
+               if !writable && !b"24".contains(&kind){closure=(1008,"Terminal action not allowed");break}
+               if kind==b'5' && (device.capabilities["paste"]!=true || t.len()>8193){closure=(1008,"Terminal action not allowed");break}
                // A bounded paste window can wait for queue space without
                // turning transient congestion into a disconnected session.
                if tokio::time::timeout(Duration::from_secs(2),device.tx.send(Frame::new("data",&stream,Value::String(t)))).await.map(|v|v.is_err()).unwrap_or(true){closure=(1013,"Instance input queue unavailable");break}
               },
               Some(Ok(Message::Binary(data)))=>{
                last=tokio::time::Instant::now();
-               if !asr||access(&app,&s,&id,version).await.is_none(){break}
-               audio_bytes+=data.len();if audio_bytes>16*1024*1024{break}
+               if !asr||access(&app,&s,&id,version).await.is_none(){closure=(1008,"Terminal action not allowed");break}
+               audio_bytes+=data.len();if audio_bytes>16*1024*1024{closure=(1008,"Voice session byte limit reached");break}
                if device.tx.try_send(Frame::new("asr_data",&stream,json!({"binary":true,"payload":STANDARD.encode(data)}))).is_err(){break}
               },
               Some(Ok(Message::Ping(p)))=>{if sink.send(Message::Pong(p)).await.is_err(){break}},
               Some(Ok(Message::Pong(_)))=>{last=tokio::time::Instant::now();},
-              _=>break,
+              Some(Ok(Message::Close(frame)))=>{peer_close_code=frame.as_ref().map(|frame|frame.code);closure=(1000,"Browser closed terminal connection");break},
+              Some(Err(_))=>{closure=(1011,"Browser transport error");break},
+              None=>{closure=(1011,"Browser disconnected without a close frame");break},
              }
             }
     }
@@ -341,6 +356,7 @@ async fn browser(app: App, id: String, s: Session, mut socket: WebSocket) {
     tracing::info!(
         code = closure.0,
         reason = closure.1,
+        peer_close_code,
         duration_ms = started.elapsed().as_millis() as u64,
         "Terminal WebSocket closed"
     );
@@ -361,6 +377,7 @@ async fn close_browser<S: futures_util::Sink<Message> + Unpin>(
     code: u16,
     reason: &'static str,
 ) {
+    tracing::info!(code, reason, "Terminal WebSocket close requested");
     if app.shutdown.is_stopping() {
         close_socket(app, sink).await;
         return;

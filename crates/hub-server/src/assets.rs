@@ -115,7 +115,7 @@ impl Store {
             .split_once("<script id=\"hub-bootstrap\">")
             .and_then(|(_, rest)| rest.split_once("</script>"))
             .map(|(source, _)| format!(" 'sha256-{}'", STANDARD.encode(Sha256::digest(source))));
-        let csp = format!("default-src 'self'; script-src 'self'{} 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'", bootstrap.unwrap_or_default());
+        let csp = format!("default-src 'self'; script-src 'self'{} 'wasm-unsafe-eval'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'", bootstrap.unwrap_or_default());
         Ok(Self {
             current,
             previous: BTreeMap::new(),
@@ -124,8 +124,12 @@ impl Store {
             csp,
         })
     }
-    pub fn csp(&self) -> &str {
-        &self.csp
+    pub fn csp(&self, origin: &crate::origin::PublicOrigin) -> String {
+        format!(
+            "{}; connect-src 'self' {}",
+            self.csp,
+            origin.websocket_sources()
+        )
     }
     #[cfg(test)]
     pub fn embedded_for_tests() -> Self {

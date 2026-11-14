@@ -28,6 +28,8 @@ GoTTY本机 `GET -/hub` 返回地址、用户名、显示名、实例ID、连接
 
 先 `POST /instances/{id}/terminal-tickets` 获得30秒一次性 ticket。WS `/terminal-connections/{id}/ws` 的升级检查 Cookie 和 Origin；5秒内首条 JSON `{ticket,epoch?,offset?,channel?:"terminal"|"asr"}`，成功才创建远端流。票据绑定实例/会话/授权版本，不放 URL。
 
+Hub 页面先等待旧连接的终端解析队列排空，再请求 ticket，收到后才创建 WS；WS 打开立即发送初始化帧，获取票据和渲染历史不会占用服务端5秒认证窗口。客户端为获取票据、建立连接、等待首条终端协议响应分别设置10秒期限。票据过期或认证超时仅自动重新取票一次；确定的浏览器策略拦截、权限或协议拒绝停止自动重试，用户可通过终端菜单“刷新”重试。普通网络错误继续退避重连，至少稳定收到终端协议消息5秒才重置退避；限流至少等待60秒，页面恢复不会绕过等待。
+
 终端后续采用原有 WebTTY 字符串：`1`+base64 输入，`3`+尺寸 JSON；服务端 `1`+base64 输出，回放 epoch/offset 保持原核心实现。`{viewing:boolean}` 上报可见且聚焦视图，3秒续约、10秒过期。观察者只接收输出，不得输入/resize/文件/ASR。ASR 后续音频二进制及 `Done` 文本沿专用通道传到已配置后端。
 
 ## 设备 WS

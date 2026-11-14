@@ -20,7 +20,7 @@ export async function uploadFile(file: File, connection: HubConnection, bufferSi
   const drain = async (limit: number) => {
     const deadline = Date.now() + 30000;
     check();
-    while (connection.ws.bufferedAmount > limit) {
+    while (connection.bufferedAmount() > limit) {
       if (Date.now() > deadline) throw Error('Upload timed out; check the connection and retry');
       await new Promise(resolve => setTimeout(resolve, 10));
       check();

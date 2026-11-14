@@ -137,6 +137,21 @@ impl PublicOrigin {
     pub fn secure(&self) -> bool {
         self.0.starts_with("https://")
     }
+    pub fn websocket_sources(&self) -> String {
+        // Older WebKit does not include WebSockets in connect-src 'self'.
+        // Only use the authority already validated by Policy, never raw headers.
+        if let Some(authority) = self.0.strip_prefix("https://") {
+            format!("wss://{authority}")
+        } else {
+            let authority = self
+                .0
+                .strip_prefix("http://")
+                .expect("validated HTTP origin");
+            // A navigation has no Origin hint. Preserve HTTPS access through
+            // a TLS proxy that keeps Host but does not forward its scheme.
+            format!("ws://{authority} wss://{authority}")
+        }
+    }
     pub fn check(&self, headers: &HeaderMap, required: bool) -> Result<()> {
         let received = browser_origin(headers)?;
         if (received.is_some() && received.as_deref() != Some(self.0.as_str()))
@@ -169,19 +184,42 @@ pub async fn headers(State(app): State<App>, mut request: Request, next: Next) -
     if app.shutdown.is_stopping() {
         return Error(StatusCode::SERVICE_UNAVAILABLE, "server_shutting_down").into_response();
     }
+    let terminal_upgrade = request
+        .uri()
+        .path()
+        .starts_with("/api/v1/terminal-connections/")
+        && request.uri().path().ends_with("/ws");
     let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|v| v.0);
     let origin = match app.addresses.resolve(request.headers(), peer) {
         Ok(origin) => origin,
-        Err(error) => return error.into_response(),
+        Err(error) => {
+            if terminal_upgrade {
+                tracing::warn!(
+                    phase = "request",
+                    status = error.0.as_u16(),
+                    reason = error.1,
+                    "Terminal WebSocket rejected"
+                );
+            }
+            return error.into_response();
+        }
     };
     let secure = origin.secure();
+    let csp = app.assets.csp(&origin);
     request.extensions_mut().insert(origin);
     let mut response = next.run(request).await;
+    if terminal_upgrade && response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        tracing::warn!(
+            phase = "upgrade",
+            status = response.status().as_u16(),
+            "Terminal WebSocket upgrade did not complete"
+        );
+    }
     let headers = response.headers_mut();
-    headers.insert("content-security-policy", app.assets.csp().parse().unwrap());
+    headers.insert("content-security-policy", csp.parse().unwrap());
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("referrer-policy", "no-referrer".parse().unwrap());
     headers.insert("permissions-policy", "microphone=(self)".parse().unwrap());
@@ -199,6 +237,34 @@ mod tests {
     use super::*;
     fn policy() -> Policy {
         Policy::new(&config::Config::default()).unwrap()
+    }
+    #[test]
+    fn websocket_csp_sources_are_explicit_and_limited_to_the_validated_authority() {
+        for (raw, expected) in [
+            (
+                "http://192.0.2.10:8088",
+                "ws://192.0.2.10:8088 wss://192.0.2.10:8088",
+            ),
+            ("http://hub.example", "ws://hub.example wss://hub.example"),
+            ("https://Hub.Example:443", "wss://hub.example"),
+            ("https://hub.example:8443", "wss://hub.example:8443"),
+            (
+                "http://[2001:db8::1]:8088",
+                "ws://[2001:db8::1]:8088 wss://[2001:db8::1]:8088",
+            ),
+            ("https://[2001:db8::1]", "wss://[2001:db8::1]"),
+        ] {
+            let origin = PublicOrigin(config::parse_origin(raw).unwrap());
+            assert_eq!(origin.websocket_sources(), expected);
+            let store = crate::assets::Store::embedded_for_tests();
+            let csp = store.csp(&origin);
+            assert_eq!(csp.matches("connect-src ").count(), 1);
+            assert!(csp.ends_with(&format!("connect-src 'self' {expected}")));
+            assert!(!csp
+                .split_ascii_whitespace()
+                .any(|token| token == "'unsafe-eval'"));
+            assert!(!csp.contains("connect-src *"));
+        }
     }
     fn request() -> HeaderMap {
         let mut headers = HeaderMap::new();
