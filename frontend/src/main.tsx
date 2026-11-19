@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useState, useRef, type CSSProperties } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RiEyeLine, RiEyeOffLine, RiArrowRightLine, RiWifiOffLine } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
@@ -20,14 +20,16 @@ import {useTerminalSettings} from './terminal/useTerminalSettings';
 import {readAppearance} from './terminal/appearance';
 import {DEFAULT_TAB_BAR_TRANSPARENCY, type SettingsSnapshot} from './terminal/settings';
 import {type Appearance} from '@gotty/terminal-core/appearance';
-import {normalizeOrder} from './instances/order';
 import {WorkspaceBar} from './workspace/WorkspaceBar';
 import {AddInstanceModal} from './workspace/AddInstanceModal';
 import {DeleteInstanceDialog} from './workspace/DeleteInstanceDialog';
 import {DeferredTerminal} from './terminal/DeferredTerminal';
-import {currentPreferences, forgetChromeSettings, readWorkspaceCache, rememberWorkspace, restoreWorkspace, acknowledgeWorkspace} from './layout';
-import {emptyWorkspace, workspaceReducer, saveWorkspace, clampRatio, MIN_PANE_WIDTH, DIVIDER_WIDTH, activeSplit, type Workspace, type WorkspaceAction} from './workspace/state';
-import {SplitDivider, type PaneInstance} from './workspace/WorkspaceControls';
+import {TerminalAdmission} from './terminal/admission';
+import {currentPreferences, forgetChromeSettings} from './layout';
+import {emptyWorkspace, emptyView, groupFor, isGroup, openedUnits, tabIds} from './workspace/state';
+import {useWorkspace, type WorkspaceSnapshot} from './workspace/useWorkspace';
+import {WorkspacePages, type PaneInstance} from './workspace/WorkspaceControls';
+import {SPLIT_MIN_WIDTH, SPLIT_VIEWPORT, terminalGrid} from './workspace/grid';
 import {useInteractionSettings} from './workspace/interactionSettings';
 import {useTabSwipe} from './workspace/useTabSwipe';
 
@@ -49,6 +51,7 @@ function App() {
   useLayoutEffect(()=>window.hubBoot?.complete(),[]);
   const [instances,setInstances]=useState<Instance[]>(preview?demoInstances:[]);
   const [account,setAccount]=useState<Account|null>(null);
+  const admission=useMemo(()=>new TerminalAdmission(),[account?.id]);
   const interaction = useInteractionSettings(preview ? 'preview' : account?.id);
   const mainRef = useRef<HTMLElement>(null);
   const terminalPreferences = useTerminalSettings(account?.id);
@@ -62,22 +65,21 @@ function App() {
   const [preferencesLoaded,setPreferencesLoaded]=useState(false);
   const [authLoading,setAuthLoading]=useState(!preview);
   const activeAccount=useRef<string|null>(null);
-  const [workspace,setWorkspace]=useState<Workspace>(()=>preview?{opened:demoInstances.map(i=>i.id),order:demoInstances.map(i=>i.id),active:'prod',groups:[]}:emptyWorkspace());
-  const order=normalizeOrder(workspace.order,instances.map(i=>i.id));
-  const orderedInstances=order.map(id=>instances.find(i=>i.id===id)!);
+  const [workspaceError,setWorkspaceError]=useState('');
+  const workspaceSync=useWorkspace(preview
+    ? {units:demoInstances.map(i=>({id:i.id})),view:{...emptyView(),active:'prod'}}
+    : emptyWorkspace(), error=>setWorkspaceError(errorText(error instanceof Error?error.message:String(error),locale)));
+  const {workspace,current:workspaceRef}=workspaceSync;
+  const instanceById=useMemo(()=>new Map(instances.map(i=>[i.id,i])),[instances]);
+  const duplicateNames=useMemo(()=>{
+    const counts=new Map<string,number>();
+    for(const i of instances)counts.set(i.name,(counts.get(i.name)??0)+1);
+    return counts;
+  },[instances]);
   const [terminalActions,setTerminalActions]=useState<Record<string,TerminalActions>>({});
   const registerActions=useCallback((id:string,actions:TerminalActions|undefined)=>setTerminalActions(previous=>{
     const next={...previous};if(actions)next[id]=actions;else delete next[id];return next;
   }),[]);
-  const workspaceRef=useRef(workspace);
-  const workspaceReady=useRef(preview);
-  const changeWorkspace=useCallback((action:WorkspaceAction,persist=true)=>{
-    const next=workspaceReducer(workspaceRef.current,action);
-    if(next===workspaceRef.current)return;
-    workspaceRef.current=next;
-    if(persist&&workspaceReady.current&&activeAccount.current&&!preview)rememberWorkspace(activeAccount.current,next);
-    setWorkspace(next);
-  },[]);
   const focusSequence=useRef(0);
   const [focusTarget,setFocusTarget]=useState<{id:string;request:number}|null>(null);
   const requestTerminalFocus=useCallback((id:string)=>{if(id)setFocusTarget({id,request:++focusSequence.current});},[]);
@@ -92,8 +94,14 @@ function App() {
   const remembered=useRef<any>({});
   const [apiError,setApiError]=useState('');
   const [sessions,setSessions]=useState<{expires:number}[]>([]);
-  const [mobile,setMobile]=useState(()=>matchMedia('(max-width: 767px)').matches);
-  useEffect(()=>{const query=matchMedia('(max-width: 767px)');const update=()=>setMobile(query.matches);query.addEventListener('change',update);return()=>query.removeEventListener('change',update)},[]);
+  const [layoutViewportFits,setLayoutViewportFits]=useState(()=>matchMedia(SPLIT_VIEWPORT).matches);
+  useEffect(()=>{
+    const query=matchMedia(SPLIT_VIEWPORT);
+    const update=()=>setLayoutViewportFits(query.matches);
+    query.addEventListener('change',update);
+    update();
+    return()=>query.removeEventListener('change',update);
+  },[]);
   // Track the visual viewport app-wide so the workspace stays correctly sized
   // when mobile browser chrome collapses, even before any terminal mounts.
   useEffect(()=>{
@@ -110,8 +118,7 @@ function App() {
   function acceptAccount(value:Account|null){
     if(activeAccount.current!==(value?.id??null)){
       preferenceRevision.current++;
-      workspaceReady.current=false;
-      setPreferencesLoaded(false);setInstances([]);changeWorkspace({type:'restore',value:emptyWorkspace()},false);setFocusTarget(null);setTerminalActions({});setDeleteTarget(null);remembered.current={};
+      setPreferencesLoaded(false);setWorkspaceError('');setInstances([]);workspaceSync.reset();setFocusTarget(null);setTerminalActions({});setDeleteTarget(null);remembered.current={};
       if(value)forgetChromeSettings(value.id);
     }
     activeAccount.current=value?.id??null;useAccount(value);setAccount(value);setAuthLoading(false);
@@ -124,71 +131,93 @@ function App() {
   useEffect(()=>{
     if(preview||!account)return;
     const events=new EventSource('/api/v1/events');
-    let initialized=false;let ready=false;let disposed=false;
-    const update=(rows:any[])=>{
+    let ready=false,disposed=false,revision=0;
+    let latestRows:Instance[]|undefined;
+    const update=(rows:Instance[])=>{
       const mapped:Instance[]=rows.map(i=>({...i,host:i.name,description:'terminalPreview',group:'personal'}));
       setInstances(mapped);
-      const firstSnapshot=!initialized;initialized=true;
-      if(firstSnapshot){
-        const restored=restoreWorkspace(account.id,remembered.current,mapped.map(i=>i.id),mapped.find(i=>i.online)?.id);
-        changeWorkspace({type:'restore',value:restored},false);workspaceReady.current=true;
-        requestTerminalFocus(restored.active);
-      }else {const previous=workspaceRef.current.active;changeWorkspace({type:'reconcile',available:mapped.map(i=>i.id)});if(previous!==workspaceRef.current.active)requestTerminalFocus(workspaceRef.current.active);}
+      return mapped;
     };
-    Promise.all([api<any[]>('/instances'),api('/me/preferences')]).then(([rows,prefs])=>{
+    const retry=()=>workspaceSync.sync();
+    Promise.all([api<Instance[]>('/instances'),api<Record<string,unknown>>('/me/preferences'),api<WorkspaceSnapshot>('/me/workspace')]).then(([rows,prefs,snapshot])=>{
       if(disposed)return;
       remembered.current=currentPreferences(prefs);
       if(prefs.locale==='zh-CN'||prefs.locale==='en-US')setLocale(prefs.locale);
-      ready=true;update(rows);setPreferencesLoaded(true);
+      const mapped=update(latestRows??rows);
+      const active=workspaceSync.restore(account.id,prefs,snapshot,mapped.map(i=>i.id),mapped.find(i=>i.online)?.id??'');
+      ready=true;setPreferencesLoaded(true);requestTerminalFocus(active);
+      workspaceSync.sync(revision);
     }).catch(error=>{if(!disposed)fail(error)});
-    events.addEventListener('instances',event=>{try{if(ready)update(JSON.parse((event as MessageEvent).data))}catch(error){fail(error)}});
+    events.addEventListener('instances',event=>{
+      try{
+        latestRows=JSON.parse((event as MessageEvent).data) as Instance[];
+        if(ready){
+          const previous=workspaceRef.current.view.active;
+          workspaceSync.reconcile(update(latestRows).map(i=>i.id));
+          if(previous!==workspaceRef.current.view.active)requestTerminalFocus(workspaceRef.current.view.active);
+        }
+      }catch(error){fail(error)}
+    });
+    events.addEventListener('workspace',event=>{
+      revision=Number((event as MessageEvent).data);
+      if(ready&&Number.isSafeInteger(revision))workspaceSync.sync(revision);
+    });
     events.onerror=()=>{if(!disposed)api('/me').catch(()=>{if(!disposed){acceptAccount(null);setPanel('login')}})};
-    return()=>{disposed=true;events.close();workspaceReady.current=false;setPreferencesLoaded(false)};
+    window.addEventListener('online',retry);
+    window.addEventListener('focus',retry);
+    return()=>{
+      disposed=true;events.close();setPreferencesLoaded(false);
+      window.removeEventListener('online',retry);window.removeEventListener('focus',retry);
+    };
   },[account?.id]);
 
   const [locale,setLocale] = useState(initialLocale);
   const t = (key: MessageKey) => translate(locale,key);
-  const opened=workspace.opened;
+  const opened=useMemo(()=>openedUnits(workspace.units).flatMap(tabIds),[workspace.units]);
   const [adminOpen,setAdminOpen]=useState(false);
   const [panel,setPanel] = useState<Panel>('');
   const [deleteTarget,setDeleteTarget] = useState<{id:string;name:string}|null>(null);
   const terminalsRef=useRef<HTMLDivElement>(null);
-  const [workspaceWidth,setWorkspaceWidth]=useState(0);
+  const [workspaceSize,setWorkspaceSize]=useState({width:0,height:0});
   useLayoutEffect(()=>{
     const element=terminalsRef.current;if(!element)return;
-    const measure=()=>setWorkspaceWidth(element.clientWidth);
+    const measure=()=>{
+      const {clientWidth:width,clientHeight:height}=element;
+      setWorkspaceSize(previous=>previous.width===width&&previous.height===height?previous:{width,height});
+    };
     measure();const observer=new ResizeObserver(measure);observer.observe(element);return()=>observer.disconnect();
   },[]);
-  const canSplit=!mobile&&workspaceWidth>=MIN_PANE_WIDTH*2+DIVIDER_WIDTH;
-  const split=activeSplit(workspace);
-  const effectiveSplit=!!split&&canSplit;
-  const active=workspace.active;
-  const swipeHint = useTabSwipe(mainRef, {account: preview ? 'preview' : account?.id,
-    enabled: interaction.tabSwipe && (preview || !!account && preferencesLoaded) && opened.length > 1,
-    workspace, expandedSplits: canSplit, onSelect: activateInstance});
-  const visibleIds=new Set(effectiveSplit?[split!.left,split!.right]:[active]);
-  const minimumRatio=workspaceWidth>DIVIDER_WIDTH?Math.min(0.5,Math.max(0.1,MIN_PANE_WIDTH/(workspaceWidth-DIVIDER_WIDTH))):0.5;
-  const splitRatio=clampRatio(split?.ratio??0.5,minimumRatio);
-  const previousSplit=useRef(effectiveSplit);
+  const active=workspace.view.active;
+  const wide=layoutViewportFits&&workspaceSize.width>=SPLIT_MIN_WIDTH;
+  const group=wide?groupFor(workspace.units,active):undefined;
+  const grid=group?terminalGrid(group.members.length,workspaceSize.width,workspaceSize.height,
+    displaySnapshot.settings?.fontSize??14,workspace.view.pagedGroups.includes(group.id)):undefined;
+  const page=group&&grid?Math.floor(group.members.indexOf(active)/grid.capacity):0;
+  const pages=group&&grid?Math.ceil(group.members.length/grid.capacity):1;
+  const visibleIds=new Map((group&&grid?group.members.slice(page*grid.capacity,(page+1)*grid.capacity):[active]).map((id,index)=>[id,index]));
+  const swipeHint=useTabSwipe(mainRef,{account:preview?'preview':account?.id,
+    enabled:interaction.tabSwipe&&(preview||!!account&&preferencesLoaded)&&opened.length>1,
+    workspace,expandedSplits:wide,onSelect:activateInstance});
   useEffect(()=>{
-    const changed=previousSplit.current!==effectiveSplit;previousSplit.current=effectiveSplit;
-    if(changed&&workspaceReady.current&&document.hasFocus()&&(document.activeElement===document.body||document.activeElement?.closest('.terminal-slot')))requestTerminalFocus(active);
-  },[effectiveSplit,active,requestTerminalFocus]);
+    if(wide&&group)workspaceSync.select(active,true);
+  },[wide,group?.id,active]);
+  useLayoutEffect(()=>{
+    if(!wide)workspaceSync.initializeCompactOrder();
+  },[wide,opened]);
   useEffect(()=>{
     if(preview||!account||!preferencesLoaded)return;
     const id=account.id;
     const saveRevision=++preferenceRevision.current;
-    const workspaceRevision=readWorkspaceCache(id)?.revision;
-    const preferences={...remembered.current,opened:workspace.order.filter(id=>opened.includes(id)),instanceOrder:workspace.order,active,split:!!split,workspace:saveWorkspace(workspace),locale};
+    const preferences={...remembered.current,locale};
     const timeout=setTimeout(()=>{
       preferenceWrites.current=preferenceWrites.current.catch(()=>{}).then(async()=>{
         if(activeAccount.current!==id||preferenceRevision.current!==saveRevision)return;
         await api('/me/preferences',preferences,'PUT');
-        acknowledgeWorkspace(id,workspaceRevision,workspace);
+        if(activeAccount.current===id)remembered.current=preferences;
       }).catch(error=>{if(activeAccount.current===id)fail(error)});
     },600);
     return()=>clearTimeout(timeout);
-  },[account?.id,preferencesLoaded,workspace,active,locale]);
+  },[account?.id,preferencesLoaded,locale]);
   const [terminalStates,setTerminalStates] = useState<Record<string,'red'|'gray'|'yellow'|'green'>>(()=>Object.fromEntries(instances.filter(i=>i.online).map(i=>[i.id,'gray'])));
   useEffect(()=>{
     // Only accept status from the registered instance frame and its actual origin.
@@ -204,8 +233,8 @@ function App() {
   },[]);
 
   function statusIcon(id:string){
-    if(!instances.find(i=>i.id===id)?.online)return <span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>;
-    const color=(preview?terminalStates[id]:instances.find(i=>i.id===id)?.status)??'gray';
+    if(!instanceById.get(id)?.online)return <span className="terminal-offline" role="img" aria-label={t('offline')} title={t('offline')}><RiWifiOffLine aria-hidden="true"/></span>;
+    const color=(preview?terminalStates[id]:instanceById.get(id)?.status)??'gray';
     const label=t(({red:'statusViewing',gray:'statusIdle',yellow:'statusRunning',green:'statusAttention'} as const)[color]);
     return <img className="terminal-status" data-state={color} src={`/gotty-status/${color}.svg`} alt={label} title={label}/>;
   }
@@ -223,8 +252,8 @@ function App() {
     try{localStorage.setItem('gotty-hub.locale',locale)}catch{}
   },[locale]);
   useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(null),4500);return()=>clearTimeout(timer)},[notice]);
-  function activateInstance(id:string,focus=true){changeWorkspace({type:'select',id});if(focus)requestTerminalFocus(id);}
-  function focusPane(id:string){if(visibleIds.has(id))changeWorkspace({type:'focus',id});}
+  function activateInstance(id:string,focus=true){workspaceSync.select(id,wide);if(focus)requestTerminalFocus(id);}
+  function focusPane(id:string){if(visibleIds.has(id))workspaceSync.select(id,wide);}
   function requestDelete(id:string){
     const instance=instances.find(i=>i.id===id);
     if(instance?.role==='owner')setDeleteTarget({id,name:paneInstance(instance).label});
@@ -235,7 +264,7 @@ function App() {
     if(!preview)await api(`/instances/${encodeURIComponent(id)}/binding`,{},'DELETE');
     if(activeAccount.current!==accountId)return;
     setInstances(current=>current.filter(i=>i.id!==id));
-    changeWorkspace({type:'reconcile',available:workspaceRef.current.order.filter(other=>other!==id)});
+    workspaceSync.reconcile(instances.filter(other=>other.id!==id).map(other=>other.id));
   }
   function showPanel(value:Panel){if(value==='logout'&&!preview&&account)api<{sessions:{expires:number}[]}>('/me/sessions').then(v=>setSessions(v.sessions)).catch(fail);setApiError('');setNotice(null);setPanel(value);setError(null);setPassword('');setConfirmation('');setShowPassword(false);setAuthMode('login')}
   function closePanel(){if(!preview&&!account)return;setPanel('');setPassword('');setConfirmation('');setError(null)}
@@ -263,39 +292,53 @@ function App() {
       const url=new URL(location.href);url.searchParams.delete('auth');history.replaceState(null,'',url);
     }catch(error){fail(error)}finally{setBusy(false)}
   }
-  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onActions={registerActions} visible={visibleIds.has(i.id)} focusRequest={focusTarget?.id===i.id?focusTarget.request:0} onFocusHandled={focusHandled} locale={locale} settings={displaySnapshot.settings} instanceName={i.name} onAppearance={value => {reportedAppearance.current[i.id] = value;}}/>;return <section className="terminal-panel dark" key={i.id}>
+  function terminal(i:Instance){if(!preview)return <RealTerminal key={i.id} id={i.id} writable={i.role!=='observer'&&i.capabilities?.write===true} asr={i.capabilities?.asr===true} files={i.capabilities?.files===true} owner={i.role==='owner'} controls={i.capabilities?.controls===true} onActions={registerActions} visible={visibleIds.has(i.id)} focused={active===i.id} admission={admission} focusRequest={focusTarget?.id===i.id?focusTarget.request:0} onFocusHandled={focusHandled} locale={locale} settings={displaySnapshot.settings} instanceName={i.name} onAppearance={value => {reportedAppearance.current[i.id] = value;}}/>;return <section className="terminal-panel dark" key={i.id}>
     <div className="terminal-heading text-caption-1-regular"><span className="terminal-host"><span className="status-dot"/>{i.host}</span><span>{t(i.role==='observer'?'readOnly':'writable')} · {t('demo')}</span></div>
     <div className="terminal-output" dir="ltr"><p className="text-text-tertiary">{t('connectedDemo')}</p><p className="text-text-tertiary">{t('terminalPreview')}</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span>gotty --version</p><p>GoTTY · web terminal</p><br/><p><span className="terminal-prompt">{i.host}</span><span className="text-text-tertiary"> ~ % </span><span className="cursor"/></p></div>
     <div className="terminal-keys">{['Esc','Ctrl','Tab','↑','↓','←','→','⌨'].map(k=><Button key={k} variant="secondary" onClick={()=>setNotice('keyNotice')}>{k}</Button>)}</div>
   </section>}
   function paneInstance(i:Instance):PaneInstance{
-    const duplicate=instances.some(other=>other.id!==i.id&&other.name===i.name);
+    const duplicate=(duplicateNames.get(i.name)??0)>1;
     return {id:i.id,name:i.name,label:duplicate?i.name+' · '+i.id.slice(0,8):i.name,online:i.online,writable:i.role!=='observer'&&(preview||i.capabilities?.write===true),owner:i.role==='owner',icon:statusIcon(i.id)};
   }
+  const paneInstances=new Map(instances.map(i=>[i.id,paneInstance(i)]));
   const passwordFields = <><div className="password-field"><Input label={t('newPassword')} type={showPassword?'text':'password'} autoComplete="new-password" value={password} onChange={v=>{setPassword(v);setError(null)}}/><Button className="password-toggle quiet-button" variant="ghost" iconOnly leadingIcon={showPassword?RiEyeOffLine:RiEyeLine} aria-label={t(showPassword?'hidePassword':'showPassword')} onClick={()=>setShowPassword(!showPassword)}/></div><Input label={t('confirmPassword')} type={showPassword?'text':'password'} autoComplete="new-password" value={confirmation} onChange={v=>{setConfirmation(v);setError(null)}}/></>;
   const errorMessage = (error||apiError)&&<p className="text-body-regular text-text-error-primary" role="alert">{error?t(error):apiError}</p>;
   return <DirectionProvider locale={locale}><div className={cx("app",(authLoading||!!account&&(!preferencesLoaded||terminalPreferences.loading))&&"workspace-loading")}>
     <div className="workspace-loading-status text-body-regular" role="status">{apiError || (locale==='zh-CN'?'正在加载工作区…':'Loading workspace…')}{apiError&&<Button variant="secondary" onClick={()=>location.reload()}>{t('refreshPage')}</Button>}</div>
     <main ref={mainRef} className="main">
-      <WorkspaceBar key={account?.id||'preview'} workspace={workspace} instances={orderedInstances.map(paneInstance)} actions={terminalActions} locale={locale} canSplit={canSplit}
+      <WorkspaceBar key={account?.id||'preview'} workspace={workspace} instances={paneInstances} actions={terminalActions} locale={locale} wide={wide}
         transparency={barPreview ?? displaySnapshot.settings?.tabBarTransparency ?? DEFAULT_TAB_BAR_TRANSPARENCY} lightTerminal={['paper','light'].includes(displaySnapshot.settings?.theme || reportedAppearance.current[active]?.theme || 'nord')}
         onLocale={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}
         accountName={preview?t('demoAccount'):account?.username} admin={!!account?.is_admin} authenticated={preview||!!account} onLogin={()=>showPanel('login')} onSettings={settings}
         onSelect={activateInstance} onDelete={requestDelete} onConnect={()=>showPanel('connect')}
-        onChange={changeWorkspace} onFocus={()=>requestTerminalFocus(workspaceRef.current.active)}/>
+        onEdit={(action,selected)=>wide&&workspaceSync.edit(action,selected)} onPageMode={(id,paged)=>{if(wide)workspaceSync.pageMode(id,paged);}}
+        onReorder={wide?workspaceSync.reorderWide:workspaceSync.reorderCompact}
+        onFocus={()=>requestTerminalFocus(workspaceRef.current.view.active)}/>
       <div className="workspace">
-        <div ref={terminalsRef} className={cx('terminals',effectiveSplit&&'split')} style={effectiveSplit?{gridTemplateColumns:'minmax(0,'+splitRatio+'fr) '+DIVIDER_WIDTH+'px minmax(0,'+(1-splitRatio)+'fr)'} as CSSProperties:undefined}>
+        <div ref={terminalsRef} className={cx('terminals',!!group&&'split-grid')} style={grid?{
+          gridTemplateColumns:`repeat(${grid.columns},minmax(0,1fr))`,
+          gridTemplateRows:`repeat(${grid.rows},minmax(0,1fr))`,gap:grid.gap,
+        }:undefined}>
           {opened.length?opened.map(id=>{
-            const instance=instances.find(i=>i.id===id);if(!instance)return null;
-            const info=paneInstance(instance);
-            const pane=effectiveSplit?(split!.left===id?'left':split!.right===id?'right':undefined):undefined;
-            const visible=visibleIds.has(id);
-            return <div key={id} id={'terminal-pane-'+id} className="terminal-slot" role="region" aria-label={(pane?t(pane==='left'?'leftPane':'rightPane')+' · ':'')+info.label} data-instance-id={id} data-pane={pane} data-focused={visible&&active===id} hidden={!visible} onFocusCapture={()=>focusPane(id)} onPointerDownCapture={()=>focusPane(id)}>
-              {pane&&<div className="pane-identity text-caption-1-semibold" aria-hidden="true">{t(pane==='left'?'leftPane':'rightPane')} · {info.label}{!info.writable&&' · '+t('readOnly')}</div>}
+            const instance=instanceById.get(id);
+            const info=paneInstances.get(id);
+            if(!instance||!info)return null;
+            const cell=visibleIds.get(id);
+            const visible=cell!==undefined;
+            const row=visible&&grid?Math.floor(cell/grid.columns)+1:1;
+            const column=visible&&grid?cell%grid.columns+1:1;
+            return <div key={id} id={'terminal-pane-'+id} className="terminal-slot" role="region" aria-label={info.label}
+              data-instance-id={id} data-focused={visible&&active===id} data-top-row={row===1}
+              style={grid?{gridColumn:column,gridRow:row}:undefined} hidden={!visible}
+              onFocusCapture={()=>focusPane(id)} onPointerDownCapture={()=>focusPane(id)}>
+              {group&&visible&&<div className="pane-identity text-caption-1-semibold" aria-hidden="true" dir="auto">
+                {info.label}{info.online&&!info.writable&&' · '+t('readOnly')}
+              </div>}
               {instance.online?<DeferredTerminal visible={visible}>{terminal(instance)}</DeferredTerminal>:<div className="terminal-empty">{info.label} · {t('offline')}</div>}
             </div>;
           }):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}
-          {effectiveSplit&&<SplitDivider key="split-divider" container={terminalsRef} ratio={splitRatio} minimum={minimumRatio} locale={locale} onResize={ratio=>changeWorkspace({type:'resize',id:active,ratio})}/>}
+          {group&&grid&&pages>1&&<WorkspacePages page={page} pages={pages} locale={locale} onChange={next=>activateInstance(group.members[next*grid.capacity])}/>}
         </div>
       </div>
     </main>
@@ -327,12 +370,17 @@ function App() {
         <Button className="auth-submit" variant="danger" disabled={busy} onClick={()=>void signOut('/me/sessions','DELETE')}>{t('signOutAll')}</Button>
       </div></ModalBody>
     </Modal>
-    <AddInstanceModal open={panel==='connect'} onClose={closePanel} address={account?.hub_address ?? location.origin} username={preview?'owner':account?.username ?? ''} closed={orderedInstances.filter(i=>!opened.includes(i.id)).map(paneInstance)} onReopen={activateInstance} locale={locale}/>
-    <DeleteInstanceDialog key={'delete:'+(account?.id||'preview')} instance={deleteTarget} canDelete={instances.some(i=>i.id===deleteTarget?.id&&i.role==='owner')} locale={locale} onDelete={deleteInstance} onClose={()=>{setDeleteTarget(null);requestTerminalFocus(workspaceRef.current.active);}}/>
+    <AddInstanceModal open={panel==='connect'} onClose={closePanel} address={account?.hub_address ?? location.origin} username={preview?'owner':account?.username ?? ''} closed={workspace.units.flatMap(unit=>{const instance=!isGroup(unit)&&unit.hidden&&paneInstances.get(unit.id);return instance?[instance]:[];})} onReopen={id=>{workspaceSync.select(id,wide,true);requestTerminalFocus(id);}} locale={locale}/>
+    <DeleteInstanceDialog key={'delete:'+(account?.id||'preview')} instance={deleteTarget} canDelete={instances.some(i=>i.id===deleteTarget?.id&&i.role==='owner')} locale={locale} onDelete={deleteInstance} onClose={()=>{setDeleteTarget(null);requestTerminalFocus(workspaceRef.current.view.active);}}/>
     <TerminalSettings key={account?.id || 'preview'} open={terminalSettingsOpen && (!!account || preview)} onClose={() => setTerminalSettingsOpen(false)} onPreviewTransparency={setBarPreview} snapshot={displaySnapshot} legacy={reportedAppearance.current[active] || readAppearance(active)} locale={locale} loading={terminalPreferences.loading} loadError={terminalPreferences.error} tabSwipe={interaction.tabSwipe} defaultTabSwipe={interaction.defaultTabSwipe} onSave={async (settings, revision, tabSwipe) => {if (preview) setPreviewSettings({settings, revision: revision + 1}); else await terminalPreferences.save(settings, revision); interaction.saveTabSwipe(tabSwipe);}}/>
     {account?.is_admin&&<AdminPanel open={adminOpen} onClose={()=>setAdminOpen(false)} locale={locale}/>}
-    {notice&&<div className="notice text-body-regular" role="status">{t(notice)}</div>}
-    {swipeHint&&<div className="tab-swipe-hint rounded-xl border border-border-button-default bg-background-primary-default px-4 py-2 text-body-2-medium text-text-primary" role="status">{swipeHint.map(id=>{const instance=instances.find(item=>item.id===id);return instance?paneInstance(instance).label:'';}).filter(Boolean).join(' | ')}</div>}
+    {workspaceError&&<div className="notice workspace-save-error">
+      <span className="text-body-2-regular" role="alert">{workspaceError}</span>
+      <Button size="xs" variant="secondary" onClick={()=>{setWorkspaceError('');workspaceSync.sync();}}>{locale==='zh-CN'?'重试':'Retry'}</Button>
+      <Button size="xs" variant="ghost" onClick={()=>setWorkspaceError('')}>{t('close')}</Button>
+    </div>}
+    {notice&&!workspaceError&&<div className="notice text-body-regular" role="status">{t(notice)}</div>}
+    {swipeHint&&<div className="tab-swipe-hint rounded-xl border border-border-button-default bg-background-primary-default px-4 py-2 text-body-2-medium text-text-primary" role="status">{swipeHint.slice(0,3).map(id=>paneInstances.get(id)?.label).filter(Boolean).join(' | ')}{swipeHint.length>3&&' +'+(swipeHint.length-3)}</div>}
   </div><PasteProgress locale={locale}/></DirectionProvider>;
 }
 const mount=()=>createRoot(document.getElementById('root')!, {

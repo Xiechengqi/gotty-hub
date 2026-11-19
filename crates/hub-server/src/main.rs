@@ -7,6 +7,7 @@ mod origin;
 mod security;
 mod shutdown;
 mod terminal_settings;
+mod workspace;
 use axum::{
     middleware,
     routing::{delete, get, post, put},
@@ -163,6 +164,10 @@ async fn serve(
         .route(
             "/api/v1/me/preferences",
             get(api::preferences).put(api::save_preferences),
+        )
+        .route(
+            "/api/v1/me/workspace",
+            get(workspace::get).put(workspace::save),
         )
         .route("/api/v1/instances", get(api::instances))
         .route(

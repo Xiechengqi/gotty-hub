@@ -506,31 +506,35 @@ pub(crate) async fn audit(app: &App, actor: &str, action: &str, id: &str) {
 }
 pub async fn events(State(app): State<App>, h: HeaderMap) -> Result<impl IntoResponse> {
     let s = session(&app, &h).await?;
-    let stream = futures_util::stream::unfold((app, s), |(app, s)| async move {
+    use futures_util::StreamExt;
+    let stream = futures_util::stream::unfold((app, s, None), |(app, s, observed)| async move {
         let shutdown = app.shutdown.clone();
         shutdown
             .until_stopped(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                let valid: Option<i64> =
-                    sqlx::query_scalar("SELECT expires FROM sessions WHERE token=? AND expires>?")
-                        .bind(&s.key)
-                        .bind(now())
-                        .fetch_optional(&app.db)
-                        .await
-                        .ok()
-                        .flatten();
-                valid?;
+                let revision: i64 = sqlx::query_scalar(
+                    "SELECT COALESCE((SELECT revision FROM workspace_revisions w WHERE w.user_id=s.user_id),0)
+                     FROM sessions s WHERE s.token=? AND s.expires>?",
+                )
+                .bind(&s.key)
+                .bind(now())
+                .fetch_optional(&app.db)
+                .await
+                .ok()
+                .flatten()?;
                 let v = instance_list(&app, &s.user_id).await.ok()?;
-                Some((
-                    Ok::<_, std::convert::Infallible>(
-                        Event::default().event("instances").data(v.to_string()),
-                    ),
-                    (app, s),
-                ))
+                let mut events = vec![Ok::<_, std::convert::Infallible>(
+                    Event::default().event("instances").data(v.to_string()),
+                )];
+                if observed != Some(revision) {
+                    events.push(Ok(Event::default().event("workspace").data(revision.to_string())));
+                }
+                Some((events, (app, s, Some(revision))))
             })
             .await
             .flatten()
-    });
+    })
+    .flat_map(futures_util::stream::iter);
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 pub async fn cleanup_worker(app: App) {

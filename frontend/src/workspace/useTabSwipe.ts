@@ -24,11 +24,16 @@ export function bindTabSwipe(root: HTMLElement, snapshot: () => SwipeState, sele
   let touchId: number | undefined, touchTarget: Element | null = null;
   let touchPointer: number | undefined, touchClaimed = false;
   let touchBlockedAtStart = false;
-  const context = (state: SwipeState) => JSON.stringify([state.account, state.expandedSplits, state.workspace.active,
-    state.workspace.order, state.workspace.opened, state.workspace.groups]);
+  let previous: SwipeState | undefined, revision = 0;
+  const context = (state: SwipeState) => {
+    if (!previous || previous.account !== state.account || previous.expandedSplits !== state.expandedSplits
+      || previous.workspace !== state.workspace) revision++;
+    previous = state;
+    return String(revision);
+  };
   const blocked = () => composing || dragging || pinching
     || !!document.querySelector('[role=dialog], [role=alertdialog], [role=listbox]')
-    || !!root.querySelector('[data-dragging=true], .split-divider-dragging, .terminal-drop-overlay');
+    || !!root.querySelector('[data-dragging=true], .terminal-drop-overlay');
   const area = (target: Element | null) => {
     const tabs = target?.closest('.session-tabs-scroll');
     const host = target?.closest('.xterm-host, .terminal-output, .terminal-empty');
@@ -171,15 +176,15 @@ export function bindTabSwipe(root: HTMLElement, snapshot: () => SwipeState, sele
 
 export function useTabSwipe(root: RefObject<HTMLElement | null>, options: Options): string[] | undefined {
   const latest = useRef(options); latest.current = options;
-  const [hint, setHint] = useState<{account?: string; ids: string[]}>();
+  const [hint, setHint] = useState<{account?: string; expandedSplits: boolean; ids: string[]}>();
   useEffect(() => {
     if (!root.current) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = bindTabSwipe(root.current, () => latest.current, id => {
       const current = latest.current;
       current.onSelect(id);
-      const group = current.expandedSplits && groupFor(current.workspace, id);
-      setHint({account: current.account, ids: group ? [group.left, group.right] : [id]});
+      const group = current.expandedSplits && groupFor(current.workspace.units, id);
+      setHint({account: current.account, expandedSplits: current.expandedSplits, ids: group ? group.members : [id]});
       clearTimeout(timer); timer = setTimeout(() => setHint(undefined), 1000);
     });
     return () => {stop(); clearTimeout(timer);};
@@ -194,5 +199,5 @@ export function useTabSwipe(root: RefObject<HTMLElement | null>, options: Option
       else html.setAttribute('data-hub-tab-swipe', previous);
     };
   }, [options.enabled]);
-  return options.enabled && hint?.account === options.account ? hint?.ids : undefined;
+  return options.enabled && hint?.account === options.account && hint?.expandedSplits === options.expandedSplits ? hint.ids : undefined;
 }

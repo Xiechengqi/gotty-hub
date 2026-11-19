@@ -9,7 +9,7 @@ module.exports = async function swipeRegression({page, ids, api, wait, sleep, di
   const key = 'gotty-hub:interaction:' + encodeURIComponent(me.id);
   const tab = id => page.locator(`.session-tab[data-instance-id="${id}"] .tab-trigger`);
   const slot = id => page.locator(`.terminal-slot[data-instance-id="${id}"]`);
-  const active = () => page.locator('.session-tab.selected').getAttribute('data-instance-id');
+  const active = () => page.locator('.terminal-slot[data-focused=true]').getAttribute('data-instance-id');
   const order = () => page.locator('.session-tab').evaluateAll(nodes => nodes.map(node => node.dataset.instanceId));
   const terminal = id => page.evaluate(id => {
     const nodes = [...document.querySelectorAll('.real-terminal')];
@@ -109,9 +109,12 @@ module.exports = async function swipeRegression({page, ids, api, wait, sleep, di
   report('swipeTerminal', {contentArea: true, onePerBurst: true, vimPreserved: true, noInputLeak: true, rendererAndSocketPreserved: true, scrollbackPreserved: true, noResize: true, boundary: true});
 
   await select(b); await tab(b).click({button: 'right'});
-  await page.locator('.tab-actions-menu').getByRole('button', {name: /^与右侧标签分屏/}).click();
+  await page.locator('.tab-actions-menu').getByRole('button', {name:'新建分屏',exact:true}).click();
+  const partner = (await api('/instances')).find(instance => instance.id === c).name;
+  await page.locator('.split-dialog .split-choice').getByText(partner,{exact:true}).click();
+  await page.locator('.split-dialog').getByRole('button',{name:/^新建分屏/}).click();
   await wait(async () => await page.locator('.terminal-slot:not([hidden])').count() === 2, 'split created');
-  await select(c); await burst(1); await wait(async () => await active() === d, 'leave pair as one unit'); await ready(d);
+  await slot(c).locator('.xterm-helper-textarea').focus(); await ready(c); await burst(1); await wait(async () => await active() === d, 'leave pair as one unit'); await ready(d);
   await select(a); await burst(1); await wait(async () => await active() === c, 'restore pair right focus');
   assert.equal(await page.locator('.terminal-slot:not([hidden])').count(), 2);
   await page.setViewportSize({width: 375, height: 844}); await sleep(350);

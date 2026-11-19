@@ -27,17 +27,19 @@ import {FontStatus} from './FontStatus';
 import {settingsAppearance, type TerminalSettings} from './settings';
 import {ShareManager, type Control} from './ShareManager';
 import {HubConnection} from './connection';
+import type {TerminalAdmission} from './admission';
 import {MobileKeys} from './MobileKeys';
 import '@xterm/xterm/css/xterm.css';
 
 type Controller = {refresh: () => void; term: Xterm; viewport: ViewportFollow; measure: () => void; send: (data: string) => void; view: () => void; control: Control; upload: (file: File, signal: AbortSignal, progress: (value: UploadProgress) => void) => Promise<boolean>};
 type UploadState = UploadProgress & {file: File; status: 'uploading' | 'success' | 'sent' | 'error'; error?: string};
 export type TerminalActions = {refresh: () => void; restart: () => void; restartAvailable: boolean; canRestart: boolean};
-type Props = {onActions?: (id: string, actions: TerminalActions | undefined) => void; id: string; writable: boolean; visible: boolean; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
+type Props = {onActions?: (id: string, actions: TerminalActions | undefined) => void; id: string; writable: boolean; visible: boolean; focused?: boolean; admission?: TerminalAdmission; locale: string; asr?: boolean; files?: boolean; owner?: boolean; controls?: boolean; settings?: TerminalSettings | null; instanceName?: string; onAppearance?: (value: Appearance) => void; focusRequest?: number; onFocusHandled?: (id: string, request: number) => void};
 
-export function RealTerminal({id, writable, visible, locale, asr = false, files = false, owner = false, controls = false, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled, onActions}: Props) {
+export function RealTerminal({id, writable, visible, focused, admission, locale, asr = false, files = false, owner = false, controls = false, settings, instanceName, onAppearance, focusRequest = 0, onFocusHandled, onActions}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef(visible); view.current = visible;
+  const selected = useRef(focused); selected.current = focused;
   const controller = useRef<Controller>(undefined);
   const [terminal,setTerminal]=useState<Xterm>();
   const inputTransform=useRef<((data:string)=>string)|null>(null);
@@ -232,7 +234,15 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       onInput: callback => {input = callback;}, onResize: callback => {resize = callback;}, close: () => {}, reset: () => {viewport.reset(); term.reset();}, deactivate: () => {}, focus: () => {if (view.current && host.current?.parentElement?.contains(document.activeElement)) term.focus();}, scrollToBottom: viewport.layout,
     };
     const viewing = () => view.current && document.visibilityState === 'visible' && document.hasFocus() && !!host.current?.contains(document.activeElement);
-    const wt = new WebTTY(adapter, {create: () => {uploadAcknowledged = false; bufferSize = 1024; connection = new HubConnection(id, writable, owner, controls, viewing, () => view.current); return connection;}}, '', '', 'hub:' + id);
+    const wt = new WebTTY(adapter, {create: () => {
+      uploadAcknowledged = false; bufferSize = 1024;
+      connection = new HubConnection(id, writable, owner, controls, viewing, () => view.current, admission && {
+        queue: admission,
+        priority: () => view.current ? selected.current ? 2 : 1 : 0,
+        waiting: waiting => showMessage(waiting ? 'Waiting to connect…' : '', 0),
+      });
+      return connection;
+    }}, '', '', 'hub:' + id);
     wt.onConnect = () => {if (!disposed) setConnected(true);}; wt.onDisconnect = () => {if (!disposed) {setConnected(false); setCount(0);}};
     const subscription = term.onData(data => {if (writable && !replaying) input(inputTransform.current?.(data)??data);});
     const binary = term.onBinary(data => {if (writable && !replaying) input(Uint8Array.from(data, char => char.charCodeAt(0)));});
@@ -279,7 +289,7 @@ export function RealTerminal({id, writable, visible, locale, asr = false, files 
       stop(); unbindPaste(); reportPaste(id, nameRef.current, undefined); observer.disconnect(); subscription.dispose(); binary.dispose(); selection.dispose(); osc.dispose(); parsed.dispose(); presentation.dispose(); viewport.dispose(); term.dispose();
       document.fonts?.removeEventListener('loadingdone',measure);
     };
-  }, [id, writable, asr, files, owner, controls, applyAppearance]);
+  }, [id, writable, asr, files, owner, controls, applyAppearance, admission]);
   // Browsers using DOM font measurement cannot measure a hidden pane. Reapply
   // its loaded font when shown so it does not retain the old cell dimensions.
   useEffect(() => {if (visible) {const value = controller.current; if (value) applyAppearance(value.term, value.measure);} else {setShareOpen(false);} controller.current?.view();}, [visible, applyAppearance]);

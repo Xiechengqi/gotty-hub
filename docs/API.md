@@ -14,7 +14,11 @@ API 基路径 `/api/v1`，JSON 请求和响应；错误统一 `{ "error": "inval
 
 ## 工作台与授权
 
-`GET /instances` 只返回当前用户有权访问的实例、角色、状态和能力；`GET /events` 是 Cookie 鉴权 SSE，事件 `instances` 每秒刷新完整授权快照。断线重新鉴权同步。`GET/PUT /me/preferences` 保存语言/主题/布局/标签，不能存认证票据。
+`GET /instances` 返回当前用户有权访问的实例、角色、状态和能力。`GET /events` 使用会话 Cookie 鉴权。事件 `instances` 每秒提供完整授权快照，`workspace` 在首次推送及修订号变化时提供账号工作区的修订号。`GET/PUT /me/preferences` 保存语言等通用偏好，也供首次升级时读取旧布局。
+
+`GET /me/workspace` 返回 `{revision, writeId, units}`。尚未迁移的账号收到 `revision: 0` 和 `units: null`。列表按大屏标签顺序排列，独立实例为 `{id, hidden?}`，分屏组为 `{id, members}`，其中 `members` 是有序的实例 ID 列表。
+
+`PUT /me/workspace` 接收 `{revision, writeId, units}` 并在同一事务内更新布局与修订号。`writeId` 是 32 位十六进制标识，同一个标识重试返回原操作的修订号和 `replayed: true`。客户端据此重新读取最新布局。修订号落后或成员授权变化返回 HTTP 409，错误为 `workspace_conflict` 或 `workspace_members_changed`。焦点、分页模式与小屏排序由浏览器保存。
 
 所有者通过 `GET /instances/{id}/grants` 读取授权，`PUT` 同路径 `{username,role:"operator"|"observer"}` 更新，`DELETE /instances/{id}/grants/{username}` 撤销。所有者不能移除自己；授权变更增加版本，使旧票据/流失效。`DELETE /instances/{id}/binding` 解绑；`POST /instances/{id}/credentials/rotate` 在线两阶段轮换。
 

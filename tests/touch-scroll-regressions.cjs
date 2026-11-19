@@ -105,19 +105,28 @@ module.exports = async function touchScrollRegression({context, browser, hub, id
           // Playwright exposes native swipes through Chromium CDP only. On
           // Linux WebKit verify DOM touch routing against its real layout and
           // xterm renderer; this is not a physical Safari gesture test.
-          const distance = (await metrics()).outerMax + 160;
-          await target.locator(host).evaluate(h => {
-            window.reviewTouch = (type, y) => {
+          const before = await metrics();
+          const claimed = await target.locator(host).evaluate(async (h, distance) => {
+            const screen = h.querySelector('.xterm-screen');
+            const touch = (type, y) => {
               const p = {identifier: 1, clientX: 180, clientY: y};
               const e = new Event(type, {bubbles: true, cancelable: true});
               Object.defineProperties(e, {touches: {value: type === 'touchend' ? [] : [p]}, changedTouches: {value: [p]}});
-              h.querySelector('.xterm-screen').dispatchEvent(e);
+              screen.dispatchEvent(e);
+              return e.defaultPrevented;
             };
-            window.reviewTouch('touchstart', 200);
-          });
-          for (let i = 1; i <= 8; i++) {await target.evaluate(y => window.reviewTouch('touchmove', y), 200 + distance * i / 8); await sleep(20);}
-          await target.evaluate(y => window.reviewTouch('touchend', y), 200 + distance); await sleep(900);
-          const after = await metrics(); assert(after.inner < after.base && !after.following, 'WebKit touch did not enter history');
+            touch('touchstart', 200);
+            let accepted = false;
+            for (let i = 1; i <= 8; i++) {
+              accepted = touch('touchmove', 200 + distance * i / 8) || accepted;
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            touch('touchend', 200 + distance);
+            return accepted;
+          }, before.outerMax + 160);
+          await sleep(900);
+          const after = await metrics();
+          assert(claimed && after.inner < after.base && !after.following, 'WebKit touch did not enter history ' + JSON.stringify({claimed,before,after}));
           report('webkitTouch-' + name, {realRenderer: true, domTouchHistory: true, physicalSafari: false});
           await target.close();
         }

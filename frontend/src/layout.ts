@@ -1,6 +1,5 @@
-import {randomId} from './random';
-import {decodeWorkspace, reconcileWorkspace, sameWorkspace, saveWorkspace, workspaceFromPreferences, type SavedWorkspace, type Workspace} from './workspace/state';
-// Retired chrome choices must not survive the generic preference merge.
+import {strings, type LayoutAction, type WorkspaceView} from './workspace/state';
+
 export function currentPreferences(value: Record<string, unknown>): Record<string, unknown> {
   const retired = new Set(['dark', 'toolbarPinned', 'maximized', 'sidebarCollapsed', 'navbarCollapsed']);
   return Object.fromEntries(Object.entries(value).filter(([key]) => !retired.has(key)));
@@ -12,34 +11,54 @@ export function forgetChromeSettings(account: string) {
   } catch { /* Storage may be disabled. */ }
 }
 
-type WorkspaceCache = {workspace: SavedWorkspace; revision: string; pending: boolean};
-const workspaceKey = (account: string) => `gotty-hub:workspace:${encodeURIComponent(account)}`;
+export type LayoutEdit = {writeId: string; action: LayoutAction};
+type Draft = {view: WorkspaceView; edits: LayoutEdit[]};
+const draftKey = (account: string) => `gotty-hub:workspace-view:${encodeURIComponent(account)}`;
+const compactOrderKey = (account: string) => `gotty-hub:compact-tab-order:${encodeURIComponent(account)}`;
 
-export function readWorkspaceCache(account: string): WorkspaceCache | undefined {
-  try {
-    const value = JSON.parse(localStorage.getItem(workspaceKey(account)) ?? 'null');
-    if (value && typeof value.revision === 'string' && typeof value.pending === 'boolean' && decodeWorkspace(value.workspace)) return value;
-  } catch { /* Server preferences remain usable when local storage is unavailable. */ }
-}
-
-export function rememberWorkspace(account: string, workspace: Workspace, pending = true): WorkspaceCache {
-  const value = {workspace: saveWorkspace(workspace), revision: randomId(), pending};
-  try {localStorage.setItem(workspaceKey(account), JSON.stringify(value));} catch { /* Best effort. */ }
-  return value;
-}
-
-export function restoreWorkspace(account: string, prefs: Record<string, unknown>, available: string[], firstOnline = ''): Workspace {
-  const local = readWorkspaceCache(account);
-  const pending = local?.pending ? decodeWorkspace(local.workspace, prefs.instanceOrder) : undefined;
-  const restored = pending ? reconcileWorkspace(pending, available, local?.workspace.schemaVersion !== 3) : workspaceFromPreferences(prefs, available, firstOnline);
-  if (!pending || local?.workspace.schemaVersion !== 3 || !sameWorkspace(pending, restored)) rememberWorkspace(account, restored, !!pending);
-  return restored;
-}
-
-export function acknowledgeWorkspace(account: string, revision: string | undefined, workspace: Workspace) {
-  const value = readWorkspaceCache(account);
-  const saved = value && decodeWorkspace(value.workspace);
-  if (value && saved && value.revision === revision && sameWorkspace(saved, workspace)) {
-    try {localStorage.setItem(workspaceKey(account), JSON.stringify({...value, pending: false}));} catch { /* Best effort. */ }
+function validEdit(edit: LayoutEdit): boolean {
+  if (!edit?.action || typeof edit.writeId !== 'string' || !/^[a-f0-9]{32}$/.test(edit.writeId)) return false;
+  const action = edit.action;
+  switch (action.type) {
+    case 'create': return typeof action.id === 'string' && typeof action.group === 'string' && strings(action.members);
+    case 'join':
+    case 'remove': return typeof action.id === 'string' && typeof action.group === 'string';
+    case 'dissolve': return typeof action.group === 'string';
+    case 'open': return typeof action.id === 'string';
+    case 'reorder': return typeof action.id === 'string' && typeof action.target === 'string' && typeof action.after === 'boolean';
+    default: return false;
   }
+}
+
+export function readWorkspaceDraft(account: string): Draft | undefined {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(draftKey(account)) ?? 'null') as Draft | null;
+    if (value && typeof value.view?.active === 'string' && (value.view.compactOrder === null || strings(value.view.compactOrder))
+      && value.view.focused && typeof value.view.focused === 'object' && !Array.isArray(value.view.focused)
+      && Object.values(value.view.focused).every(id => typeof id === 'string') && strings(value.view.pagedGroups)
+      && Array.isArray(value.edits)) return {...value, edits: value.edits.filter(validEdit)};
+  } catch { /* Storage may be disabled. */ }
+}
+
+export function rememberWorkspaceDraft(account: string, value: Draft) {
+  try {sessionStorage.setItem(draftKey(account), JSON.stringify(value));} catch { /* Best effort. */ }
+}
+
+export function readCompactOrder(account: string): string[] | undefined {
+  try {
+    const order: unknown = JSON.parse(localStorage.getItem(compactOrderKey(account)) ?? 'null');
+    if (strings(order)) return order;
+  } catch { /* The view can still keep its order in memory. */ }
+}
+
+export function rememberCompactOrder(account: string, order: string[]) {
+  try {localStorage.setItem(compactOrderKey(account), JSON.stringify(order));} catch { /* Best effort. */ }
+}
+
+export function legacyWorkspaceDraft(account: string): unknown {
+  try {
+    const key = `gotty-hub:workspace:${encodeURIComponent(account)}`;
+    const saved = JSON.parse(localStorage.getItem(key) ?? 'null');
+    if (saved?.pending === true) return saved.workspace;
+  } catch { /* Server preferences remain usable. */ }
 }

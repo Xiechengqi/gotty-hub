@@ -95,9 +95,9 @@ module.exports = async ({page, context, browser, hub, ids, api, wait, sleep, dir
   await page.route('**/api/v1/me/preferences',async route=>{if(route.request().method()==='GET')await sleep(700);await route.continue();});
   await page.reload({waitUntil:'domcontentloaded'});await wait(async()=>await page.locator('.workspace-bar').isVisible(),'restored workspace');await checkGeometry();await page.unroute('**/api/v1/me/preferences');
   // Old clients could close tabs. Preserve and reopen those saved layouts.
-  const closed=ids[2],account=await api('/me'),preferences=await api('/me/preferences');
-  await api('/me/preferences',{...preferences,workspace:{schemaVersion:3,opened:ids.filter(id=>id!==closed),order:ids,active:ids[0],groups:[]}},'PUT');
-  await page.evaluate(id=>localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id)),account.id);
+  const closed=ids[2];
+  const {revision} = await api('/me/workspace');
+  await api('/me/workspace',{revision,writeId:require('node:crypto').randomBytes(16).toString('hex'),units:ids.map(id=>({id,hidden:id===closed}))},'PUT');
   await page.reload({waitUntil:'domcontentloaded'});await wait(async()=>await page.locator('.session-tab').count()===ids.length-1,'closed state restored');
   await page.locator('.add-instance').click();const add=page.getByRole('dialog',{name:'添加实例',exact:true});await add.waitFor();
   assert.equal(await add.getByRole('textbox').count(),2);assert.equal(await add.getByRole('textbox',{name:'用户名',exact:true}).inputValue(),(await api('/me')).username);

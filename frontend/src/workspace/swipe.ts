@@ -1,4 +1,4 @@
-import {groupFor, navigationUnits, openedOrder, type Workspace} from './state';
+import {navigationUnits, rememberedMember, tabIds, type Workspace} from './state';
 
 export type SwipeDirection = -1 | 1;
 export const SWIPE_DISTANCE = 80;
@@ -78,11 +78,8 @@ export class TabSwipeGesture {
 }
 
 export function adjacentSwipeTarget(state: Workspace, direction: SwipeDirection, expandedSplits: boolean): string | undefined {
-  const units = expandedSplits ? navigationUnits(state, true) : openedOrder(state).map(id => [id]);
-  const index = units.findIndex(unit => unit.includes(state.active));
-  if (index < 0) return;
-  const next = units[index + direction];
-  if (!next) return;
-  const group = expandedSplits && groupFor(state, next[0]);
-  return group ? group[group.focused] : next[0];
+  const units = navigationUnits(state, expandedSplits);
+  const index = units.findIndex(unit => tabIds(unit).includes(state.view.active));
+  const target = index < 0 ? undefined : units[index + direction];
+  return target ? rememberedMember(target, state.view) : undefined;
 }

@@ -117,7 +117,10 @@ function installInspection() {
   const directURL = `http://127.0.0.1:${directPort}`;
   start('gotty-direct', process.env.GOTTY_BINARY, ['--config', '/dev/null', '--hub-disabled', '--address', '127.0.0.1', '--port', String(directPort), '--permit-write', '--share-enabled=false', 'bash', '--noprofile', '--norc']);
   await wait(async () => (await fetch(`${directURL}/config.js`)).ok, 'standalone GoTTY startup');
-  await api('/me/preferences', {opened: ids, instanceOrder: ids, active: ids[0], maximized: false, locale: 'zh-CN'}, 'PUT');
+  const preferences = {opened: ids, instanceOrder: ids, active: ids[0], maximized: false, locale: 'zh-CN'};
+  if (process.env.WORKSPACE_SUITE === 'split') preferences.workspace = {schemaVersion:3, opened:ids,
+    order:ids, active:ids[0], groups:[{left:ids[10],right:ids[11],focused:'right',ratio:.7}]};
+  await api('/me/preferences', preferences, 'PUT');
   browser = await chromium.launch({headless: true, ...(process.env.CHROMIUM_EXECUTABLE ? {executablePath: process.env.CHROMIUM_EXECUTABLE} : {}), env:{...process.env,...(process.env.CHROMIUM_LIBRARY_PATH?{LD_LIBRARY_PATH:process.env.CHROMIUM_LIBRARY_PATH}:{}),...(process.env.CHROMIUM_FONTCONFIG?{FONTCONFIG_FILE:process.env.CHROMIUM_FONTCONFIG}:{})}, args: ['--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader']});
   const context = await browser.newContext({viewport: {width: 1280, height: 800}});
   await context.addCookies([{name: 'hub_session', value: cookie.split('=')[1], url: hub}]);

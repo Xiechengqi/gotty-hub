@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {bindTabSwipe} from './useTabSwipe';
-import type {Workspace} from './state';
+import {emptyView, type Workspace} from './state';
 
 let root: HTMLElement, host: HTMLElement, screen: HTMLElement, tabs: HTMLElement;
 let stop: () => void, now: number, enabled: boolean, workspace: Workspace;
@@ -8,7 +8,7 @@ const select = vi.fn(), terminalWheel = vi.fn();
 beforeEach(() => {
   now = 0; enabled = true; select.mockClear(); terminalWheel.mockClear();
   vi.spyOn(performance, 'now').mockImplementation(() => now);
-  workspace = {opened: ['a', 'b', 'c'], order: ['a', 'b', 'c'], active: 'a', groups: []};
+  workspace = {units: ['a','b','c'].map(id => ({id})), view: {...emptyView(), active: 'a'}};
   root = document.createElement('main');
   root.innerHTML = '<div class="session-tabs-scroll"><button>tab</button></div><div class="terminal-slot"><div class="xterm-host" style="overflow-x:auto"><div class="xterm-screen"></div></div></div>';
   document.body.append(root);
@@ -38,7 +38,7 @@ it('captures horizontal events before xterm, and passes vertical events through 
   expect(wheel(30, 2).defaultPrevented).toBe(true);
   expect(wheel(60, 2).defaultPrevented).toBe(true);
   expect(select).toHaveBeenCalledExactlyOnceWith('b'); expect(terminalWheel).not.toHaveBeenCalled();
-  workspace = {...workspace, active: 'b'};
+  workspace = {...workspace, view: {...workspace.view, active: 'b'}};
   wheel(160); expect(select).toHaveBeenCalledTimes(1); expect(terminalWheel).not.toHaveBeenCalled();
   now += 300; expect(wheel(2, 120).defaultPrevented).toBe(false);
   expect(terminalWheel).toHaveBeenCalledOnce();
@@ -55,7 +55,7 @@ it('preserves horizontal terminal scrolling for the entire burst, including at i
 
 it('normalizes line and page deltas and consumes the edge without wrapping', () => {
   wheel(5, 0, tabs, {deltaMode: 1}); expect(select).toHaveBeenCalledExactlyOnceWith('b');
-  now += 300; workspace = {...workspace, active: 'c'};
+  now += 300; workspace = {...workspace, view: {...workspace.view, active: 'c'}};
   expect(wheel(1, 0, tabs, {deltaMode: 2}).defaultPrevented).toBe(true);
   expect(select).toHaveBeenCalledTimes(1);
 });
@@ -78,8 +78,8 @@ it('pauses for dialogs and input composition, without resuming halfway through t
   now += 300; wheel(90); expect(select).toHaveBeenCalledOnce();
 });
 
-it('does not switch while dragging a tab, divider, file or held selection', () => {
-  for (const markup of ['<div data-dragging="true"></div>', '<div class="split-divider-dragging"></div>', '<div class="terminal-drop-overlay"></div>']) {
+it('does not switch while dragging a tab, file or held selection', () => {
+  for (const markup of ['<div data-dragging="true"></div>', '<div class="terminal-drop-overlay"></div>']) {
     now += 300; const blocker = document.createElement('div'); blocker.innerHTML = markup; root.append(blocker);
     wheel(200); blocker.remove(); expect(select).not.toHaveBeenCalled();
   }
@@ -89,9 +89,9 @@ it('does not switch while dragging a tab, divider, file or held selection', () =
 });
 
 it('cancels on changed order, deleted instance or window blur without sending the tail to xterm', () => {
-  wheel(30); workspace = {...workspace, order: ['a', 'c', 'b']}; wheel(70);
+  wheel(30); workspace = {...workspace, units: ['a','c','b'].map(id => ({id}))}; wheel(70);
   expect(select).not.toHaveBeenCalled();
-  now += 300; wheel(30); workspace = {...workspace, opened: ['a', 'c'], order: ['a', 'c']}; wheel(70);
+  now += 300; wheel(30); workspace = {...workspace, units: [{id:'a'},{id:'c'}]}; wheel(70);
   expect(select).not.toHaveBeenCalled();
   now += 300; wheel(30); window.dispatchEvent(new Event('blur')); wheel(70);
   expect(select).not.toHaveBeenCalled(); expect(terminalWheel).not.toHaveBeenCalled();
@@ -118,7 +118,7 @@ it('commits touchscreen navigation only on lift, suppresses terminal moves, and 
   touchEvent('touchmove', 180); expect(select).not.toHaveBeenCalled();
   expect(touchEvent('touchend', 180).defaultPrevented).toBe(true);
   expect(select).toHaveBeenCalledExactlyOnceWith('b'); expect(move).not.toHaveBeenCalled();
-  workspace = {...workspace, active: 'b'};
+  workspace = {...workspace, view: {...workspace.view, active: 'b'}};
   touchEvent('touchstart', 100); touchEvent('touchmove', 200); touchEvent('touchend', 200);
   expect(select).toHaveBeenLastCalledWith('a'); expect(select).toHaveBeenCalledTimes(2);
 });
@@ -144,7 +144,7 @@ it('does not switch for a pinch, cancellation, disabled setting or an invalidate
   expect(touchEvent('touchmove', 100).defaultPrevented).toBe(false); touchEvent('touchend', 100);
   touchEvent('touchstart', 300); touchEvent('touchmove', 180); touchEvent('touchcancel', 180); touchEvent('touchend', 180);
   touchEvent('touchstart', 300); touchEvent('touchmove', 180); window.dispatchEvent(new Event('blur')); touchEvent('touchend', 180);
-  touchEvent('touchstart', 300); touchEvent('touchmove', 180); workspace = {...workspace, order: ['a', 'c', 'b']}; touchEvent('touchend', 180);
+  touchEvent('touchstart', 300); touchEvent('touchmove', 180); workspace = {...workspace, units: ['a','c','b'].map(id => ({id}))}; touchEvent('touchend', 180);
   enabled = false; touchEvent('touchstart', 300); touchEvent('touchmove', 180); touchEvent('touchend', 180);
   expect(select).not.toHaveBeenCalled();
 });

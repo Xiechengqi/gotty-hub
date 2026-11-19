@@ -293,6 +293,33 @@
         }
       }
     },
+    "/me/workspace": {
+      "get": {
+        "operationId": "get_me_workspace",
+        "description": "Read the signed-in account's split groups, tab order and revision.",
+        "responses": {
+          "200": { "description": "Workspace snapshot, or an empty snapshot for a legacy account" },
+          "401": { "description": "Authentication required" }
+        }
+      },
+      "put": {
+        "operationId": "put_me_workspace",
+        "description": "Save a workspace snapshot using its revision and a stable write ID. See API.md for unit shapes and replay semantics.",
+        "responses": {
+          "200": { "description": "Saved or acknowledged a previously applied write" },
+          "400": { "description": "Invalid workspace" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "Forbidden" },
+          "409": { "description": "The workspace revision or member access has changed" }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "type": "object" } }
+          }
+        }
+      }
+    },
     "/instances": {
       "get": {
         "operationId": "get_instances",

@@ -1,12 +1,13 @@
 import type {Connection, ConnectionCloseEvent} from '@gotty/terminal-core';
 import {api,APIError} from '../api';
 import {randomId} from '../random';
+import type {TerminalAdmission} from './admission';
 import type {Control} from './ShareManager';
 import type {UploadChunk, UploadReply} from './upload';
 
 export class HubConnection implements Connection {
   ws?: WebSocket; closed = false; ticket = '';
-  phase: 'idle' | 'ticket' | 'connecting' | 'initializing' | 'ready' | 'closed' = 'idle';
+  phase: 'idle' | 'queued' | 'ticket' | 'connecting' | 'initializing' | 'ready' | 'closed' = 'idle';
   private opened=false; private stopped=false;
   private started=false; private delivered=false;
   private initialized=false;
@@ -15,19 +16,29 @@ export class HubConnection implements Connection {
   private diagnosticAbort?: AbortController;
   private timer?: ReturnType<typeof setTimeout>;
   private url: string;
+  private releaseAdmission?: () => void;
   private uploadPending?: {id: string; chunk: number; finish: (error?: Error, reply?: UploadReply) => void};
   onopen = () => {}; onreceive = (_data: string) => {}; onclose = (_event: ConnectionCloseEvent) => {};
   pending = new Map<string, {resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>}>();
-  constructor(private id: string, private writable: boolean, private owner: boolean, private controls: boolean, private viewing: () => boolean, private visible: () => boolean) {
+  constructor(private id: string, private writable: boolean, private owner: boolean, private controls: boolean, private viewing: () => boolean, private visible: () => boolean,
+    private admission?: {queue: TerminalAdmission; priority: () => number; waiting: (value: boolean) => void}) {
     this.url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/terminal-connections/${id}/ws`;
   }
   async open() {
     if (this.started || this.closed) return;
     this.started = true;
     document.addEventListener('securitypolicyviolation', this.policyViolation);
-    this.phase = 'ticket';
-    this.deadline('Terminal authorization timed out');
     try {
+      if (this.admission) {
+        this.phase = 'queued';
+        this.admission.waiting(true);
+        const release = await this.admission.queue.acquire(this.abort.signal, this.admission.priority);
+        if (this.closed) {release(); return;}
+        this.releaseAdmission = release;
+        this.admission.waiting(false);
+      }
+      this.phase = 'ticket';
+      this.deadline('Terminal authorization timed out');
       // Fetching a ticket must not consume the socket's five-second auth window.
       const value = await api(`/instances/${this.id}/terminal-tickets`, {}, undefined, this.abort.signal);
       if (this.closed) return;
@@ -38,6 +49,7 @@ export class HubConnection implements Connection {
       this.bindSocket(this.ws);
     } catch (error) {
       if (this.closed) return;
+      if (error instanceof APIError && error.status === 429) this.admission?.queue.pause(60000);
       this.fail(error instanceof DOMException && error.name === 'SecurityError'
         ? {code:1008,reason:'WebSocket blocked by browser security policy',retryable:false}
         : apiFailure(error) ?? {code:1013,reason:this.phase==='connecting'?'Unable to create terminal connection':'Terminal authorization temporarily unavailable'});
@@ -47,7 +59,7 @@ export class HubConnection implements Connection {
     ws.onmessage = event => {
       if (this.closed) return;
       const text = String(event.data);
-      if (/^[1-9abce]/.test(text)) {this.phase = 'ready'; clearTimeout(this.timer);}
+      if (/^[1-9abce]/.test(text)) {this.phase = 'ready'; clearTimeout(this.timer); this.releaseAdmission?.(); this.releaseAdmission = undefined;}
       if (text[0] === 'd') {
         try {
           const reply = JSON.parse(text.slice(1)) as UploadReply;
@@ -106,7 +118,7 @@ export class HubConnection implements Connection {
   private finishClose(event: CloseEvent) {
     if (this.closed) return;
     this.closed=true; this.phase='closed'; clearTimeout(this.timer);
-    this.abort.abort(); this.rejectPending();
+    this.abort.abort(); this.releaseAdmission?.(); this.releaseAdmission = undefined; this.rejectPending();
     void this.describeClose(event);
   }
   private async describeClose(event:CloseEvent){

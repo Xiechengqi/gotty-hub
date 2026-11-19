@@ -1,92 +1,81 @@
-import {expect, it} from 'vitest';
-import {activeSplit, decodeWorkspace, groupFor, navigationUnits, normalizeWorkspace, openedOrder, saveWorkspace, workspaceFromPreferences, workspaceReducer, type Workspace} from './state';
-const initial = (): Workspace => ({opened:['a','b','c','d','e'],order:['a','b','c','d','e'],active:'a',groups:[]});
-const paired = () => workspaceReducer(initial(), {type:'start',id:'b',right:'c'});
-it('only creates a group with the immediate right opened tab',()=>{
-  expect(workspaceReducer(initial(),{type:'start',id:'a',right:'c'}).groups).toEqual([]);
-  expect(workspaceReducer(initial(),{type:'start',id:'e',right:'a'}).groups).toEqual([]);
-  expect(paired().groups).toEqual([{left:'b',right:'c',focused:'left',ratio:.5}]);
-  expect(workspaceReducer(paired(),{type:'start',id:'a',right:'b'}).groups).toHaveLength(1);
-});
-it('keeps independent groups while selecting unrelated terminals',()=>{
-  const state=workspaceReducer(paired(),{type:'start',id:'d',right:'e'});
-  const single=workspaceReducer(state,{type:'select',id:'a'});
-  expect(single.groups).toEqual(state.groups);expect(activeSplit(single)).toBeUndefined();
-  const back=workspaceReducer(single,{type:'select',id:'c'});
-  expect(activeSplit(back)).toMatchObject({left:'b',right:'c',focused:'right'});
-  expect(back.groups).toHaveLength(2);
-});
-it('moves either member as a unit and never inserts another tab inside it',()=>{
-  expect(workspaceReducer(paired(),{type:'reorder',id:'c',target:'e'}).order).toEqual(['a','d','e','b','c']);
-  expect(workspaceReducer(paired(),{type:'reorder',id:'e',target:'c'}).order).toEqual(['a','e','b','c','d']);
-  expect(workspaceReducer(paired(),{type:'reorder',id:'c',target:'a'}).order).toEqual(['b','c','a','d','e']);
-});
-it('keeps previously unopened instances outside a newly formed pair',()=>{
-  const state=workspaceReducer({...initial(),opened:['a','c']},{type:'start',id:'a',right:'c'});
-  expect(state.order).toEqual(['a','c','b','d','e']);
-  const opened=workspaceReducer(state,{type:'select',id:'b'});
-  expect(openedOrder(opened)).toEqual(['a','c','b']);
-});
-it('swaps both tab and pane positions while retaining the focused instance',()=>{
-  const state=workspaceReducer(paired(),{type:'swap',id:'c'});
-  expect(state.active).toBe('b');expect(state.order).toEqual(['a','c','b','d','e']);
-  expect(activeSplit(state)).toMatchObject({left:'c',right:'b',focused:'right'});
-});
-it('deleting or revoking one member retains its survivor without selecting another pair',()=>{
-  const deleted=workspaceReducer(paired(),{type:'reconcile',available:['a','c','d','e']});
-  expect(deleted.active).toBe('c');expect(deleted.groups).toEqual([]);
-  expect(normalizeWorkspace(paired(),['a','c','d']).active).toBe('c');
-  const away=workspaceReducer(paired(),{type:'select',id:'e'});
-  expect(workspaceReducer(away,{type:'reconcile',available:['a','c','d','e']}).active).toBe('e');
-});
-it('exiting removes only the selected group and preserves opened terminals',()=>{
-  const state=workspaceReducer(paired(),{type:'start',id:'d',right:'e'});
-  const next=workspaceReducer(state,{type:'exit',id:'b'});
-  expect(next.opened).toEqual(state.opened);expect(next.groups).toEqual([state.groups[1]]);
-});
-it('reconciles repeated snapshots without changing groups or saved order',()=>{
-  const state=paired();expect(workspaceReducer(state,{type:'reconcile',available:['e','d','c','b','a']})).toBe(state);
-});
-it('migrates nonadjacent v1 pairs without changing other relative positions',()=>{
-  const state=workspaceFromPreferences({instanceOrder:['a','b','c','d','e'],workspace:{schemaVersion:1,opened:['a','b','c','d','e'],active:'d',split:{left:'b',right:'d',focused:'right',ratio:.62}}},initial().order);
-  expect(state.order).toEqual(['a','b','d','c','e']);expect(activeSplit(state)?.ratio).toBe(.62);
-  expect(decodeWorkspace(saveWorkspace(state))).toEqual(state);
-});
-it('migrates legacy boolean splits using the original visible order',()=>{
-  const state=workspaceFromPreferences({opened:['a','b','c'],instanceOrder:['b','c','a'],active:'c',split:true},['a','b','c']);
-  expect(activeSplit(state)).toMatchObject({left:'b',right:'c',focused:'right'});
-});
-it('rejects invalid schemas and normalizes duplicate memberships and ratios',()=>{
-  expect(decodeWorkspace({...saveWorkspace(paired()),groups:[{left:'b',right:'c',focused:'invalid',ratio:.5}]})).toBeUndefined();
-  const state=normalizeWorkspace({...paired(),groups:[...paired().groups,{left:'c',right:'d',focused:'left',ratio:.5}]},initial().order);
-  expect(state.groups).toHaveLength(1);
-  expect(groupFor(workspaceReducer(state,{type:'resize',id:'c',ratio:NaN}),'b')?.ratio).toBe(.5);
-});
-it('maintains adjacency, disjoint membership and valid active IDs through mixed operations',()=>{
-  let state=initial();
-  for(let i=0;i<60;i++){
-    const ids=openedOrder(state);const id=ids[i%ids.length];
-    if(i%4===0&&ids[ids.indexOf(id)+1])state=workspaceReducer(state,{type:'start',id,right:ids[ids.indexOf(id)+1]});
-    else if(i%4===1)state=workspaceReducer(state,{type:'reorder',id,target:ids[(i+2)%ids.length]});
-    else if(i%4===2)state=workspaceReducer(state,{type:'swap',id});
-    else state=workspaceReducer(state,{type:'select',id});
-    const members=state.groups.flatMap(g=>[g.left,g.right]);expect(new Set(members).size).toBe(members.length);
-    for(const g of state.groups)expect(state.order[state.order.indexOf(g.left)+1]).toBe(g.right);
-    expect(navigationUnits(state).flat()).toEqual(state.order);expect(state.opened).toContain(state.active);
-  }
+import {expect,it} from 'vitest';
+import {applyLayout, displayView, emptyView, migrateWorkspace, navigationUnits, reconcileUnits, rememberedMember, selectInstance, type Unit} from './state';
+
+const tabs = () => ['a','b','c','d','e'].map(id => ({id}));
+const create = {type:'create', id:'d', group:'split-1', members:['e','b']} as const;
+const group = {id:'split-1', members:['d','b','e']};
+const grouped = () => applyLayout(tabs(), {...create, members:[...create.members]})!;
+
+it('combines nonadjacent members at the source tab and keeps one ordered sorting unit', () => {
+  expect(grouped()).toEqual([{id:'a'},{id:'c'},group]);
+  const moved = applyLayout(grouped(), {type:'reorder',id:group.id,target:'a',after:false})!;
+  expect(moved).toEqual([group,{id:'a'},{id:'c'}]);
+  expect(applyLayout(moved, {type:'reorder',id:group.id,target:'a',after:false})).toBe(moved);
+  expect(applyLayout(grouped(), {type:'create',id:'a',group:'split-2',members:['d']})).toBeUndefined();
 });
 
-it('opens every existing instance on migration and only new IDs afterwards',()=>{
-  const migrated=workspaceFromPreferences({workspace:{schemaVersion:2,...initial(),opened:['a']}},initial().order);
-  expect(migrated.opened).toEqual(initial().opened);
-  // Preserve tabs hidden by older clients, even though the close action is gone.
-  const closed={...migrated,opened:migrated.opened.filter(id=>id!=='b')};
-  expect(workspaceFromPreferences({workspace:saveWorkspace(closed)},initial().order)).toEqual(closed);
-  const added=workspaceReducer(closed,{type:'reconcile',available:[...initial().order,'f']});
-  expect(added.opened).toEqual(['a','c','d','e','f']);expect(added.active).toBe('a');
-  expect(workspaceReducer(added,{type:'reconcile',available:[...initial().order,'f']})).toBe(added);
+it('joins at the end, removes next to the group, and expands a dissolved group at its position', () => {
+  const units = applyLayout(grouped(), {type:'join', id:'a',group:group.id})!;
+  expect(units).toEqual([{id:'c'},{...group,members:['d','b','e','a']}]);
+  const removed = applyLayout(units, {type:'remove',id:'b',group:group.id})!;
+  expect(removed).toEqual([{id:'c'},{...group,members:['d','e','a']},{id:'b'}]);
+  expect(applyLayout(removed, {type:'dissolve',group:group.id})).toEqual(['c','d','e','a','b'].map(id=>({id})));
+  expect(applyLayout(removed, {type:'join',id:'a',group:'missing'})).toBeUndefined();
 });
-it('opens new accounts and arrivals into an empty workspace without requiring a directory',()=>{
-  expect(workspaceFromPreferences({},['offline','online'],'online')).toMatchObject({opened:['online','offline'],active:'online'});
-  expect(workspaceReducer({opened:[],order:[],active:'',groups:[]},{type:'reconcile',available:['one']})).toMatchObject({opened:['one'],active:'one'});
+
+it('filters revoked members, preserves the current group survivor, and keeps hidden tabs', () => {
+  const state = {units:[...grouped(),{id:'hidden',hidden:true}],view:{...emptyView(),active:'d'}};
+  const units = reconcileUnits(state.units,['a','c','e','hidden','new']);
+  expect(units).toEqual([{id:'a'},{id:'c'},{id:'e'},{id:'hidden',hidden:true},{id:'new'}]);
+  expect(displayView(state,units).active).toBe('e');
+  expect(reconcileUnits(units,['new','hidden','e','c','a'])).toBe(units);
+});
+
+it('flattens the view on small screens and preserves the wide workspace and remembered member', () => {
+  const initial = {units:grouped(),view:{...emptyView(),active:'a', compactOrder:['e','a']}};
+  const wide = selectInstance(initial,'b',true);
+  const compact = selectInstance(wide,'e',false);
+  expect(navigationUnits(compact,true)).toEqual(grouped());
+  expect(navigationUnits(compact,false).map(u=>u.id)).toEqual(['e','a','c','d','b']);
+  expect(rememberedMember(group,compact.view)).toBe('b');
+  expect(compact.view.active).toBe('e');
+});
+
+it('imports a legacy boolean split and v1 saved pairs in their original pane order', () => {
+  const prefs = {opened:['a','b','c'],active:'c',instanceOrder:['b','c','a'],split:true};
+  const imported = migrateWorkspace(prefs,['a','b','c'],'a');
+  expect(imported.units).toEqual([{id:'split-b', members:['b','c']},{id:'a'}]);
+  expect(imported.view).toMatchObject({active:'c',focused:{'split-b':'c'}});
+  const v1 = {schemaVersion:1,opened:prefs.opened,active:'a',split:{left:'a',right:'c',focused:'right',ratio:.71}};
+  expect(migrateWorkspace(prefs,['a','b','c'],'b',v1).units).toEqual([{id:'b'},{id:'split-a',members:['a','c']}]);
+});
+
+it('keeps v3 hidden tabs and opens new devices automatically', () => {
+  const old = {schemaVersion:3, order:['a','b','c'],opened:['a','b'],active:'b',groups:[{left:'a',right:'b',focused:'right',ratio:.6}]};
+  const imported = migrateWorkspace({workspace:old},['a','b','c','new'],'new');
+  expect(imported.units).toEqual([{id:'split-a',members:['a','b']},{id:'c',hidden:true},{id:'new'}]);
+  const units = applyLayout(imported.units, {type:'open',id:'c'});
+  expect(units?.[1]).toEqual({id:'c'});
+});
+
+it('keeps the compact order when the account layout is regrouped, adding and dropping only changed access', () => {
+  const initial = {units:tabs(),view:{...emptyView(),active:'c',compactOrder:['e','b','c','d','a']}};
+  const updated = reconcileUnits(grouped(), ['a','b','c','e','new']);
+  const view = displayView(initial, updated);
+  expect(view.active).toBe('c');
+  expect(view.compactOrder).toEqual(['e','b','c','a','new']);
+  expect(navigationUnits({units:updated,view},false).map(unit=>unit.id)).toEqual(view.compactOrder);
+});
+
+it('uses a valid saved layout when a pending legacy draft is malformed', () => {
+  const saved = {schemaVersion:2,order:['b','c','a'],opened:['b','c'],active:'c',groups:[{left:'b',right:'c',focused:'right'}]};
+  const restored = migrateWorkspace({workspace:saved},['a','b','c','new'],'new',{schemaVersion:3,order:[]});
+  expect(restored.view.active).toBe('c');
+  expect(restored.units).toEqual([{id:'split-b',members:['b','c']},{id:'a',hidden:true},{id:'new'}]);
+});
+
+it('groups hundreds of members without duplicating or dropping IDs', () => {
+  const units:Unit[] = Array.from({length:600},(_,i)=>({id:String(i)}));
+  const layout = applyLayout(units, {type:'create',id:'0',group:'split-1',members:units.slice(1).map(unit=>unit.id)});
+  expect(layout).toEqual([{id:'split-1',members:units.map(unit=>unit.id)}]);
 });

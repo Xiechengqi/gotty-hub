@@ -1,8 +1,8 @@
 import {expect, it} from 'vitest';
 import {adjacentSwipeTarget, SWIPE_IDLE_MS, TabSwipeGesture} from './swipe';
-import {workspaceReducer, type Workspace} from './state';
+import {emptyView, selectInstance, type Workspace} from './state';
 
-const state = (): Workspace => ({opened: ['a', 'b', 'c', 'd'], order: ['a', 'b', 'c', 'd'], active: 'a', groups: []});
+const state = (): Workspace => ({units: ['a','b','c','d'].map(id => ({id})), view: {...emptyView(), active: 'a'}});
 const sample = (x: number, y = 0, at = 0, extra = {}) => ({x, y, at, eligible: true, cancelable: true, context: 'a', ...extra});
 
 it('claims horizontal intent before the threshold and drains inertia after one switch', () => {
@@ -66,20 +66,19 @@ it('cancels pending input on blur and releases modified gestures to the browser'
   expect(gesture.push(sample(200, 0, 48))).toEqual({consume: false});
 });
 
-it('uses visual tab order, stops at boundaries and never opens hidden legacy tabs', () => {
-  const reordered = {...state(), order: ['a', 'd', 'c', 'b'], opened: ['a', 'b', 'd']};
+it('uses visual tab order, stops at boundaries and skips hidden legacy tabs', () => {
+  const reordered = {...state(), units: [{id:'a'}, {id:'d'}, {id:'c',hidden:true}, {id:'b'}]};
   expect(adjacentSwipeTarget(reordered, 1, true)).toBe('d');
   expect(adjacentSwipeTarget(reordered, -1, true)).toBeUndefined();
-  expect(adjacentSwipeTarget({...reordered, active: 'b'}, 1, true)).toBeUndefined();
-  expect(adjacentSwipeTarget({...reordered, active: 'unknown'}, 1, true)).toBeUndefined();
+  expect(adjacentSwipeTarget(selectInstance(reordered, 'b', true), 1, true)).toBeUndefined();
 });
 
-it('navigates an expanded pair as one screen and restores its remembered pane', () => {
-  let paired = workspaceReducer(state(), {type: 'start', id: 'b', right: 'c'});
-  paired = workspaceReducer(paired, {type: 'select', id: 'c'});
-  expect(adjacentSwipeTarget(paired, -1, true)).toBe('a');
-  expect(adjacentSwipeTarget(paired, 1, true)).toBe('d');
-  expect(adjacentSwipeTarget({...paired, active: 'a'}, 1, true)).toBe('c');
-  expect(adjacentSwipeTarget(paired, -1, false)).toBe('b');
-  expect(adjacentSwipeTarget({...paired, active: 'a'}, 1, false)).toBe('b');
+it('navigates a group as one screen and recalls its member on wide screens', () => {
+  const layout = {...state(), units: [{id:'a'}, {id:'split-1',members:['b','c','d']}, {id:'e'}]};
+  const selected = selectInstance(layout, 'd', true);
+  expect(adjacentSwipeTarget(selected, -1, true)).toBe('a');
+  expect(adjacentSwipeTarget(selected, 1, true)).toBe('e');
+  expect(adjacentSwipeTarget(selectInstance(selected, 'a', true), 1, true)).toBe('d');
+  expect(adjacentSwipeTarget(selected, -1, false)).toBe('c');
+  expect(adjacentSwipeTarget(selectInstance(selected, 'a', false), 1, false)).toBe('b');
 });

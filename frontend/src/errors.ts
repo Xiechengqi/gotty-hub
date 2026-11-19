@@ -17,6 +17,8 @@ export function errorText(code:string,locale:string):string{
  rate_limit:['请求过于频繁，请稍后重试。','Too many requests. Please try again later.'],
  password_length:['密码需要 12 到 256 字节。','Use a password between 12 and 256 bytes.'],
  database_error:['服务暂时不可用，请稍后重试。','The service is temporarily unavailable.'],
+ workspace_conflict:['布局已在其他页面更新，请重试。','The layout changed in another page. Try again.'],
+ workspace_members_changed:['分屏成员已变化，请核对后重试。','Split members changed. Check the layout and try again.'],
  terminal_settings_conflict:['终端设置已在其他页面更新。请重新打开设置后再保存。','Terminal settings changed in another page. Reopen settings before saving.'],
  };
  return messages[code]?.[locale==='zh-CN'?0:1]??code;

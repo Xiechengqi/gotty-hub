@@ -46,6 +46,7 @@ export function terminalMessage(text:string,locale:string):string{
   'Instance offline':'GoTTY 实例已离线',
   'Hub restarting or stopping':'Hub 正在重启或停止',
   'Hub stopping':'Hub 正在停止',
+  'Waiting to connect…':'正在排队连接…',
   'Terminal authorization temporarily unavailable':'暂时无法取得终端连接凭据',
   'Terminal authorization timed out':'获取终端连接凭据超时',
   'Terminal initialization timed out':'终端初始化超时',

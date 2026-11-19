@@ -3,22 +3,29 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 module.exports = async ({page, browser, hub, ids, devices, api, wait, sleep, dir, report, installInspection, errors}) => {
-  const [a,b,c] = ids, me=await api('/me'), preferences=await api('/me/preferences');
+  const [a,b,c] = ids;
   const names=Object.fromEntries((await api('/instances')).map(i=>[i.id,i.name]));
-  await api('/me/preferences',{...preferences,locale:'zh-CN',workspace:{schemaVersion:3,opened:ids,order:ids,active:a,groups:[]}},'PUT');
-  await page.evaluate(id=>localStorage.removeItem('gotty-hub:workspace:'+encodeURIComponent(id)),me.id);
-  await page.setViewportSize({width:1280,height:800});await page.reload({waitUntil:'domcontentloaded'});
-  const tab=(id,target=page)=>target.locator('.session-tab[data-instance-id="'+id+'"] .tab-trigger');
+  await page.setViewportSize({width:1280,height:800});
+  await page.reload({waitUntil:'domcontentloaded'});
+  const tab=(id,target=page)=>target.locator('.session-tab[data-tab-id="'+id+'"] .tab-trigger');
   const slot=id=>page.locator('.terminal-slot[data-instance-id="'+id+'"]');
   const confirmation=page.getByRole('alertdialog',{name:'删除实例',exact:true});
   const deletes=[];page.on('request',r=>{if(r.method()==='DELETE'&&r.url().endsWith('/binding'))deletes.push(r.url());});
   async function menu(id,target=page) {await tab(id,target).click({button:'right'});const m=target.locator('.tab-actions-menu');await m.waitFor();return m;}
-  async function openDelete(id) {const m=await menu(id);await m.getByRole('button',{name:'删除',exact:true}).click();await confirmation.waitFor();assert((await confirmation.textContent()).includes(names[id]));}
+  async function openDelete(id) {
+    const {units} = await api('/me/workspace');
+    const group = units?.find(unit=>unit.members?.includes(id));
+    const m=await menu(group?.id??id);
+    if (group) await m.getByRole('button',{name:'终端操作 · '+names[id],exact:true}).click();
+    await m.getByRole('button',{name:'删除',exact:true}).click();
+    await confirmation.waitFor();
+    assert((await confirmation.textContent()).includes(names[id]));
+  }
   async function confirmDelete(id) {await openDelete(id);await confirmation.getByRole('button',{name:'删除',exact:true}).click();await confirmation.waitFor({state:'hidden'});await wait(async()=>await tab(id).count()===0,'deleted tab removed');}
   async function dismiss() {await page.keyboard.press('Escape');await page.locator('.tab-actions-menu').waitFor({state:'hidden'});}
   await wait(()=>slot(a).locator('.terminal-clear-control').isEnabled(),'first terminal ready');
   let m=await menu(a);
-  assert.deepEqual(await m.locator('.tab-menu-item').allTextContents(),['刷新','与右侧标签分屏 · '+names[b],'重启','删除']);
+  assert.deepEqual(await m.locator('.tab-menu-item').allTextContents(),['刷新','加入分屏','新建分屏','重启','删除']);
   assert.equal(await m.getByRole('separator').count(),0);
   assert.equal(await page.locator('.detail-banner,.grant-role-controls').count(),0);
   for(const label of ['实例设置','实例详情','接管终端尺寸','向左移动','向右移动','关闭终端标签','添加操作者','轮换设备凭据'])assert.equal(await page.getByRole('button',{name:label,exact:true}).count(),0);
@@ -47,7 +54,10 @@ module.exports = async ({page, browser, hub, ids, devices, api, wait, sleep, dir
     assert.equal(denied.status(),403,role+' must not bypass menu permissions');
     members.push({member,target});
   }
-  await page.bringToFront();m=await menu(a);await m.getByRole('button',{name:/与右侧标签分屏/}).click();
+  await page.bringToFront();m=await menu(a);await m.getByRole('button',{name:'新建分屏',exact:true}).click();
+  await page.locator('.split-dialog .split-choice').getByText(names[b],{exact:true}).click();
+  await page.locator('.split-dialog').getByRole('button',{name:/^新建分屏/}).click();
+  await wait(async()=> (await api('/me/workspace')).units?.some(unit=>unit.members?.includes(b)), 'split saved');
   await wait(async()=>await page.locator('.terminal-slot:not([hidden])').count()===2,'pair before deletion');
   await wait(()=>slot(b).locator('.terminal-clear-control').isEnabled(),'second terminal ready');
   await page.evaluate(()=>{window.menuSurvivor=window.reviewTerm();window.menuSocket=window.reviewSockets.find(s=>s.readyState===1);});

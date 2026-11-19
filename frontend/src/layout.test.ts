@@ -1,46 +1,43 @@
 import {beforeEach, expect, it} from 'vitest';
-import {currentPreferences, forgetChromeSettings, acknowledgeWorkspace, readWorkspaceCache, rememberWorkspace, restoreWorkspace} from './layout';
-import {saveWorkspace, workspaceReducer, type Workspace} from './workspace/state';
-beforeEach(()=>localStorage.clear());
-const workspace=():Workspace=>({opened:['a','b','c'],order:['b','c','a'],active:'c',groups:[{left:'b',right:'c',focused:'right',ratio:.64}]});
-it('retires pin and application theme choices without dropping other preferences',()=>{
+import {
+  currentPreferences, forgetChromeSettings, legacyWorkspaceDraft, readCompactOrder, readWorkspaceDraft,
+  rememberCompactOrder, rememberWorkspaceDraft,
+} from './layout';
+import {emptyView} from './workspace/state';
+
+beforeEach(() => {localStorage.clear(); sessionStorage.clear();});
+
+it('retires old chrome choices and preserves preference data for older clients', () => {
   localStorage.setItem('gotty-hub.theme','dark');
   localStorage.setItem('gotty-hub:layout:alice','old');
   forgetChromeSettings('alice');
   expect(localStorage.getItem('gotty-hub.theme')).toBeNull();
   expect(localStorage.getItem('gotty-hub:layout:alice')).toBeNull();
-  expect(currentPreferences({dark:true,toolbarPinned:false,maximized:true,sidebarCollapsed:false,navbarCollapsed:true,locale:'zh-CN',workspace:saveWorkspace(workspace())})).toEqual({locale:'zh-CN',workspace:saveWorkspace(workspace())});
+  expect(currentPreferences({dark:true,toolbarPinned:false,locale:'zh-CN',workspace:{schemaVersion:3}}))
+    .toEqual({locale:'zh-CN',workspace:{schemaVersion:3}});
 });
-it('retains complete order and groups before server acknowledgement',()=>{
-  rememberWorkspace('alice',workspace());
-  expect(restoreWorkspace('alice',{opened:['a'],active:'a'},['a','b','c'])).toEqual(workspace());
-  const earlier=readWorkspaceCache('alice')!;
-  const moved=workspaceReducer(workspace(),{type:'reorder',id:'b',target:'a'});rememberWorkspace('alice',moved);
-  acknowledgeWorkspace('alice',earlier.revision,workspace());
-  expect(readWorkspaceCache('alice')?.pending).toBe(true);expect(restoreWorkspace('alice',{},['a','b','c'])).toEqual(moved);
+
+it('keeps focus, paging and the pending edit journal scoped to the account', () => {
+  const draft = {view:{...emptyView(),active:'a',pagedGroups:['split']},
+    edits:[{writeId:'a'.repeat(32),action:{type:'join' as const,id:'a',group:'split'}}]};
+  rememberWorkspaceDraft('alice',draft);
+  expect(readWorkspaceDraft('alice')).toEqual(draft);
+  expect(readWorkspaceDraft('bob')).toBeUndefined();
 });
-it('accepts server state after acknowledgement without leaking between accounts',()=>{
-  const click=rememberWorkspace('alice',workspace());acknowledgeWorkspace('alice',click.revision,workspace());
-  expect(readWorkspaceCache('alice')?.pending).toBe(false);
-  expect(restoreWorkspace('alice',{opened:['a'],active:'a'},['a','b','c']).groups).toEqual([]);
-  expect(restoreWorkspace('bob',{},['a','b','c'],'a').active).toBe('a');
+
+it('stores the compact order across tabs without storing their focus or pending edits with it', () => {
+  rememberCompactOrder('alice',['b','a']);
+  sessionStorage.clear();
+  expect(readCompactOrder('alice')).toEqual(['b','a']);
+  expect(readCompactOrder('bob')).toBeUndefined();
+  expect(readWorkspaceDraft('alice')).toBeUndefined();
 });
-it('filters revoked IDs even in pending cache',()=>{
-  rememberWorkspace('alice',workspace());
-  const restored=restoreWorkspace('alice',{},['a','b']);
-  expect(restored.active).toBe('b');expect(restored.groups).toEqual([]);expect(restored.order).toEqual(['b','a']);
-  expect(readWorkspaceCache('alice')?.pending).toBe(true);
-});
-it('ignores malformed cache and reads the current versioned server preference',()=>{
-  localStorage.setItem('gotty-hub:workspace:alice','null');
-  expect(restoreWorkspace('alice',{workspace:saveWorkspace(workspace())},['a','b','c'])).toEqual(workspace());
-});
-it('migrates pending v1 cache with the separately saved order and acknowledges the new snapshot',()=>{
-  localStorage.setItem('gotty-hub:workspace:alice',JSON.stringify({revision:'legacy',pending:true,workspace:{schemaVersion:1,opened:['a','b','c'],active:'c',split:{left:'a',right:'c',focused:'right',ratio:.6}}}));
-  const restored=restoreWorkspace('alice',{instanceOrder:['c','b','a']},['a','b','c']);
-  expect(restored.order).toEqual(['b','a','c']);expect(restored.active).toBe('c');
-  const migrated=readWorkspaceCache('alice')!;
-  expect(migrated.workspace.schemaVersion).toBe(3);expect(migrated.revision).not.toBe('legacy');
-  acknowledgeWorkspace('alice',migrated.revision,restored);
-  expect(readWorkspaceCache('alice')?.pending).toBe(false);
+
+it('reads only pending legacy cache and tolerates an invalid cache', () => {
+  localStorage.setItem('gotty-hub:workspace:alice','{');
+  expect(legacyWorkspaceDraft('alice')).toBeUndefined();
+  const workspace = {schemaVersion:1,opened:['a','b'],active:'b',split:{left:'a',right:'b',focused:'right'}};
+  localStorage.setItem('gotty-hub:workspace:alice',JSON.stringify({pending:true,workspace}));
+  expect(legacyWorkspaceDraft('alice')).toEqual(workspace);
+  expect(legacyWorkspaceDraft('bob')).toBeUndefined();
 });
