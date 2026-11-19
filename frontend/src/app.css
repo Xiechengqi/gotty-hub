@@ -203,18 +203,29 @@ html[data-hub-tab-swipe=true],html[data-hub-tab-swipe=true] body,html[data-hub-t
 .split-picker .split-group-choice{justify-content:flex-start}
 .split-group-choice>span{min-inline-size:0;inline-size:100%;justify-content:flex-start}
 .split-group-summary{display:flex;min-inline-size:0;flex-direction:column}
-.split-grid>.terminal-slot{--pane-top:0px}
+.split-grid{background:var(--color-terminal-background)}
+.split-grid>.terminal-slot{--pane-top:0px;container-type:size;border-radius:var(--radius-3xl)}
 .split-grid>.terminal-slot[data-top-row=true]{--pane-top:var(--hub-bar-height)}
+.split-grid>.terminal-slot::after{
+  content:"";position:absolute;inset:0;z-index:5;pointer-events:none;border-radius:inherit;
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-border-button-default) 20%,var(--color-text-secondary) 40%)
+}
 .split-grid>.terminal-slot[data-focused=true]::after{
-  content:"";position:absolute;inset:0;z-index:5;pointer-events:none;
   box-shadow:inset 0 0 0 2px var(--color-border-focus-ring)
 }
+.split-grid .real-terminal{padding:min(calc(var(--spacing) * 2),8cqi,8cqb)}
+.split-grid>.terminal-slot>.terminal-empty,.split-grid .terminal-panel{
+  background:var(--color-terminal-background);color:var(--color-terminal-foreground)
+}
 .pane-identity{
-  position:absolute;inset-block-start:calc(var(--pane-top) + 4px);inset-inline-end:4px;
-  max-inline-size:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  position:absolute;inset-block-start:calc(var(--pane-top) + 4px);inset-inline-end:12px;
+  display:flex;align-items:center;gap:4px;max-inline-size:60%;overflow:hidden;
   padding:2px 6px;border-radius:4px;background:var(--color-background-primary-default);
   color:var(--color-text-primary);pointer-events:none;z-index:3
 }
+.pane-name{min-inline-size:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane-identity>.terminal-status,.pane-offline-dot{inline-size:10px;block-size:10px;flex:none}
+.pane-offline-dot{border:1px solid var(--color-text-tertiary);border-radius:50%}
 .split-grid .terminal-toolbar,.split-grid .real-terminal .terminal-message{inset-block-start:calc(var(--pane-top) + 26px)}
 .split-grid .terminal-state{inset-block-start:auto;inset-block-end:4px}
 .workspace-pages{

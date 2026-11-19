@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RiEyeLine, RiEyeOffLine, RiArrowRightLine, RiWifiOffLine } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
@@ -19,7 +19,7 @@ import {TerminalSettings} from './terminal/TerminalSettings';
 import {useTerminalSettings} from './terminal/useTerminalSettings';
 import {readAppearance} from './terminal/appearance';
 import {DEFAULT_TAB_BAR_TRANSPARENCY, type SettingsSnapshot} from './terminal/settings';
-import {type Appearance} from '@gotty/terminal-core/appearance';
+import {BUILTIN_THEMES, displayOptions, type Appearance} from '@gotty/terminal-core/appearance';
 import {WorkspaceBar} from './workspace/WorkspaceBar';
 import {AddInstanceModal} from './workspace/AddInstanceModal';
 import {DeleteInstanceDialog} from './workspace/DeleteInstanceDialog';
@@ -192,6 +192,9 @@ function App() {
   const group=wide?groupFor(workspace.units,active):undefined;
   const grid=group?terminalGrid(group.members.length,workspaceSize.width,workspaceSize.height,
     displaySnapshot.settings?.fontSize??14,workspace.view.pagedGroups.includes(group.id)):undefined;
+  const splitColors=grid?displayOptions({},BUILTIN_THEMES,{
+    theme:displaySnapshot.settings?.theme??readAppearance(active).theme,
+  }).theme:undefined;
   const page=group&&grid?Math.floor(group.members.indexOf(active)/grid.capacity):0;
   const pages=group&&grid?Math.ceil(group.members.length/grid.capacity):1;
   const visibleIds=new Map((group&&grid?group.members.slice(page*grid.capacity,(page+1)*grid.capacity):[active]).map((id,index)=>[id,index]));
@@ -316,10 +319,12 @@ function App() {
         onReorder={wide?workspaceSync.reorderWide:workspaceSync.reorderCompact}
         onFocus={()=>requestTerminalFocus(workspaceRef.current.view.active)}/>
       <div className="workspace">
-        <div ref={terminalsRef} className={cx('terminals',!!group&&'split-grid')} style={grid?{
+        <div ref={terminalsRef} className={cx('terminals',!!group&&'split-grid')} style={grid&&splitColors?{
           gridTemplateColumns:`repeat(${grid.columns},minmax(0,1fr))`,
           gridTemplateRows:`repeat(${grid.rows},minmax(0,1fr))`,gap:grid.gap,
-        }:undefined}>
+          '--color-terminal-background':splitColors.background,
+          '--color-terminal-foreground':splitColors.foreground,
+        } as CSSProperties:undefined}>
           {opened.length?opened.map(id=>{
             const instance=instanceById.get(id);
             const info=paneInstances.get(id);
@@ -332,8 +337,9 @@ function App() {
               data-instance-id={id} data-focused={visible&&active===id} data-top-row={row===1}
               style={grid?{gridColumn:column,gridRow:row}:undefined} hidden={!visible}
               onFocusCapture={()=>focusPane(id)} onPointerDownCapture={()=>focusPane(id)}>
-              {group&&visible&&<div className="pane-identity text-caption-1-semibold" aria-hidden="true" dir="auto">
-                {info.label}{info.online&&!info.writable&&' · '+t('readOnly')}
+              {group&&visible&&<div className="pane-identity text-caption-1-semibold">
+                {info.online ? info.icon : <span className="pane-offline-dot" role="img" aria-label={t('offline')}/>}
+                <bdi className="pane-name" aria-hidden="true">{info.label}{info.online&&!info.writable&&' · '+t('readOnly')}</bdi>
               </div>}
               {instance.online?<DeferredTerminal visible={visible}>{terminal(instance)}</DeferredTerminal>:<div className="terminal-empty">{info.label} · {t('offline')}</div>}
             </div>;

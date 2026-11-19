@@ -95,6 +95,36 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
 
   await ready(a);
   await ready(c);
+  const gridColors = () => page.locator('.split-grid').evaluate(grid => ({
+    gutter: getComputedStyle(grid).backgroundColor,
+    terminal: getComputedStyle(grid.querySelector('[data-focused="true"] .real-terminal')).backgroundColor,
+  }));
+  const cards = await page.locator('.terminal-slot:not([hidden])').evaluateAll(panes => panes.map(pane => {
+    const badge = pane.querySelector('.pane-identity');
+    return {
+      radius: parseFloat(getComputedStyle(pane).borderTopLeftRadius),
+      border: getComputedStyle(pane, '::after').boxShadow,
+      focused: pane.dataset.focused === 'true',
+      hasStatusDot: badge?.firstElementChild?.matches('img.terminal-status') ?? false,
+    };
+  }));
+  assert(cards.every(card => card.radius > 0 && card.border !== 'none' && card.hasStatusDot), 'each pane needs a rounded border and status dot');
+  assert(cards.some(card => card.focused && cards.some(other => !other.focused && other.border !== card.border)));
+  const colors = await gridColors();
+  assert.equal(colors.gutter,colors.terminal,'grid gaps must use the active terminal background');
+  if (process.env.WORKSPACE_SUITE === 'split') {
+    let snapshot = await api('/me/terminal-settings');
+    for (const [theme, expected] of [['nord','rgb(46, 52, 64)'],['paper','rgb(245, 245, 213)']]) {
+      const settings = {...snapshot.settings,theme};
+      snapshot = await api('/me/terminal-settings',{revision:snapshot.revision,settings},'PUT');
+      await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+      await wait(async()=>{
+        const current = await gridColors();
+        return current.gutter === expected && current.terminal === expected;
+      }, 'matching pane and gap theme ' + theme);
+    }
+  }
+
   const file = path.join(dir,'grid-vim.txt');
   await slot(a).locator('.xterm-helper-textarea').focus();
   await page.keyboard.type('vim ' + file);
@@ -235,6 +265,7 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
   process.kill(-fixture.child.pid, 'SIGTERM');
   await wait(() => fixture.child.exitCode !== null || fixture.child.signalCode !== null,'split member stopped');
   await slot(i).locator('.terminal-empty').waitFor();
+  assert.equal(await slot(i).locator('.pane-offline-dot').getAttribute('aria-label'),'离线');
   await expectVisible([a,b,c,e,g,h,i]);
   assert.equal(await active(),a,'an offline group member moved focus');
   start('split-returning', process.env.GOTTY_BINARY, fixture.args);
@@ -324,7 +355,7 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
     assert.equal(await active(),a);
   }
   assert.deepEqual(errors,[]);
-  report('splitGrid',{legacyMigration:!!legacy,equalPanes:[2,5,6,7,8],equalTabs:true,joinTargets:true,paged:true,
+  report('splitGrid',{legacyMigration:!!legacy,equalPanes:[2,5,6,7,8],equalTabs:true,roundedCards:true,matchingGutters:true,statusDots:true,joinTargets:true,paged:true,
     narrowViewports,wideViewports,visualKeyboard:true,phoneOrder:true,noPhoneLayoutWrites:true,unsavedVim:true,
     stableSockets:true,offlineMember:true,reload:true,concurrentEdits:true});
 };
