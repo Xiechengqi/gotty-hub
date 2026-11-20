@@ -172,6 +172,11 @@
   --color-terminal-option-active: rgb(255 255 255 / 0.12);
   --color-terminal-key-armed: rgb(74 222 128 / 0.25);
   --color-terminal-key-armed-border: #4ade80;
+  /* The split focus dismiss button stays light over every terminal theme. */
+  --color-pane-zoom-close-background: var(--color-neutral-100);
+  --color-pane-zoom-close-hover: var(--color-neutral-200);
+  --color-pane-zoom-close-active: var(--color-neutral-300);
+  --color-pane-zoom-close-foreground: var(--color-neutral-950);
   /* Foreground (icons + on-fill content) */
   --color-foreground-full:               var(--color-white);
   --color-foreground-icon-primary:       var(--color-neutral-950);

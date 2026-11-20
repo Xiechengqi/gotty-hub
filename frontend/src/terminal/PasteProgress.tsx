@@ -1,5 +1,6 @@
 import {useEffect, useState, useSyncExternalStore} from 'react';
 import {createPortal} from 'react-dom';
+import {FocusScope} from 'react-aria';
 import {pasteBytes, pasteText, type PasteState} from '@gotty/terminal-core/paste';
 import {Button} from '@/components/base/buttons/button';
 import {useDirection} from '@/components/foundations/direction/direction';
@@ -34,7 +35,9 @@ export function PasteProgress({locale}: {locale: string}) {
   }, []);
   const zh = locale === 'zh-CN';
   if (!tasks.length) return null;
-  return createPortal(<div className="terminal-paste-layer" dir={direction} lang={locale} style={viewport}>
+  // Register the portal as a child scope when its owner is an enlarged pane.
+  // This scope does not trap or autofocus; its controls remain reachable there.
+  return createPortal(<FocusScope><div className="terminal-paste-layer" dir={direction} lang={locale} style={viewport}>
     {tasks.map(({instance, name, state, cancel, dismiss}) => {
       const active = state.status === 'running' || state.status === 'stopping';
       const percent = Math.floor(state.loaded * 100 / state.total);
@@ -45,5 +48,5 @@ export function PasteProgress({locale}: {locale: string}) {
         <p className="text-body-2-regular" role={state.status === 'error' ? 'alert' : 'status'}>{pasteText(state, zh)}</p>
       </section>;
     })}
-  </div>, document.body);
+  </div></FocusScope>, document.body);
 }

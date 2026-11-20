@@ -300,7 +300,8 @@ export function RealTerminal({id, writable, visible, focused, admission, locale,
     const focus = () => {
       // React Aria restores its trigger after an exiting dialog unmounts.
       // Wait for that restoration, and never steal focus from a new dialog.
-      const overlays = [...document.querySelectorAll('[role=dialog], [role=alertdialog], [role=listbox]')];
+      const ownModal = host.current?.closest('[data-in-place-modal=true]');
+      const overlays = [...document.querySelectorAll('[role=dialog], [role=alertdialog], [role=listbox]')].filter(element => element !== ownModal);
       if (overlays.length) {
         if (performance.now() - started < 1500 && overlays.every(element => element.closest('[data-exiting]'))) frame = requestAnimationFrame(focus);
         else reportFocus.current?.(id, focusRequest);

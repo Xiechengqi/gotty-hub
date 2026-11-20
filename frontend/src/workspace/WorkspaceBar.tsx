@@ -14,7 +14,7 @@ import {randomId} from '../random';
 
 type Props = {
   workspace: Workspace; instances: Map<string, PaneInstance>; actions: Record<string, TerminalActions>; locale: Locale;
-  wide: boolean; transparency: number; lightTerminal: boolean; onLocale: () => void;
+  wide: boolean; blocked?: boolean; transparency: number; lightTerminal: boolean; onLocale: () => void;
   accountName?: string; admin: boolean; authenticated: boolean; onLogin: () => void; onSettings: (action: SettingsAction) => void;
   onSelect: (id: string, focus?: boolean) => void; onDelete: (id: string) => void; onConnect: () => void;
   onEdit: (action: LayoutAction, selected?: string) => boolean; onReorder: (id: string, target: string) => void;
@@ -111,7 +111,7 @@ export function WorkspaceBar(props: Props) {
       setDragging(value);
       if (value) {dragMode.current = wide; setMenu(null);}
     }} onFinish={onFocus}>
-      <header className="workspace-bar workspace-surface" data-light-terminal={props.lightTerminal} style={surfaceStyle}>
+      <header className="workspace-bar workspace-surface" data-light-terminal={props.lightTerminal} style={surfaceStyle} inert={props.blocked}>
         <div className="session-tabs-scroll" title={t('tabGestureHint')} onMouseDownCapture={leftPress}>
           <WorkspaceSortList scope="tabs" units={units.map(unit => [unit.id])}>{units.map((unit, i) => {
             const group = isGroup(unit) ? unit : null;

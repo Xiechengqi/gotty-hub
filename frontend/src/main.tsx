@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
-import { RiEyeLine, RiEyeOffLine, RiArrowRightLine, RiWifiOffLine } from '@remixicon/react';
+import { RiEyeLine, RiEyeOffLine, RiArrowRightLine, RiWifiOffLine, RiExpandDiagonalLine, RiCollapseDiagonalLine } from '@remixicon/react';
 import { Button } from '@/components/base/buttons/button';
+import { CloseButton } from '@/components/base/buttons/close-button';
 import { Input } from '@/components/base/input/input';
 import { Modal, ModalHeader, ModalBody } from '@/components/base/modal/modal';
+import { InPlaceModal } from '@/components/base/modal/in-place-modal';
 import { DirectionProvider } from '@/components/foundations/direction/direction';
 import { cx } from '@/utils/cx';
 import { initialLocale, translate, type MessageKey } from './i18n';
@@ -177,6 +179,7 @@ function App() {
   const [adminOpen,setAdminOpen]=useState(false);
   const [panel,setPanel] = useState<Panel>('');
   const [deleteTarget,setDeleteTarget] = useState<{id:string;name:string}|null>(null);
+  const [paneZoom,setPaneZoom] = useState<{account:string|null;group:string;id:string}>();
   const terminalsRef=useRef<HTMLDivElement>(null);
   const [workspaceSize,setWorkspaceSize]=useState({width:0,height:0});
   useLayoutEffect(()=>{
@@ -198,8 +201,19 @@ function App() {
   const page=group&&grid?Math.floor(group.members.indexOf(active)/grid.capacity):0;
   const pages=group&&grid?Math.ceil(group.members.length/grid.capacity):1;
   const visibleIds=new Map((group&&grid?group.members.slice(page*grid.capacity,(page+1)*grid.capacity):[active]).map((id,index)=>[id,index]));
+  const zoomedId=paneZoom&&paneZoom.account===(account?.id??null)&&paneZoom.group===group?.id
+    &&paneZoom.id===active&&visibleIds.has(paneZoom.id)&&instanceById.has(paneZoom.id)?paneZoom.id:undefined;
+  useLayoutEffect(()=>{if(paneZoom&&!zoomedId)setPaneZoom(undefined);},[paneZoom,zoomedId]);
+  function restorePane(){setPaneZoom(undefined);requestTerminalFocus(workspaceRef.current.view.active);}
+  function togglePaneZoom(id:string){
+    if(!group||!visibleIds.has(id))return;
+    if(zoomedId===id){restorePane();return;}
+    workspaceSync.select(id,wide);
+    setPaneZoom({account:account?.id??null,group:group.id,id});
+    requestTerminalFocus(id);
+  }
   const swipeHint=useTabSwipe(mainRef,{account:preview?'preview':account?.id,
-    enabled:interaction.tabSwipe&&(preview||!!account&&preferencesLoaded)&&opened.length>1,
+    enabled:!zoomedId&&interaction.tabSwipe&&(preview||!!account&&preferencesLoaded)&&opened.length>1,
     workspace,expandedSplits:wide,onSelect:activateInstance});
   useEffect(()=>{
     if(wide&&group)workspaceSync.select(active,true);
@@ -310,7 +324,7 @@ function App() {
   return <DirectionProvider locale={locale}><div className={cx("app",(authLoading||!!account&&(!preferencesLoaded||terminalPreferences.loading))&&"workspace-loading")}>
     <div className="workspace-loading-status text-body-regular" role="status">{apiError || (locale==='zh-CN'?'正在加载工作区…':'Loading workspace…')}{apiError&&<Button variant="secondary" onClick={()=>location.reload()}>{t('refreshPage')}</Button>}</div>
     <main ref={mainRef} className="main">
-      <WorkspaceBar key={account?.id||'preview'} workspace={workspace} instances={paneInstances} actions={terminalActions} locale={locale} wide={wide}
+      <WorkspaceBar key={account?.id||'preview'} workspace={workspace} instances={paneInstances} actions={terminalActions} locale={locale} wide={wide} blocked={!!zoomedId}
         transparency={barPreview ?? displaySnapshot.settings?.tabBarTransparency ?? DEFAULT_TAB_BAR_TRANSPARENCY} lightTerminal={['paper','light'].includes(displaySnapshot.settings?.theme || reportedAppearance.current[active]?.theme || 'nord')}
         onLocale={()=>setLocale(locale==='zh-CN'?'en-US':'zh-CN')}
         accountName={preview?t('demoAccount'):account?.username} admin={!!account?.is_admin} authenticated={preview||!!account} onLogin={()=>showPanel('login')} onSettings={settings}
@@ -333,18 +347,31 @@ function App() {
             const visible=cell!==undefined;
             const row=visible&&grid?Math.floor(cell/grid.columns)+1:1;
             const column=visible&&grid?cell%grid.columns+1:1;
-            return <div key={id} id={'terminal-pane-'+id} className="terminal-slot" role="region" aria-label={info.label}
+            const zoomed=zoomedId===id;
+            const zoomLabel=t(zoomed?'restoreSplit':'enlargeTerminal');
+            return <InPlaceModal key={id} isOpen={zoomed} id={'terminal-pane-'+id} className="terminal-slot" role="region" aria-label={info.label}
               data-instance-id={id} data-focused={visible&&active===id} data-top-row={row===1}
-              style={grid?{gridColumn:column,gridRow:row}:undefined} hidden={!visible}
+              data-pane-zoomed={zoomed||undefined} inert={!!zoomedId&&!zoomed}
+              style={grid&&!zoomed?{gridColumn:column,gridRow:row}:undefined} hidden={!visible}
               onFocusCapture={()=>focusPane(id)} onPointerDownCapture={()=>focusPane(id)}>
-              {group&&visible&&<div className="pane-identity text-caption-1-semibold">
-                {info.online ? info.icon : <span className="pane-offline-dot" role="img" aria-label={t('offline')}/>}
-                <bdi className="pane-name" aria-hidden="true">{info.label}{info.online&&!info.writable&&' · '+t('readOnly')}</bdi>
-              </div>}
-              {instance.online?<DeferredTerminal visible={visible}>{terminal(instance)}</DeferredTerminal>:<div className="terminal-empty">{info.label} · {t('offline')}</div>}
-            </div>;
+              <div className="terminal-pane-content">
+                {group&&visible&&<Button variant="ghost" size="xs" className="pane-identity text-caption-1-semibold"
+                  aria-label={zoomLabel+' · '+info.label} title={zoomLabel} aria-pressed={zoomed}
+                  trailingIcon={zoomed?RiCollapseDiagonalLine:RiExpandDiagonalLine} onClick={()=>togglePaneZoom(id)}>
+                  {info.online ? info.icon : <span className="pane-offline-dot" role="img" aria-label={t('offline')}/>}
+                  <bdi className="pane-name" aria-hidden="true">{info.label}{info.online&&!info.writable&&' · '+t('readOnly')}</bdi>
+                </Button>}
+                {instance.online?<DeferredTerminal visible={visible}>{terminal(instance)}</DeferredTerminal>:<div className="terminal-empty">{info.label} · {t('offline')}</div>}
+              </div>
+              {zoomed&&<><CloseButton size="md" className="pane-zoom-close" aria-label={t('restoreSplit')} title={t('restoreSplit')}
+                onPointerDown={event=>event.preventDefault()} onClick={restorePane}/><PasteProgress locale={locale}/></>}
+            </InPlaceModal>;
           }):<div className="terminal-empty text-body-regular">{t('noOpenTerminals')}</div>}
-          {group&&grid&&pages>1&&<WorkspacePages page={page} pages={pages} locale={locale} onChange={next=>activateInstance(group.members[next*grid.capacity])}/>}
+          {group&&grid&&pages>1&&<WorkspacePages page={page} pages={pages} locale={locale} blocked={!!zoomedId} onChange={next=>activateInstance(group.members[next*grid.capacity])}/>}
+          {zoomedId&&<div className="pane-zoom-backdrop" aria-hidden="true"
+            onPointerDown={event=>{event.preventDefault();event.stopPropagation();}}
+            onClick={event=>{event.stopPropagation();restorePane();}}
+            onDragOver={event=>event.preventDefault()} onDrop={event=>{event.preventDefault();event.stopPropagation();}}/>}
         </div>
       </div>
     </main>
@@ -387,7 +414,7 @@ function App() {
     </div>}
     {notice&&!workspaceError&&<div className="notice text-body-regular" role="status">{t(notice)}</div>}
     {swipeHint&&<div className="tab-swipe-hint rounded-xl border border-border-button-default bg-background-primary-default px-4 py-2 text-body-2-medium text-text-primary" role="status">{swipeHint.slice(0,3).map(id=>paneInstances.get(id)?.label).filter(Boolean).join(' | ')}{swipeHint.length>3&&' +'+(swipeHint.length-3)}</div>}
-  </div><PasteProgress locale={locale}/></DirectionProvider>;
+  </div>{!zoomedId&&<PasteProgress locale={locale}/>}</DirectionProvider>;
 }
 const mount=()=>createRoot(document.getElementById('root')!, {
   onUncaughtError:()=>window.hubBoot?.fail(),

@@ -105,7 +105,7 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
       radius: parseFloat(getComputedStyle(pane).borderTopLeftRadius),
       border: getComputedStyle(pane, '::after').boxShadow,
       focused: pane.dataset.focused === 'true',
-      hasStatusDot: badge?.firstElementChild?.matches('img.terminal-status') ?? false,
+      hasStatusDot: !!badge?.querySelector('img.terminal-status'),
     };
   }));
   assert(cards.every(card => card.radius > 0 && card.border !== 'none' && card.hasStatusDot), 'each pane needs a rounded border and status dot');

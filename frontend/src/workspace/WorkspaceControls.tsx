@@ -5,10 +5,10 @@ import {translate, type Locale} from '../i18n';
 
 export type PaneInstance = {id: string; name: string; label: string; online: boolean; writable: boolean; owner: boolean; icon: ReactNode};
 
-export function WorkspacePages({page, pages, onChange, locale}: {
-  page: number; pages: number; onChange: (page: number) => void; locale: Locale;
+export function WorkspacePages({page, pages, onChange, locale, blocked}: {
+  page: number; pages: number; onChange: (page: number) => void; locale: Locale; blocked?: boolean;
 }) {
-  return <div className="workspace-pages" role="group" aria-label={translate(locale, 'splitPages')}>
+  return <div className="workspace-pages" role="group" aria-label={translate(locale, 'splitPages')} inert={blocked}>
     <Button variant="ghost" size="small" iconOnly leadingIcon={RiArrowLeftSLine} aria-label={translate(locale, 'previousPage')}
       disabled={page === 0} onClick={() => onChange(page - 1)}/>
     <span className="text-caption-1-semibold" aria-live="polite">{page + 1} / {pages}</span>
