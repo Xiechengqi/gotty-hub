@@ -208,10 +208,10 @@ html[data-hub-tab-swipe=true],html[data-hub-tab-swipe=true] body,html[data-hub-t
 .split-grid>.terminal-slot[data-top-row=true]{--pane-top:var(--hub-bar-height)}
 .split-grid>.terminal-slot::after{
   content:"";position:absolute;inset:0;z-index:5;pointer-events:none;border-radius:inherit;
-  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-border-button-default) 20%,var(--color-text-secondary) 40%)
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-terminal-foreground) 16%,transparent)
 }
 .split-grid>.terminal-slot[data-focused=true]::after{
-  box-shadow:inset 0 0 0 2px var(--color-border-focus-ring)
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-terminal-foreground) 42%,transparent)
 }
 .split-grid .real-terminal{padding:min(calc(var(--spacing) * 2),8cqi,8cqb)}
 .split-grid>.terminal-slot>.terminal-empty,.split-grid .terminal-panel{

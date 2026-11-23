@@ -113,6 +113,7 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
     return {
       radius: parseFloat(getComputedStyle(pane).borderTopLeftRadius),
       border: getComputedStyle(pane, '::after').boxShadow,
+      focusHue: /rgb\(\s*59,\s*130,\s*246|rgb\(\s*51,\s*146,\s*255/.test(getComputedStyle(pane, '::after').boxShadow),
       focused: pane.dataset.focused === 'true',
       hasStatusDot: !!badge?.querySelector('img.terminal-status'),
       gap,
@@ -120,7 +121,7 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
       darkBadge: channels.length >= 4 && channels[0] === 0 && channels[1] === 0 && channels[2] === 0 && channels[3] > 0 && channels[3] < 1,
     };
   }));
-  assert(cards.every(card => card.radius > 0 && card.border !== 'none' && card.hasStatusDot), 'each pane needs a rounded border and status dot');
+  assert(cards.every(card => card.radius > 0 && card.border !== 'none' && card.hasStatusDot && !card.focusHue), 'each pane needs a quiet rounded border and status dot');
   assert(cards.every(card => card.darkBadge && !card.overlaps && card.gap >= 4), 'pane identity must match terminal controls and stay clear of the connection count');
   assert(cards.some(card => card.focused && cards.some(other => !other.focused && other.border !== card.border)));
   const colors = await gridColors();
