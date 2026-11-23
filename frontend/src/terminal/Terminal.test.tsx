@@ -204,3 +204,36 @@ it('captures paste into the shared sender, renders a page portal and clears it o
  await act(async()=>state.terminals.at(-1).textarea.dispatchEvent(denied));
  expect(sockets.at(-1)!.send.mock.calls).toHaveLength(before);
 });
+
+it('uploads a pasted screenshot without sending image bytes as terminal input',async()=>{
+ await act(async()=>root.render(<RealTerminal id="image-paste" writable files visible locale="zh-CN"/>));
+ await act(async()=>{sockets[0].readyState=1;sockets[0].onopen();});
+ await act(async()=>{sockets[0].onmessage({data:'4'+JSON.stringify({'hub-config':{upload_ack:true}})});sockets[0].onmessage({data:'616384'});});
+ const png=new NodeFile([Uint8Array.from([137,80,78,71])],'image.png',{type:'image/png'});
+ const event=new Event('paste',{bubbles:true,cancelable:true});
+ Object.defineProperty(event,'clipboardData',{value:{getData:()=>'',items:[{kind:'file',type:'image/png',getAsFile:()=>png}],files:[]}});
+ await act(async()=>{state.terminals[0].textarea.dispatchEvent(event);});
+ await vi.waitFor(()=>expect(sockets[0].send.mock.calls.some(([data])=>data[0]==='7'&&JSON.parse(data.slice(1)).name==='image.png')).toBe(true));
+ const uploads=sockets[0].send.mock.calls.filter(([data])=>data[0]==='7').map(([data])=>JSON.parse(data.slice(1)));
+ expect(uploads[0]).toMatchObject({name:'image.png',size:4,chunk:0,totalChunks:1});
+ expect(sockets[0].send.mock.calls.some(([data])=>data[0]==='5'||data[0]==='1')).toBe(false);
+ await act(async()=>{sockets[0].onmessage({data:'d'+JSON.stringify({uploadId:uploads[0].uploadId,name:'image.png',chunk:0,received:4,done:true})});});
+ expect(document.body.textContent).toContain('上传成功：image.png');
+ expect(sockets[0].send.mock.calls.some(([data])=>data[0]==='7'&&JSON.parse(data.slice(1)).cancel)).toBe(false);
+});
+
+it('explains an empty or disallowed image paste instead of ignoring it',async()=>{
+ const render=(files:boolean)=>root.render(<RealTerminal id="image-denied" writable files={files} visible locale="zh-CN"/>);
+ await act(async()=>render(false));
+ const png=new NodeFile([Uint8Array.from([1])],'',{type:'image/png'});
+ const denied=new Event('paste',{bubbles:true,cancelable:true});
+ Object.defineProperty(denied,'clipboardData',{value:{getData:()=>'',items:[{kind:'file',type:'image/png',getAsFile:()=>png}]}});
+ await act(async()=>{state.terminals[0].textarea.dispatchEvent(denied);});
+ expect(document.body.textContent).toContain('当前终端不能保存粘贴的图片');
+ expect(sockets[0].send.mock.calls.some(([data])=>data[0]==='7')).toBe(false);
+ await act(async()=>render(true));
+ const empty=new Event('paste',{bubbles:true,cancelable:true});
+ Object.defineProperty(empty,'clipboardData',{value:{getData:()=>'',items:[]}});
+ await act(async()=>{state.terminals.at(-1).textarea.dispatchEvent(empty);});
+ expect(document.body.textContent).toContain('剪贴板没有可粘贴的文本或图片');
+});

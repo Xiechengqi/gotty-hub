@@ -18,6 +18,10 @@ export function terminalMessage(text:string,locale:string):string{
  text = pasteError(text);
  const reasons:Record<string,string>={
   'Maximum file size: 64 MiB':'文件最大支持 64 MiB',
+  'Clipboard has no text or image to paste.':'剪贴板没有可粘贴的文本或图片',
+  'Clipboard mixes images with other files. Use upload or drag-and-drop.':'剪贴板同时包含图片和其他文件，请使用上传或拖放',
+  'Clipboard file is not a supported image.':'剪贴板中的文件不是支持的图片',
+  'Cannot save a pasted image in this terminal':'当前终端不能保存粘贴的图片',
   'Filename is too long':'文件名过长，请缩短后重试',
   'Invalid upload filename':'文件名无效，请勿包含路径分隔符或连续的两个点',
   'Terminal is disconnected':'终端连接已断开，请等待重连后重试',

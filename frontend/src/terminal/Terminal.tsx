@@ -139,12 +139,23 @@ export function RealTerminal({id, writable, visible, focused, admission, locale,
     } catch {element.dataset.terminalRenderer = 'dom';}
     let input: (data: string | Uint8Array) => void = () => {};
     let paste: (text: string, bracketed: boolean) => void = () => {};
-    const unbindPaste = bindPaste(element, () => ({enabled: writable && !replaying && !term.options.disableStdin, bracketed: term.modes.bracketedPasteMode && !term.options.ignoreBracketedPasteMode}), (text, bracketed) => {viewport.userInput(); inputTransform.current?.(''); paste(text, bracketed);});
+    const unbindPaste = bindPaste(element, () => ({enabled: writable && !replaying && !term.options.disableStdin, bracketed: term.modes.bracketedPasteMode && !term.options.ignoreBracketedPasteMode}), (text, bracketed) => {viewport.userInput(); inputTransform.current?.(''); paste(text, bracketed);}, files => {
+      if (!files.length || disposed) return;
+      if (!writable || !filesAllowed || !connection) {showMessage('Cannot save a pasted image in this terminal', 3000); return;}
+      void pasteImages(files);
+    }, reason => {
+      const notice = reason === 'unavailable' ? 'Cannot save a pasted image in this terminal'
+        : reason === 'mixed' ? 'Clipboard mixes images with other files. Use upload or drag-and-drop.'
+        : reason === 'unsupported' ? 'Clipboard file is not a supported image.'
+        : 'Clipboard has no text or image to paste.';
+      showMessage(notice, 3000);
+    });
     let resize: (cols: number, rows: number) => void = () => {};
     let requestedSize: {cols: number; rows: number} | undefined;
     let serverSize: {cols: number; rows: number} | undefined;
     let bufferSize = 1024;
     let uploadAcknowledged = false;
+    const filesAllowed = files;
     let connection: HubConnection | null = null;
     let voice: VoiceInput | null = null;
     let messageTimer: ReturnType<typeof setTimeout> | undefined;
@@ -314,16 +325,25 @@ export function RealTerminal({id, writable, visible, focused, admission, locale,
     return () => cancelAnimationFrame(frame);
   }, [visible, focusRequest, id]);
 
-  async function startUpload(file: File) {
-    if (uploadAbort.current) return;
+  async function pasteImages(images: File[]) {
+    if (uploadAbort.current) {setMessage(terminalMessage('Another upload is running', locale)); return;}
+    for (let index = 0; index < images.length; index++) {
+      if (!await startUpload(images[index], index + 1 < images.length)) return;
+    }
+  }
+  async function startUpload(file: File, continueAfter = false): Promise<boolean> {
+    if (uploadAbort.current) return false;
     const abort = new AbortController(); uploadAbort.current = abort; setUpload({file, loaded: 0, progress: 0, status: 'uploading'});
+    let completed = false;
     try {
       if (!controller.current) throw Error('Terminal is disconnected');
       const verified = await controller.current.upload(file, abort.signal, value => {if (!abort.signal.aborted) setUpload({file, ...value, status: 'uploading'});});
-      if (!abort.signal.aborted) setUpload({file, loaded: file.size, progress: 100, status: verified ? 'success' : 'sent'});
+      completed = !abort.signal.aborted;
+      if (completed && !continueAfter) setUpload({file, loaded: file.size, progress: 100, status: verified ? 'success' : 'sent'});
     }
     catch (error) {if (!abort.signal.aborted) setUpload(value => value ? {...value, status: 'error', error: error instanceof Error ? error.message : String(error)} : value);}
     finally {if (uploadAbort.current === abort) {uploadAbort.current = undefined; if (abort.signal.aborted) setUpload(undefined);}}
+    return completed;
   }
   const closeUpload = () => {uploadAbort.current?.abort(); uploadAbort.current = undefined; setUpload(undefined); controller.current?.term.focus();};
   return <section className="real-terminal dark" style={{'--color-terminal-background': colors.background, '--color-terminal-foreground': colors.foreground} as CSSProperties}
