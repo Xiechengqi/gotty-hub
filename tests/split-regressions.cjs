@@ -101,14 +101,27 @@ module.exports = async ({page, context, browser, hub, ids, devices, api, wait, s
   }));
   const cards = await page.locator('.terminal-slot:not([hidden])').evaluateAll(panes => panes.map(pane => {
     const badge = pane.querySelector('.pane-identity');
+    const connections = pane.querySelector('.terminal-connections');
+    const badgeBox = badge?.getBoundingClientRect();
+    const connectionsBox = connections?.getBoundingClientRect();
+    const gap = badgeBox && connectionsBox ? connectionsBox.top - badgeBox.bottom : -1;
+    const overlaps = badgeBox && connectionsBox
+      && badgeBox.left < connectionsBox.right && connectionsBox.left < badgeBox.right
+      && badgeBox.top < connectionsBox.bottom && connectionsBox.top < badgeBox.bottom;
+    const badgeColor = badge ? getComputedStyle(badge).backgroundColor : '';
+    const channels = badgeColor.match(/[\d.]+/g)?.map(Number) ?? [];
     return {
       radius: parseFloat(getComputedStyle(pane).borderTopLeftRadius),
       border: getComputedStyle(pane, '::after').boxShadow,
       focused: pane.dataset.focused === 'true',
       hasStatusDot: !!badge?.querySelector('img.terminal-status'),
+      gap,
+      overlaps: !!overlaps,
+      darkBadge: channels.length >= 4 && channels[0] === 0 && channels[1] === 0 && channels[2] === 0 && channels[3] > 0 && channels[3] < 1,
     };
   }));
   assert(cards.every(card => card.radius > 0 && card.border !== 'none' && card.hasStatusDot), 'each pane needs a rounded border and status dot');
+  assert(cards.every(card => card.darkBadge && !card.overlaps && card.gap >= 4), 'pane identity must match terminal controls and stay clear of the connection count');
   assert(cards.some(card => card.focused && cards.some(other => !other.focused && other.border !== card.border)));
   const colors = await gridColors();
   assert.equal(colors.gutter,colors.terminal,'grid gaps must use the active terminal background');
